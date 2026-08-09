@@ -338,7 +338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         toast.show(
             title: "正在准备\(source.mode.presentationTitle)",
-            detail: "60 FPS · \(audioSummary) · 事件分轨",
+            detail: "60 FPS · \(audioSummary) · \(model.capturesCamera ? "摄像头分轨 · " : "")事件分轨",
             symbol: "record.circle"
         )
         Task { @MainActor [weak self] in
@@ -352,17 +352,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 permissionCenter.show()
                 return
             }
+            if model.capturesCamera, !(await cameraAccessGranted()) {
+                toast.show(
+                    title: "摄像头尚未授权",
+                    detail: "已打开权限中心；关闭摄像头后仍可继续录屏",
+                    symbol: "video.slash.fill"
+                )
+                permissionCenter.show()
+                return
+            }
             let options = ScreenRecordingOptions(
                 framesPerSecond: 60,
                 capturesSystemAudio: model.capturesSystemAudio,
-                capturesMicrophone: model.capturesMicrophone
+                capturesMicrophone: model.capturesMicrophone,
+                capturesCamera: model.capturesCamera
             )
             do {
                 _ = try await recordingService.start(source: source, options: options)
                 recordingControl.begin(
                     sourceTitle: source.mode.presentationTitle,
                     capturesSystemAudio: options.capturesSystemAudio,
-                    capturesMicrophone: options.capturesMicrophone
+                    capturesMicrophone: options.capturesMicrophone,
+                    capturesCamera: options.capturesCamera
                 )
             } catch {
                 recordingControl.hide()
@@ -379,12 +390,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let saved = try await recordingService.stop()
                 let seconds = saved.manifest.durationSeconds ?? 0
-                let microphoneDetail = recordingService.lastMicrophoneError == nil
+                let trackWarnings = [
+                    recordingService.lastMicrophoneError == nil ? nil : "麦克风轨道异常",
+                    recordingService.lastCameraError == nil ? nil : "摄像头轨道异常"
+                ].compactMap { $0 }
+                let completionDetail = trackWarnings.isEmpty
                     ? "正在后台生成自然模式"
-                    : "麦克风轨道异常，屏幕与系统声仍已保留"
+                    : "\(trackWarnings.joined(separator: "、"))；屏幕原始轨仍已保留"
                 toast.show(
                     title: "录屏已安全保存",
-                    detail: String(format: "%.1f 秒 · %@", seconds, microphoneDetail),
+                    detail: String(format: "%.1f 秒 · %@", seconds, completionDetail),
                     symbol: "checkmark.circle.fill"
                 )
                 traceLibrary.reloadIfVisible()
@@ -418,6 +433,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func cameraAccessGranted() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            true
+        case .notDetermined:
+            await AVCaptureDevice.requestAccess(for: .video)
+        case .denied, .restricted:
+            false
+        @unknown default:
+            false
+        }
+    }
+
     private func showRecordingError(_ error: Error) {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
@@ -441,9 +469,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 renderedVideoURL: outputURL
             )
             traceLibrary.reloadIfVisible()
+            let includesCamera = saved.manifest.assets.contains { $0.role == .camera }
             toast.show(
-                title: "自然模式成片已就绪",
-                detail: "原始视频和自动效果均已保留",
+                title: "自然模式预览已就绪",
+                detail: includesCamera
+                    ? "摄像头原始轨与画中画布局计划均已保留"
+                    : "原始视频和自动效果均已保留",
                 symbol: "sparkles"
             )
         } catch {

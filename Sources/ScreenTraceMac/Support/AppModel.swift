@@ -16,6 +16,7 @@ final class AppModel: ObservableObject {
     private enum PreferenceKey {
         static let capturesSystemAudio = "recording.capturesSystemAudio"
         static let capturesMicrophone = "recording.capturesMicrophone"
+        static let capturesCamera = "recording.capturesCamera"
     }
 
     private let defaults: UserDefaults
@@ -26,11 +27,15 @@ final class AppModel: ObservableObject {
     @Published var capturesMicrophone: Bool {
         didSet { defaults.set(capturesMicrophone, forKey: PreferenceKey.capturesMicrophone) }
     }
+    @Published var capturesCamera: Bool {
+        didSet { defaults.set(capturesCamera, forKey: PreferenceKey.capturesCamera) }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         capturesSystemAudio = defaults.object(forKey: PreferenceKey.capturesSystemAudio) as? Bool ?? true
         capturesMicrophone = defaults.object(forKey: PreferenceKey.capturesMicrophone) as? Bool ?? false
+        capturesCamera = defaults.object(forKey: PreferenceKey.capturesCamera) as? Bool ?? false
     }
 
     func setRecentTrace(_ savedTrace: SavedTrace, thumbnail: NSImage) {

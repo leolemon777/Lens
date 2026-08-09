@@ -265,6 +265,7 @@ public struct TraceProjectStore: Sendable {
         height: Int,
         captureSource: TraceCaptureMetadata? = nil,
         includesMicrophone: Bool = false,
+        includesCamera: Bool = false,
         createdAt: Date = Date(),
         id: UUID = UUID()
     ) throws -> RecordingTraceSession {
@@ -289,6 +290,9 @@ public struct TraceProjectStore: Sendable {
         let microphoneURL = includesMicrophone
             ? rawDirectory.appendingPathComponent("microphone.caf")
             : nil
+        let cameraURL = includesCamera
+            ? rawDirectory.appendingPathComponent("camera.mov")
+            : nil
 
         do {
             for directory in [rawDirectory, eventsDirectory, analysisDirectory, editsDirectory, previewsDirectory] {
@@ -298,7 +302,9 @@ public struct TraceProjectStore: Sendable {
             FileManager.default.createFile(atPath: clicksURL.path, contents: nil)
             let planEncoder = JSONEncoder()
             planEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try planEncoder.encode(AutoEditPlan()).write(to: editPlanURL, options: .atomic)
+            var initialPlan = AutoEditPlan()
+            initialPlan.presenterCamera?.isEnabled = includesCamera
+            try planEncoder.encode(initialPlan).write(to: editPlanURL, options: .atomic)
 
             let titlePrefix: String = switch captureSource?.mode {
             case .region: "区域录屏"
@@ -316,6 +322,11 @@ public struct TraceProjectStore: Sendable {
             if includesMicrophone {
                 assets.append(
                     TraceAsset(role: .microphone, relativePath: "raw/microphone.caf")
+                )
+            }
+            if includesCamera {
+                assets.append(
+                    TraceAsset(role: .camera, relativePath: "raw/camera.mov")
                 )
             }
             let manifest = TraceManifest(
@@ -336,6 +347,7 @@ public struct TraceProjectStore: Sendable {
                 clickEventsURL: clicksURL,
                 editPlanURL: editPlanURL,
                 microphoneURL: microphoneURL,
+                cameraURL: cameraURL,
                 manifest: manifest
             )
         } catch {
@@ -389,7 +401,7 @@ public struct TraceProjectStore: Sendable {
     ) throws -> AutoEditPlan {
         let clicks = try TraceEventReader.read(ClickEvent.self, from: session.clickEventsURL)
         let pointerEvents = try TraceEventReader.read(PointerEvent.self, from: session.pointerEventsURL)
-        var plan = AutoEditPlan()
+        var plan = (try? loadAutoEditPlan(from: session.packageURL)) ?? AutoEditPlan()
         plan.cursor.keyframes = CursorPathPlanner().plan(events: pointerEvents)
         plan.interaction?.clickPulses = clicks.compactMap { click in
             guard click.phase == .down, let position = click.normalizedLocation else { return nil }

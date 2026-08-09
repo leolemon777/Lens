@@ -30,6 +30,7 @@ struct ScreenRecordingOptions: Sendable {
     var framesPerSecond = 60
     var capturesSystemAudio = true
     var capturesMicrophone = false
+    var capturesCamera = false
 }
 
 @MainActor
@@ -37,6 +38,7 @@ final class ScreenRecordingService: NSObject {
     private let store: TraceProjectStore
     private let pointerRecorder: PointerEventRecorder
     private let microphoneRecorder = MicrophoneTrackRecorder()
+    private let cameraRecorder = CameraTrackRecorder()
     private var stream: SCStream?
     private var recordingOutput: SCRecordingOutput?
     private var session: RecordingTraceSession?
@@ -47,6 +49,7 @@ final class ScreenRecordingService: NSObject {
     private var recordingOutputFinished = false
     private var stopFailure: Error?
     private(set) var lastMicrophoneError: Error?
+    private(set) var lastCameraError: Error?
 
     init(store: TraceProjectStore, pointerRecorder: PointerEventRecorder) {
         self.store = store
@@ -61,6 +64,7 @@ final class ScreenRecordingService: NSObject {
     ) async throws -> RecordingTraceSession {
         guard stream == nil else { throw ScreenRecordingError.alreadyRecording }
         lastMicrophoneError = nil
+        lastCameraError = nil
 
         let content = try await shareableContent()
         let prepared = try prepare(source: source, content: content)
@@ -72,7 +76,8 @@ final class ScreenRecordingService: NSObject {
                 actualCaptureBounds: prepared.captureBounds,
                 actualSourceRect: prepared.sourceRect
             ),
-            includesMicrophone: options.capturesMicrophone
+            includesMicrophone: options.capturesMicrophone,
+            includesCamera: options.capturesCamera
         )
 
         do {
@@ -121,6 +126,9 @@ final class ScreenRecordingService: NSObject {
             if let microphoneURL = session.microphoneURL {
                 try microphoneRecorder.start(outputURL: microphoneURL)
             }
+            if let cameraURL = session.cameraURL {
+                try await cameraRecorder.start(outputURL: cameraURL)
+            }
 
             try pointerRecorder.start(
                 session: session,
@@ -135,8 +143,10 @@ final class ScreenRecordingService: NSObject {
             startedAtUptime = ProcessInfo.processInfo.systemUptime
             return session
         } catch {
+            await cameraRecorder.cancel()
             microphoneRecorder.cancel()
             removeEmptyMicrophoneAsset(from: session)
+            removeEmptyCameraAsset(from: session)
             await pointerRecorder.stop()
             try? store.markRecordingInterrupted(session)
             throw error
@@ -152,6 +162,15 @@ final class ScreenRecordingService: NSObject {
         } catch {
             lastMicrophoneError = error
             removeEmptyMicrophoneAsset(from: session)
+        }
+        let cameraRecorder = cameraRecorder
+        let cameraStopTask = Task { @MainActor () -> Error? in
+            do {
+                try await cameraRecorder.stop()
+                return nil
+            } catch {
+                return error
+            }
         }
 
         stopCaptureCompleted = false
@@ -180,6 +199,10 @@ final class ScreenRecordingService: NSObject {
                 }
             }
             await pointerRecorder.stop()
+            if let cameraError = await cameraStopTask.value {
+                lastCameraError = cameraError
+                removeEmptyCameraAsset(from: session)
+            }
             // 自动处理失败绝不能让已经完成的原始录屏变成失败状态。
             // beginRecording 已经写入一份可重试的默认 edit-plan。
             _ = try? store.writeAutoEditPlan(for: session, durationSeconds: duration)
@@ -188,6 +211,10 @@ final class ScreenRecordingService: NSObject {
             return saved
         } catch {
             await pointerRecorder.stop()
+            if let cameraError = await cameraStopTask.value {
+                lastCameraError = cameraError
+                removeEmptyCameraAsset(from: session)
+            }
             try? store.markRecordingInterrupted(session)
             clearActiveSession()
             throw error
@@ -223,6 +250,14 @@ final class ScreenRecordingService: NSObject {
             as? NSNumber)?.int64Value ?? 0
         guard size == 0 else { return }
         try? store.removeAsset(role: .microphone, from: session.packageURL)
+    }
+
+    private func removeEmptyCameraAsset(from session: RecordingTraceSession) {
+        guard let cameraURL = session.cameraURL else { return }
+        let size = (try? FileManager.default.attributesOfItem(atPath: cameraURL.path)[.size]
+            as? NSNumber)?.int64Value ?? 0
+        guard size == 0 else { return }
+        try? store.removeAsset(role: .camera, from: session.packageURL)
     }
 
     private func shareableContent() async throws -> SCShareableContent {

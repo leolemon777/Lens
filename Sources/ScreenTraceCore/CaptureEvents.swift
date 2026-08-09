@@ -209,10 +209,55 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         }
     }
 
+    public struct PresenterCamera: Codable, Equatable, Sendable {
+        public enum Shape: String, Codable, Sendable {
+            case circle
+            case roundedRectangle
+        }
+
+        public enum Anchor: String, Codable, Sendable {
+            case topLeading
+            case topTrailing
+            case bottomLeading
+            case bottomTrailing
+        }
+
+        public var isEnabled: Bool
+        public var shape: Shape
+        public var anchor: Anchor
+        /// Width as a fraction of the output canvas.
+        public var size: Double
+        public var margin: Double
+        public var cornerRadius: Double
+        public var isMirrored: Bool
+        public var shadowOpacity: Double
+
+        public init(
+            isEnabled: Bool = false,
+            shape: Shape = .circle,
+            anchor: Anchor = .bottomTrailing,
+            size: Double = 0.19,
+            margin: Double = 0.035,
+            cornerRadius: Double = 0.08,
+            isMirrored: Bool = true,
+            shadowOpacity: Double = 0.30
+        ) {
+            self.isEnabled = isEnabled
+            self.shape = shape
+            self.anchor = anchor
+            self.size = min(max(size, 0.08), 0.45)
+            self.margin = min(max(margin, 0), 0.20)
+            self.cornerRadius = min(max(cornerRadius, 0), 0.5)
+            self.isMirrored = isMirrored
+            self.shadowOpacity = min(max(shadowOpacity, 0), 1)
+        }
+    }
+
     public let schemaVersion: String
     public var preset: String
     public var cursor: Cursor
     public var camera: Camera
+    public var presenterCamera: PresenterCamera?
     public var canvas: Canvas?
     public var interaction: Interaction?
 
@@ -221,6 +266,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         preset: String = "natural",
         cursor: Cursor = Cursor(smoothing: 0.72, scale: 1.15, hidesWhenIdle: true),
         camera: Camera = Camera(mode: "event-driven", zoomIntensity: 0.42, followPointer: true),
+        presenterCamera: PresenterCamera? = PresenterCamera(),
         canvas: Canvas? = Canvas(),
         interaction: Interaction? = Interaction()
     ) {
@@ -228,6 +274,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         self.preset = preset
         self.cursor = cursor
         self.camera = camera
+        self.presenterCamera = presenterCamera
         self.canvas = canvas
         self.interaction = interaction
     }

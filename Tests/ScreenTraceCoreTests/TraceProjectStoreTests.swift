@@ -242,6 +242,50 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: microphoneURL), Data([1, 2, 3]))
     }
 
+    func testRecordingCanReserveCameraAndPreservePresenterLayoutPlan() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+
+        let session = try store.beginRecording(
+            width: 1_280,
+            height: 720,
+            includesCamera: true
+        )
+        let cameraURL = try XCTUnwrap(session.cameraURL)
+        XCTAssertEqual(cameraURL.lastPathComponent, "camera.mov")
+        XCTAssertTrue(session.manifest.assets.contains {
+            $0.role == .camera && $0.relativePath == "raw/camera.mov"
+        })
+
+        var initialPlan = try store.loadAutoEditPlan(from: session.packageURL)
+        XCTAssertEqual(initialPlan.presenterCamera?.isEnabled, true)
+        XCTAssertEqual(initialPlan.presenterCamera?.shape, .circle)
+        XCTAssertEqual(initialPlan.presenterCamera?.anchor, .bottomTrailing)
+        initialPlan.presenterCamera?.anchor = .topLeading
+        initialPlan.presenterCamera?.shape = .roundedRectangle
+        try JSONEncoder().encode(initialPlan).write(to: session.editPlanURL, options: .atomic)
+
+        let generatedPlan = try store.writeAutoEditPlan(for: session, durationSeconds: 3)
+        XCTAssertEqual(generatedPlan.presenterCamera?.isEnabled, true)
+        XCTAssertEqual(generatedPlan.presenterCamera?.anchor, .topLeading)
+        XCTAssertEqual(generatedPlan.presenterCamera?.shape, .roundedRectangle)
+
+        let cameraBytes = Data([4, 3, 2, 1])
+        try cameraBytes.write(to: cameraURL)
+        try store.removeAsset(role: .camera, from: session.packageURL)
+        try Data([9, 8, 7]).write(to: session.videoURL)
+        let finalized = try store.finalizeRecording(session, durationSeconds: 3)
+
+        XCTAssertFalse(finalized.manifest.assets.contains { $0.role == .camera })
+        XCTAssertEqual(try Data(contentsOf: cameraURL), cameraBytes)
+        XCTAssertEqual(
+            try store.loadAutoEditPlan(from: session.packageURL).presenterCamera?.anchor,
+            .topLeading
+        )
+    }
+
     func testLegacyPointOneManifestDecodesWithoutCaptureMetadata() throws {
         let json = """
         {

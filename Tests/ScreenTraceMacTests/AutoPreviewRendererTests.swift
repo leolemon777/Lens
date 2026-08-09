@@ -82,7 +82,7 @@ final class AutoPreviewRendererTests: XCTestCase {
     }
 }
 
-private enum SyntheticVideoFactory {
+enum SyntheticVideoFactory {
     static func makeVideo(
         at url: URL,
         frameCount: Int,

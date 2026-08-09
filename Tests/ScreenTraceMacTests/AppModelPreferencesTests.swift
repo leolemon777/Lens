@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class AppModelPreferencesTests: XCTestCase {
-    func testRecordingAudioPreferencesPersistWithSafeDefaults() throws {
+    func testRecordingMediaPreferencesPersistWithSafeDefaults() throws {
         let suiteName = "ScreenTraceAppModelTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -12,12 +12,15 @@ final class AppModelPreferencesTests: XCTestCase {
         let initial = AppModel(defaults: defaults)
         XCTAssertTrue(initial.capturesSystemAudio)
         XCTAssertFalse(initial.capturesMicrophone)
+        XCTAssertFalse(initial.capturesCamera)
 
         initial.capturesSystemAudio = false
         initial.capturesMicrophone = true
+        initial.capturesCamera = true
         let restored = AppModel(defaults: defaults)
 
         XCTAssertFalse(restored.capturesSystemAudio)
         XCTAssertTrue(restored.capturesMicrophone)
+        XCTAssertTrue(restored.capturesCamera)
     }
 }

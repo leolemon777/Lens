@@ -9,7 +9,7 @@ final class RecordingControlWindowController {
 
     init() {
         panel = RecordingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 98),
+            contentRect: NSRect(x: 0, y: 0, width: 430, height: 98),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -20,12 +20,14 @@ final class RecordingControlWindowController {
     func begin(
         sourceTitle: String,
         capturesSystemAudio: Bool,
-        capturesMicrophone: Bool
+        capturesMicrophone: Bool,
+        capturesCamera: Bool
     ) {
         model.reset(
             sourceTitle: sourceTitle,
             capturesSystemAudio: capturesSystemAudio,
-            capturesMicrophone: capturesMicrophone
+            capturesMicrophone: capturesMicrophone,
+            capturesCamera: capturesCamera
         )
         showExisting()
     }

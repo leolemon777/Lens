@@ -9,11 +9,13 @@ final class RecordingControlModel: ObservableObject {
     @Published var sourceTitle = "屏幕录制"
     @Published var capturesSystemAudio = true
     @Published var capturesMicrophone = false
+    @Published var capturesCamera = false
 
     func reset(
         sourceTitle: String = "屏幕录制",
         capturesSystemAudio: Bool = true,
-        capturesMicrophone: Bool = false
+        capturesMicrophone: Bool = false,
+        capturesCamera: Bool = false
     ) {
         isPaused = false
         startedAt = Date()
@@ -22,6 +24,7 @@ final class RecordingControlModel: ObservableObject {
         self.sourceTitle = sourceTitle
         self.capturesSystemAudio = capturesSystemAudio
         self.capturesMicrophone = capturesMicrophone
+        self.capturesCamera = capturesCamera
     }
 
     func togglePause() {
@@ -75,6 +78,14 @@ struct RecordingControlView: View {
                     .foregroundStyle(.green)
                     .frame(width: 24)
                     .help("麦克风正在单独分轨录制")
+            }
+
+            if model.capturesCamera {
+                Image(systemName: "video.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.green)
+                    .frame(width: 24)
+                    .help("摄像头正在单独分轨录制")
             }
 
             Button {

@@ -178,6 +178,9 @@ struct ActionCenterView: View {
             Toggle(isOn: $model.capturesMicrophone) {
                 Label("单独录制麦克风", systemImage: "mic")
             }
+            Toggle(isOn: $model.capturesCamera) {
+                Label("单独录制摄像头", systemImage: "video")
+            }
         } label: {
             actionTileLabel(.recording)
         }

@@ -18,7 +18,53 @@ enum AutoPreviewRendererError: LocalizedError {
 
 @MainActor
 final class AutoPreviewRenderer {
+    private(set) var lastPresenterCameraError: Error?
+
     func render(
+        inputURL: URL,
+        cameraURL: URL? = nil,
+        outputURL: URL,
+        plan: AutoEditPlan
+    ) async throws -> URL {
+        lastPresenterCameraError = nil
+        guard let presenter = plan.presenterCamera,
+              presenter.isEnabled,
+              let cameraURL,
+              FileManager.default.fileExists(atPath: cameraURL.path) else {
+            return try await renderScreenEffects(
+                inputURL: inputURL,
+                outputURL: outputURL,
+                plan: plan
+            )
+        }
+
+        let temporaryURL = outputURL.deletingLastPathComponent().appendingPathComponent(
+            ".screen-effects-\(UUID().uuidString).mp4"
+        )
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        _ = try await renderScreenEffects(
+            inputURL: inputURL,
+            outputURL: temporaryURL,
+            plan: plan
+        )
+        do {
+            return try await PresenterCameraRenderer().render(
+                screenURL: temporaryURL,
+                cameraURL: cameraURL,
+                outputURL: outputURL,
+                layout: presenter
+            )
+        } catch {
+            lastPresenterCameraError = error
+            if FileManager.default.fileExists(atPath: outputURL.path) {
+                try FileManager.default.removeItem(at: outputURL)
+            }
+            try FileManager.default.moveItem(at: temporaryURL, to: outputURL)
+            return outputURL
+        }
+    }
+
+    private func renderScreenEffects(
         inputURL: URL,
         outputURL: URL,
         plan: AutoEditPlan

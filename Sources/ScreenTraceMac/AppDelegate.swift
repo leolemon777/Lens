@@ -499,8 +499,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let plan = try store.loadAutoEditPlan(from: saved.packageURL)
             let outputURL = saved.packageURL.appendingPathComponent("previews/auto.mp4")
+            let cameraURL = saved.manifest.assets.first(where: { $0.role == .camera })
+                .map { saved.packageURL.appendingPathComponent($0.relativePath) }
+                .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
             _ = try await previewRenderer.render(
                 inputURL: saved.rawAssetURL,
+                cameraURL: cameraURL,
                 outputURL: outputURL,
                 plan: plan
             )
@@ -510,11 +514,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             traceLibrary.reloadIfVisible()
             let includesCamera = saved.manifest.assets.contains { $0.role == .camera }
+            let presenterWasRendered = plan.presenterCamera?.isEnabled == true
+                && cameraURL != nil
+                && previewRenderer.lastPresenterCameraError == nil
             toast.show(
                 title: "自然模式预览已就绪",
-                detail: includesCamera
-                    ? "摄像头原始轨与画中画布局计划均已保留"
-                    : "原始视频和自动效果均已保留",
+                detail: {
+                    if presenterWasRendered {
+                        return "摄像头画中画已自动合成，原始轨仍完整保留"
+                    }
+                    if includesCamera {
+                        return "屏幕预览已完成；摄像头原始轨仍已保留"
+                    }
+                    return "原始视频和自动效果均已保留"
+                }(),
                 symbol: "sparkles"
             )
         } catch {

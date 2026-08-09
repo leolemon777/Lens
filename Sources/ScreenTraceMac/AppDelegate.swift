@@ -86,6 +86,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordingControl.onStop = { [weak self] in
             self?.stopRecording()
         }
+        recordingControl.onPauseToggle = { [weak self] in
+            self?.toggleRecordingPause()
+        }
         traceLibrary.onAnnotateRequested = { [weak self] trace, image in
             self?.annotationEditor.show(trace: trace, fallbackImage: image)
         }
@@ -405,6 +408,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 traceLibrary.reloadIfVisible()
                 await processRecording(saved)
             } catch {
+                if recordingService.isRecording {
+                    recordingControl.showExisting()
+                } else {
+                    recordingControl.hide()
+                }
+                showRecordingError(error)
+            }
+        }
+    }
+
+    private func toggleRecordingPause() {
+        guard recordingService.isRecording else { return }
+        let shouldPause = !recordingService.isPaused
+        recordingControl.setTransitioning(true)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { recordingControl.setTransitioning(false) }
+            do {
+                if shouldPause {
+                    try await recordingService.pause()
+                    recordingControl.setPaused(true)
+                    toast.show(
+                        title: "录制已暂停",
+                        detail: "当前分片已安全写盘；继续时会创建新分片",
+                        symbol: "pause.circle.fill"
+                    )
+                } else {
+                    try await recordingService.resume()
+                    recordingControl.setPaused(false)
+                    toast.show(
+                        title: "继续录制",
+                        detail: "时间轴会自动跳过暂停区间",
+                        symbol: "play.circle.fill"
+                    )
+                }
+            } catch {
+                recordingControl.setPaused(recordingService.isPaused)
                 showRecordingError(error)
             }
         }

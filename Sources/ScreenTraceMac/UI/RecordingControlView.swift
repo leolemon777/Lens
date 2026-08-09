@@ -10,6 +10,7 @@ final class RecordingControlModel: ObservableObject {
     @Published var capturesSystemAudio = true
     @Published var capturesMicrophone = false
     @Published var capturesCamera = false
+    @Published var isTransitioning = false
 
     func reset(
         sourceTitle: String = "屏幕录制",
@@ -25,17 +26,19 @@ final class RecordingControlModel: ObservableObject {
         self.capturesSystemAudio = capturesSystemAudio
         self.capturesMicrophone = capturesMicrophone
         self.capturesCamera = capturesCamera
+        isTransitioning = false
     }
 
-    func togglePause() {
-        if isPaused {
+    func setPaused(_ paused: Bool, at date: Date = Date()) {
+        guard paused != isPaused else { return }
+        if !paused {
             if let pausedAt {
-                accumulatedPause += Date().timeIntervalSince(pausedAt)
+                accumulatedPause += date.timeIntervalSince(pausedAt)
             }
             pausedAt = nil
             isPaused = false
         } else {
-            pausedAt = Date()
+            pausedAt = date
             isPaused = true
         }
     }
@@ -48,14 +51,15 @@ final class RecordingControlModel: ObservableObject {
 
 struct RecordingControlView: View {
     @ObservedObject var model: RecordingControlModel
+    let onPauseToggle: () -> Void
     let onStop: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
             Circle()
-                .fill(.red)
+                .fill(model.isPaused ? .orange : .red)
                 .frame(width: 10, height: 10)
-                .shadow(color: .red.opacity(0.6), radius: 6)
+                .shadow(color: (model.isPaused ? Color.orange : .red).opacity(0.6), radius: 6)
 
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Text(Self.format(model.elapsed(at: context.date)))
@@ -89,16 +93,16 @@ struct RecordingControlView: View {
             }
 
             Button {
-                model.togglePause()
+                onPauseToggle()
             } label: {
                 Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
                     .frame(width: 28, height: 28)
                     .background(.primary.opacity(0.07), in: Circle())
             }
             .buttonStyle(.plain)
-            .disabled(true)
-            .opacity(0.38)
-            .help("暂停将在分轨写入器接入后开放")
+            .disabled(model.isTransitioning)
+            .opacity(model.isTransitioning ? 0.38 : 1)
+            .help(model.isPaused ? "继续并写入新分片" : "暂停并安全完成当前分片")
 
             Button(action: onStop) {
                 Image(systemName: "stop.fill")
@@ -108,6 +112,8 @@ struct RecordingControlView: View {
                     .background(.red, in: Circle())
             }
             .buttonStyle(.plain)
+            .disabled(model.isTransitioning)
+            .opacity(model.isTransitioning ? 0.5 : 1)
             .help("停止")
 
             Text(model.sourceTitle)

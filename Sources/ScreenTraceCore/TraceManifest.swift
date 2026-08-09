@@ -17,9 +17,12 @@ public struct TraceAsset: Codable, Equatable, Sendable {
     public enum Role: String, Codable, Sendable {
         case screenshot
         case screenVideo
+        case screenVideoSegment
         case systemAudio
         case microphone
+        case microphoneSegment
         case camera
+        case cameraSegment
         case thumbnail
         case renderedVideo
         case renderedScreenshot
@@ -27,6 +30,7 @@ public struct TraceAsset: Codable, Equatable, Sendable {
         case clickEvents
         case keyboardEvents
         case windowEvents
+        case recordingSegments
         case editPlan
         case screenshotEditPlan
         case ocr
@@ -96,7 +100,7 @@ public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
 }
 
 public struct TraceManifest: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.2"
+    public static let currentSchemaVersion = "0.3"
 
     public let schemaVersion: String
     public let id: UUID
@@ -150,6 +154,7 @@ public struct RecordingTraceSession: Equatable, Sendable {
     public let videoURL: URL
     public let pointerEventsURL: URL
     public let clickEventsURL: URL
+    public let segmentIndexURL: URL
     public let editPlanURL: URL
     public let microphoneURL: URL?
     public let cameraURL: URL?
@@ -160,6 +165,7 @@ public struct RecordingTraceSession: Equatable, Sendable {
         videoURL: URL,
         pointerEventsURL: URL,
         clickEventsURL: URL,
+        segmentIndexURL: URL,
         editPlanURL: URL,
         microphoneURL: URL? = nil,
         cameraURL: URL? = nil,
@@ -169,6 +175,7 @@ public struct RecordingTraceSession: Equatable, Sendable {
         self.videoURL = videoURL
         self.pointerEventsURL = pointerEventsURL
         self.clickEventsURL = clickEventsURL
+        self.segmentIndexURL = segmentIndexURL
         self.editPlanURL = editPlanURL
         self.microphoneURL = microphoneURL
         self.cameraURL = cameraURL

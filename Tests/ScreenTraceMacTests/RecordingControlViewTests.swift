@@ -19,7 +19,13 @@ final class RecordingControlViewTests: XCTestCase {
         XCTAssertTrue(model.capturesCamera)
         XCTAssertEqual(model.elapsed(at: model.startedAt.addingTimeInterval(65)), 65, accuracy: 0.001)
 
-        let root = RecordingControlView(model: model, onStop: {})
+        let pauseDate = model.startedAt.addingTimeInterval(30)
+        model.setPaused(true, at: pauseDate)
+        XCTAssertEqual(model.elapsed(at: pauseDate.addingTimeInterval(20)), 30, accuracy: 0.001)
+        model.setPaused(false, at: pauseDate.addingTimeInterval(20))
+        XCTAssertEqual(model.elapsed(at: pauseDate.addingTimeInterval(35)), 45, accuracy: 0.001)
+
+        let root = RecordingControlView(model: model, onPauseToggle: {}, onStop: {})
         let hostingView = NSHostingView(rootView: root)
         hostingView.frame = CGRect(x: 0, y: 0, width: 430, height: 98)
         hostingView.layoutSubtreeIfNeeded()

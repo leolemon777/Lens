@@ -30,6 +30,8 @@ final class CameraTrackRecorder: NSObject {
     private var outputURL: URL?
     private var startContinuation: CheckedContinuation<Void, Error>?
     private var stopContinuation: CheckedContinuation<Void, Error>?
+    private var startGeneration = 0
+    private var stopGeneration = 0
 
     var isRecording: Bool { movieOutput?.isRecording == true }
 
@@ -75,13 +77,17 @@ final class CameraTrackRecorder: NSObject {
         }
 
         do {
+            startGeneration += 1
+            let generation = startGeneration
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<Void, Error>) in
                 startContinuation = continuation
                 output.startRecording(to: outputURL, recordingDelegate: self)
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(for: .seconds(6))
-                    guard let self, let continuation = self.startContinuation else { return }
+                    guard let self,
+                          self.startGeneration == generation,
+                          let continuation = self.startContinuation else { return }
                     self.startContinuation = nil
                     continuation.resume(throwing: CameraTrackRecordingError.startTimedOut)
                 }
@@ -97,13 +103,17 @@ final class CameraTrackRecorder: NSObject {
         var finalizationError: Error?
         if movieOutput.isRecording {
             do {
+                stopGeneration += 1
+                let generation = stopGeneration
                 try await withCheckedThrowingContinuation {
                     (continuation: CheckedContinuation<Void, Error>) in
                     stopContinuation = continuation
                     movieOutput.stopRecording()
                     Task { @MainActor [weak self] in
                         try? await Task.sleep(for: .seconds(10))
-                        guard let self, let continuation = self.stopContinuation else { return }
+                        guard let self,
+                              self.stopGeneration == generation,
+                              let continuation = self.stopContinuation else { return }
                         self.stopContinuation = nil
                         continuation.resume(throwing: CameraTrackRecordingError.stopTimedOut)
                     }
@@ -121,6 +131,8 @@ final class CameraTrackRecorder: NSObject {
     }
 
     func cancel() async {
+        startGeneration += 1
+        stopGeneration += 1
         if let movieOutput, movieOutput.isRecording {
             movieOutput.stopRecording()
         }
@@ -175,6 +187,9 @@ extension CameraTrackRecorder: AVCaptureFileOutputRecordingDelegate {
         from connections: [AVCaptureConnection]
     ) {
         Task { @MainActor in
+            guard fileURL.standardizedFileURL == outputURL?.standardizedFileURL else {
+                return
+            }
             guard let continuation = startContinuation else { return }
             startContinuation = nil
             continuation.resume()
@@ -188,6 +203,9 @@ extension CameraTrackRecorder: AVCaptureFileOutputRecordingDelegate {
         error: (any Error)?
     ) {
         Task { @MainActor in
+            guard outputFileURL.standardizedFileURL == outputURL?.standardizedFileURL else {
+                return
+            }
             let effectiveError: Error? = {
                 guard let error else { return nil }
                 let nsError = error as NSError

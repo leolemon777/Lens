@@ -6,6 +6,7 @@ final class RecordingControlWindowController {
     private let model = RecordingControlModel()
     private let panel: RecordingPanel
     var onStop: (() -> Void)?
+    var onPauseToggle: (() -> Void)?
 
     init() {
         panel = RecordingPanel(
@@ -42,6 +43,14 @@ final class RecordingControlWindowController {
         panel.orderOut(nil)
     }
 
+    func setPaused(_ paused: Bool) {
+        model.setPaused(paused)
+    }
+
+    func setTransitioning(_ transitioning: Bool) {
+        model.isTransitioning = transitioning
+    }
+
     private func configurePanel() {
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -50,7 +59,11 @@ final class RecordingControlWindowController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.isMovableByWindowBackground = true
         panel.onEscape = { [weak self] in self?.stop() }
-        let root = RecordingControlView(model: model) { [weak self] in self?.stop() }
+        let root = RecordingControlView(
+            model: model,
+            onPauseToggle: { [weak self] in self?.onPauseToggle?() },
+            onStop: { [weak self] in self?.stop() }
+        )
         panel.contentView = NSHostingView(rootView: root)
     }
 
@@ -66,6 +79,7 @@ final class RecordingControlWindowController {
     }
 
     private func stop() {
+        guard !model.isTransitioning else { return }
         hide()
         onStop?()
     }

@@ -9,6 +9,7 @@ final class PointerEventRecorder {
     private var clickWriter: JSONLinesWriter<ClickEvent>?
     private var writeTask: Task<Void, Never>?
     private var startedAtUptime: TimeInterval = 0
+    private var timelineOffset: TimeInterval = 0
     private var lastMoveAtUptime: TimeInterval = 0
     private var captureBounds: CGRect?
     private var trackedWindowID: CGWindowID?
@@ -18,12 +19,14 @@ final class PointerEventRecorder {
     func start(
         session: RecordingTraceSession,
         captureBounds: CGRect,
-        trackedWindowID: CGWindowID? = nil
+        trackedWindowID: CGWindowID? = nil,
+        timelineOffset: TimeInterval = 0
     ) throws {
         stopMonitoring()
         pointerWriter = try JSONLinesWriter(url: session.pointerEventsURL)
         clickWriter = try JSONLinesWriter(url: session.clickEventsURL)
         startedAtUptime = ProcessInfo.processInfo.systemUptime
+        self.timelineOffset = max(0, timelineOffset)
         lastMoveAtUptime = 0
         self.captureBounds = captureBounds.standardized
         self.trackedWindowID = trackedWindowID
@@ -77,7 +80,7 @@ final class PointerEventRecorder {
         let location = event.cgEvent?.location ?? NSEvent.mouseLocation
         let point = TracePoint(x: location.x, y: location.y)
         let normalizedLocation = normalizedPoint(for: location)
-        let elapsed = max(0, now - startedAtUptime)
+        let elapsed = timelineOffset + max(0, now - startedAtUptime)
 
         switch event.type {
         case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:

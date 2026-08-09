@@ -286,6 +286,59 @@ final class TraceProjectStoreTests: XCTestCase {
         )
     }
 
+    func testRecordingSegmentIndexTracksAndDiscardsResumedRawSegments() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let session = try store.beginRecording(
+            width: 1_280,
+            height: 720,
+            includesMicrophone: true,
+            includesCamera: true
+        )
+
+        var index = try store.loadRecordingSegmentIndex(from: session.packageURL)
+        XCTAssertEqual(index.segments.count, 1)
+        XCTAssertEqual(index.segments[0].screenRelativePath, "raw/screen.mp4")
+        XCTAssertEqual(index.segments[0].microphoneRelativePath, "raw/microphone.caf")
+        XCTAssertEqual(index.segments[0].cameraRelativePath, "raw/camera.mov")
+        XCTAssertNil(index.segments[0].durationSeconds)
+
+        let resumed = RecordingSegment(
+            index: 1,
+            timelineStartSeconds: 1.25,
+            screenRelativePath: "raw/segments/screen-001.mp4",
+            microphoneRelativePath: "raw/segments/microphone-001.caf",
+            cameraRelativePath: "raw/segments/camera-001.mov"
+        )
+        try store.appendRecordingSegment(resumed, to: session)
+        _ = try store.completeRecordingSegment(index: 0, durationSeconds: 1.25, in: session)
+        index = try store.completeRecordingSegment(index: 1, durationSeconds: 2.5, in: session)
+
+        XCTAssertEqual(index.completedDurationSeconds, 3.75, accuracy: 0.001)
+        XCTAssertEqual(index.segments[1].timelineStartSeconds, 1.25, accuracy: 0.001)
+        let manifest = try store.loadManifest(from: session.packageURL)
+        XCTAssertTrue(manifest.assets.contains {
+            $0.role == .screenVideoSegment && $0.relativePath == resumed.screenRelativePath
+        })
+        XCTAssertTrue(manifest.assets.contains {
+            $0.role == .microphoneSegment && $0.relativePath == resumed.microphoneRelativePath
+        })
+        XCTAssertTrue(manifest.assets.contains {
+            $0.role == .cameraSegment && $0.relativePath == resumed.cameraRelativePath
+        })
+
+        try store.discardRecordingSegment(index: 1, from: session)
+        XCTAssertEqual(
+            try store.loadRecordingSegmentIndex(from: session.packageURL).segments.map(\.index),
+            [0]
+        )
+        XCTAssertFalse(try store.loadManifest(from: session.packageURL).assets.contains {
+            [.screenVideoSegment, .microphoneSegment, .cameraSegment].contains($0.role)
+        })
+    }
+
     func testLegacyPointOneManifestDecodesWithoutCaptureMetadata() throws {
         let json = """
         {

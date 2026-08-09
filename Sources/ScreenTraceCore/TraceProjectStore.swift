@@ -112,6 +112,11 @@ public struct TraceProjectStore: Sendable {
         return try JSONDecoder().decode(AutoEditPlan.self, from: data)
     }
 
+    public func loadRecordingSegmentIndex(from packageURL: URL) throws -> RecordingSegmentIndex {
+        let data = try Data(contentsOf: packageURL.appendingPathComponent("events/segments.json"))
+        return try JSONDecoder().decode(RecordingSegmentIndex.self, from: data)
+    }
+
     public func attachOCR(
         _ document: OCRDocument,
         to savedTrace: SavedTrace
@@ -286,6 +291,7 @@ public struct TraceProjectStore: Sendable {
         let videoURL = rawDirectory.appendingPathComponent("screen.mp4")
         let pointerURL = eventsDirectory.appendingPathComponent("pointer.jsonl")
         let clicksURL = eventsDirectory.appendingPathComponent("clicks.jsonl")
+        let segmentIndexURL = eventsDirectory.appendingPathComponent("segments.json")
         let editPlanURL = editsDirectory.appendingPathComponent("edit-plan.json")
         let microphoneURL = includesMicrophone
             ? rawDirectory.appendingPathComponent("microphone.caf")
@@ -300,6 +306,17 @@ public struct TraceProjectStore: Sendable {
             }
             FileManager.default.createFile(atPath: pointerURL.path, contents: nil)
             FileManager.default.createFile(atPath: clicksURL.path, contents: nil)
+            let firstSegment = RecordingSegment(
+                index: 0,
+                timelineStartSeconds: 0,
+                screenRelativePath: "raw/screen.mp4",
+                microphoneRelativePath: includesMicrophone ? "raw/microphone.caf" : nil,
+                cameraRelativePath: includesCamera ? "raw/camera.mov" : nil
+            )
+            try writeRecordingSegmentIndex(
+                RecordingSegmentIndex(segments: [firstSegment]),
+                to: segmentIndexURL
+            )
             let planEncoder = JSONEncoder()
             planEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             var initialPlan = AutoEditPlan()
@@ -317,6 +334,7 @@ public struct TraceProjectStore: Sendable {
                 TraceAsset(role: .screenVideo, relativePath: "raw/screen.mp4"),
                 TraceAsset(role: .pointerEvents, relativePath: "events/pointer.jsonl"),
                 TraceAsset(role: .clickEvents, relativePath: "events/clicks.jsonl"),
+                TraceAsset(role: .recordingSegments, relativePath: "events/segments.json"),
                 TraceAsset(role: .editPlan, relativePath: "edits/edit-plan.json")
             ]
             if includesMicrophone {
@@ -345,6 +363,7 @@ public struct TraceProjectStore: Sendable {
                 videoURL: videoURL,
                 pointerEventsURL: pointerURL,
                 clickEventsURL: clicksURL,
+                segmentIndexURL: segmentIndexURL,
                 editPlanURL: editPlanURL,
                 microphoneURL: microphoneURL,
                 cameraURL: cameraURL,
@@ -393,6 +412,114 @@ public struct TraceProjectStore: Sendable {
         var manifest = try loadManifest(from: packageURL)
         manifest.assets.removeAll { $0.role == role }
         try writeManifest(manifest, to: packageURL)
+    }
+
+    public func upsertAsset(_ asset: TraceAsset, in packageURL: URL) throws {
+        var manifest = try loadManifest(from: packageURL)
+        manifest.assets.removeAll { $0.role == asset.role }
+        manifest.assets.append(asset)
+        try writeManifest(manifest, to: packageURL)
+    }
+
+    public func appendRecordingSegment(
+        _ segment: RecordingSegment,
+        to session: RecordingTraceSession
+    ) throws {
+        var index = try loadRecordingSegmentIndex(from: session.packageURL)
+        index.segments.removeAll { $0.index == segment.index }
+        index.segments.append(segment)
+        index.segments.sort { $0.index < $1.index }
+        try writeRecordingSegmentIndex(index, to: session.segmentIndexURL)
+
+        var manifest = try loadManifest(from: session.packageURL)
+        let assets = [
+            TraceAsset(role: .screenVideoSegment, relativePath: segment.screenRelativePath),
+            segment.microphoneRelativePath.map {
+                TraceAsset(role: .microphoneSegment, relativePath: $0)
+            },
+            segment.cameraRelativePath.map {
+                TraceAsset(role: .cameraSegment, relativePath: $0)
+            }
+        ].compactMap { $0 }
+        for asset in assets where !manifest.assets.contains(where: {
+            $0.role == asset.role && $0.relativePath == asset.relativePath
+        }) {
+            manifest.assets.append(asset)
+        }
+        try writeManifest(manifest, to: session.packageURL)
+    }
+
+    @discardableResult
+    public func completeRecordingSegment(
+        index segmentIndex: Int,
+        durationSeconds: Double,
+        in session: RecordingTraceSession
+    ) throws -> RecordingSegmentIndex {
+        var index = try loadRecordingSegmentIndex(from: session.packageURL)
+        guard let position = index.segments.firstIndex(where: { $0.index == segmentIndex }) else {
+            return index
+        }
+        index.segments[position].durationSeconds = max(0, durationSeconds)
+        try writeRecordingSegmentIndex(index, to: session.segmentIndexURL)
+        return index
+    }
+
+    public func discardRecordingSegment(
+        index segmentIndex: Int,
+        from session: RecordingTraceSession
+    ) throws {
+        var index = try loadRecordingSegmentIndex(from: session.packageURL)
+        guard let segment = index.segments.first(where: { $0.index == segmentIndex }) else { return }
+        index.segments.removeAll { $0.index == segmentIndex }
+        try writeRecordingSegmentIndex(index, to: session.segmentIndexURL)
+
+        let paths = [
+            segment.screenRelativePath,
+            segment.microphoneRelativePath,
+            segment.cameraRelativePath
+        ].compactMap { $0 }
+        var manifest = try loadManifest(from: session.packageURL)
+        manifest.assets.removeAll { asset in
+            paths.contains(asset.relativePath) && [
+                TraceAsset.Role.screenVideoSegment,
+                .microphoneSegment,
+                .cameraSegment
+            ].contains(asset.role)
+        }
+        try writeManifest(manifest, to: session.packageURL)
+    }
+
+    public func removeRecordingSegmentMedia(
+        role: TraceAsset.Role,
+        segmentIndex: Int,
+        from session: RecordingTraceSession
+    ) throws {
+        guard role == .microphone || role == .camera else { return }
+        var index = try loadRecordingSegmentIndex(from: session.packageURL)
+        guard let position = index.segments.firstIndex(where: { $0.index == segmentIndex }) else {
+            return
+        }
+        let relativePath: String?
+        let manifestRole: TraceAsset.Role
+        switch role {
+        case .microphone:
+            relativePath = index.segments[position].microphoneRelativePath
+            index.segments[position].microphoneRelativePath = nil
+            manifestRole = segmentIndex == 0 ? .microphone : .microphoneSegment
+        case .camera:
+            relativePath = index.segments[position].cameraRelativePath
+            index.segments[position].cameraRelativePath = nil
+            manifestRole = segmentIndex == 0 ? .camera : .cameraSegment
+        default:
+            return
+        }
+        try writeRecordingSegmentIndex(index, to: session.segmentIndexURL)
+        guard let relativePath else { return }
+        var manifest = try loadManifest(from: session.packageURL)
+        manifest.assets.removeAll {
+            $0.role == manifestRole && $0.relativePath == relativePath
+        }
+        try writeManifest(manifest, to: session.packageURL)
     }
 
     public func writeAutoEditPlan(
@@ -498,6 +625,15 @@ public struct TraceProjectStore: Sendable {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(manifest)
         try data.write(to: packageURL.appendingPathComponent("manifest.json"), options: .atomic)
+    }
+
+    private func writeRecordingSegmentIndex(
+        _ index: RecordingSegmentIndex,
+        to url: URL
+    ) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(index).write(to: url, options: .atomic)
     }
 
     private static func canonicalURLAllowingMissingComponents(_ url: URL) -> URL {

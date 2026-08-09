@@ -263,6 +263,7 @@ public struct TraceProjectStore: Sendable {
     public func beginRecording(
         width: Int,
         height: Int,
+        captureSource: TraceCaptureMetadata? = nil,
         createdAt: Date = Date(),
         id: UUID = UUID()
     ) throws -> RecordingTraceSession {
@@ -295,13 +296,21 @@ public struct TraceProjectStore: Sendable {
             planEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try planEncoder.encode(AutoEditPlan()).write(to: editPlanURL, options: .atomic)
 
+            let titlePrefix: String = switch captureSource?.mode {
+            case .region: "区域录屏"
+            case .window:
+                captureSource?.applicationName.map { "\($0) 窗口录屏" } ?? "窗口录屏"
+            case .display: "屏幕录制"
+            case nil: "录屏"
+            }
             let manifest = TraceManifest(
                 id: id,
                 kind: .recording,
                 createdAt: createdAt,
-                title: "录屏 \(Self.displayTimestamp.string(from: createdAt))",
+                title: "\(titlePrefix) \(Self.displayTimestamp.string(from: createdAt))",
                 state: .capturing,
                 dimensions: TraceDimensions(width: width, height: height),
+                captureSource: captureSource,
                 assets: [
                     TraceAsset(role: .screenVideo, relativePath: "raw/screen.mp4"),
                     TraceAsset(role: .pointerEvents, relativePath: "events/pointer.jsonl"),

@@ -23,6 +23,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onTraceChanged: { [weak self] in
             self?.traceLibrary.reloadIfVisible()
         },
+        onRecordingSourceSelected: { [weak self] source in
+            self?.startRecording(source: source)
+        },
         onOCRCompleted: { [weak self] document, trace in
             self?.handleOCRCompleted(document, trace: trace)
         },
@@ -128,7 +131,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(menuItem("窗口截图", action: #selector(beginWindowScreenshot)))
         menu.addItem(menuItem("当前屏幕截图", action: #selector(beginDisplayScreenshot)))
         menu.addItem(menuItem("选区 OCR", action: #selector(beginOCR)))
-        menu.addItem(menuItem("开始屏幕录制", action: #selector(beginRecording)))
+        menu.addItem(menuItem("录制区域", action: #selector(beginRegionRecording)))
+        menu.addItem(menuItem("录制窗口", action: #selector(beginWindowRecording)))
+        menu.addItem(menuItem("录制当前屏幕", action: #selector(beginRecording)))
         menu.addItem(.separator())
         menu.addItem(menuItem("打开屏迹库", action: #selector(showTraceLibrary)))
         menu.addItem(menuItem("在 Finder 中打开屏迹目录", action: #selector(openTraceDirectory)))
@@ -172,7 +177,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             captureCoordinator.beginDisplayCapture()
         case .recording:
             actionCenter.hide()
-            startRecording()
+            startDisplayRecording()
+        case .regionRecording:
+            actionCenter.hide()
+            captureCoordinator.beginRegionRecordingSelection()
+        case .windowRecording:
+            actionCenter.hide()
+            captureCoordinator.beginWindowRecordingSelection()
         case .ocr:
             actionCenter.hide()
             captureCoordinator.beginOCRCapture()
@@ -235,7 +246,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func beginRecording() {
         actionCenter.hide()
-        startRecording()
+        startDisplayRecording()
+    }
+
+    @objc private func beginRegionRecording() {
+        actionCenter.hide()
+        captureCoordinator.beginRegionRecordingSelection()
+    }
+
+    @objc private func beginWindowRecording() {
+        actionCenter.hide()
+        captureCoordinator.beginWindowRecordingSelection()
     }
 
     @objc private func openTraceDirectory() {
@@ -285,7 +306,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    private func startRecording() {
+    private func startDisplayRecording() {
+        guard let displayID = activeDisplayID() else {
+            toast.show(title: "找不到显示器", symbol: "exclamationmark.triangle")
+            return
+        }
+        startRecording(
+            source: CaptureGeometry.displayRecordingSource(
+                displayID: displayID,
+                displayBounds: CGDisplayBounds(displayID)
+            )
+        )
+    }
+
+    private func startRecording(source: RecordingCaptureSource) {
         guard ScreenPermission.hasAccess else {
             ScreenPermission.requestOrExplain()
             return
@@ -294,17 +328,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recordingControl.showExisting()
             return
         }
-        guard let displayID = activeDisplayID() else {
-            toast.show(title: "找不到显示器", symbol: "exclamationmark.triangle")
-            return
-        }
-
-        toast.show(title: "正在准备录制", detail: "60 FPS · 系统声音 · 事件分轨", symbol: "record.circle")
+        toast.show(
+            title: "正在准备\(source.mode.presentationTitle)",
+            detail: "60 FPS · 系统声音 · 事件分轨",
+            symbol: "record.circle"
+        )
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                _ = try await recordingService.start(displayID: displayID)
-                recordingControl.begin()
+                _ = try await recordingService.start(source: source)
+                recordingControl.begin(sourceTitle: source.mode.presentationTitle)
             } catch {
                 recordingControl.hide()
                 showRecordingError(error)
@@ -377,6 +410,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 detail: "自动成片暂未完成，稍后可以重新处理",
                 symbol: "exclamationmark.arrow.triangle.2.circlepath"
             )
+        }
+    }
+}
+
+private extension RecordingCaptureMode {
+    var presentationTitle: String {
+        switch self {
+        case .region: "区域录制"
+        case .window: "窗口录制"
+        case .display: "屏幕录制"
         }
     }
 }

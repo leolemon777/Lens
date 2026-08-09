@@ -2,8 +2,27 @@ import AppKit
 import ScreenTraceCore
 
 enum CaptureOverlayMode {
-    case region
-    case window(candidates: [WindowSelectionCandidate])
+    case region(action: CaptureOverlayAction)
+    case window(candidates: [WindowSelectionCandidate], action: CaptureOverlayAction)
+}
+
+enum CaptureOverlayAction {
+    case screenshot
+    case recording
+
+    var regionGuidance: String {
+        switch self {
+        case .screenshot: "拖动选择区域  ·  Esc 取消"
+        case .recording: "拖动选择录制区域  ·  Esc 取消"
+        }
+    }
+
+    var windowGuidance: String {
+        switch self {
+        case .screenshot: "移动选择窗口  ·  单击截取  ·  Esc 取消"
+        case .recording: "移动选择窗口  ·  单击开始录制  ·  Esc 取消"
+        }
+    }
 }
 
 @MainActor
@@ -51,21 +70,21 @@ final class CaptureOverlayView: NSView {
         bounds.fill()
 
         switch mode {
-        case .region:
+        case let .region(action):
             guard let selection else {
-                drawGuidance("拖动选择区域  ·  Esc 取消")
+                drawGuidance(action.regionGuidance)
                 return
             }
             punchOut(selection)
             drawSelectionBorder(selection)
             drawDimensionPill(for: selection)
-        case .window:
+        case let .window(_, action):
             guard let hoveredWindow,
                   let localRect = CaptureGeometry.localIntersection(
                     of: hoveredWindow.globalFrame,
                     displayBounds: displayBounds
                   ) else {
-                drawGuidance("移动选择窗口  ·  单击截取  ·  Esc 取消")
+                drawGuidance(action.windowGuidance)
                 return
             }
             punchOut(localRect)
@@ -170,7 +189,7 @@ final class CaptureOverlayView: NSView {
     }
 
     private func updateHoveredWindow(with event: NSEvent) {
-        guard case let .window(candidates) = mode else { return }
+        guard case let .window(candidates, _) = mode else { return }
         let localPoint = clipped(convert(event.locationInWindow, from: nil))
         let globalPoint = CaptureGeometry.globalPoint(
             fromLocalPoint: localPoint,
@@ -194,7 +213,11 @@ final class CaptureOverlayView: NSView {
         border.lineWidth = 1.5
         border.stroke()
 
-        NSColor.systemCyan.withAlphaComponent(0.76).setStroke()
+        let accent: NSColor = switch mode {
+        case .region(.recording), .window(_, .recording): .systemRed
+        case .region(.screenshot), .window(_, .screenshot): .systemCyan
+        }
+        accent.withAlphaComponent(0.76).setStroke()
         let glow = NSBezierPath(roundedRect: rect.insetBy(dx: -1, dy: -1), xRadius: 5, yRadius: 5)
         glow.lineWidth = 1
         glow.stroke()

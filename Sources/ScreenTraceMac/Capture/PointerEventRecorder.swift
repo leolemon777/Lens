@@ -10,18 +10,24 @@ final class PointerEventRecorder {
     private var writeTask: Task<Void, Never>?
     private var startedAtUptime: TimeInterval = 0
     private var lastMoveAtUptime: TimeInterval = 0
-    private var captureDisplayID: CGDirectDisplayID?
     private var captureBounds: CGRect?
+    private var trackedWindowID: CGWindowID?
+    private var lastWindowBoundsRefresh: TimeInterval = 0
     private let minimumMoveInterval: TimeInterval = 1.0 / 60.0
 
-    func start(session: RecordingTraceSession, displayID: CGDirectDisplayID) throws {
+    func start(
+        session: RecordingTraceSession,
+        captureBounds: CGRect,
+        trackedWindowID: CGWindowID? = nil
+    ) throws {
         stopMonitoring()
         pointerWriter = try JSONLinesWriter(url: session.pointerEventsURL)
         clickWriter = try JSONLinesWriter(url: session.clickEventsURL)
         startedAtUptime = ProcessInfo.processInfo.systemUptime
         lastMoveAtUptime = 0
-        captureDisplayID = displayID
-        captureBounds = CGDisplayBounds(displayID)
+        self.captureBounds = captureBounds.standardized
+        self.trackedWindowID = trackedWindowID
+        lastWindowBoundsRefresh = 0
 
         let mask: NSEvent.EventTypeMask = [
             .mouseMoved,
@@ -54,8 +60,9 @@ final class PointerEventRecorder {
         }
         self.pointerWriter = nil
         self.clickWriter = nil
-        captureDisplayID = nil
         captureBounds = nil
+        trackedWindowID = nil
+        lastWindowBoundsRefresh = 0
     }
 
     private func stopMonitoring() {
@@ -110,17 +117,28 @@ final class PointerEventRecorder {
     }
 
     private func normalizedPoint(for location: CGPoint) -> TracePoint? {
-        guard let captureDisplayID,
-              Self.displayID(at: location) == captureDisplayID,
-              let captureBounds,
-              captureBounds.width > 0,
-              captureBounds.height > 0 else {
-            return nil
+        refreshTrackedWindowBoundsIfNeeded()
+        guard let captureBounds else { return nil }
+        return CaptureGeometry.normalizedPoint(location, in: captureBounds)
+    }
+
+    private func refreshTrackedWindowBoundsIfNeeded() {
+        guard let trackedWindowID else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastWindowBoundsRefresh >= 1.0 / 15.0 else { return }
+        lastWindowBoundsRefresh = now
+        guard let info = CGWindowListCopyWindowInfo(
+            [.optionIncludingWindow, .excludeDesktopElements],
+            trackedWindowID
+        ) as? [[String: Any]],
+        let item = info.first,
+        let rawBounds = item[kCGWindowBounds as String] as? [String: Any],
+        let bounds = CGRect(dictionaryRepresentation: rawBounds as CFDictionary),
+        bounds.width > 0,
+        bounds.height > 0 else {
+            return
         }
-        return TracePoint(
-            x: min(max((location.x - captureBounds.minX) / captureBounds.width, 0), 1),
-            y: min(max((location.y - captureBounds.minY) / captureBounds.height, 0), 1)
-        )
+        captureBounds = bounds.standardized
     }
 
     private func enqueueWrite(_ operation: @escaping @Sendable () async -> Void) {

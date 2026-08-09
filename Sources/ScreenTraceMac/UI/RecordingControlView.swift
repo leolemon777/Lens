@@ -6,12 +6,14 @@ final class RecordingControlModel: ObservableObject {
     @Published var startedAt = Date()
     @Published var pausedAt: Date?
     @Published var accumulatedPause: TimeInterval = 0
+    @Published var sourceTitle = "屏幕录制"
 
-    func reset() {
+    func reset(sourceTitle: String = "屏幕录制") {
         isPaused = false
         startedAt = Date()
         pausedAt = nil
         accumulatedPause = 0
+        self.sourceTitle = sourceTitle
     }
 
     func togglePause() {
@@ -80,7 +82,7 @@ struct RecordingControlView: View {
             .buttonStyle(.plain)
             .help("停止")
 
-            Text("原始素材")
+            Text(model.sourceTitle)
                 .font(.system(size: 9.5, weight: .medium))
                 .foregroundStyle(.tertiary)
         }

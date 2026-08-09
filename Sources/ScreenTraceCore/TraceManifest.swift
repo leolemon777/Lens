@@ -51,8 +51,52 @@ public struct TraceDimensions: Codable, Equatable, Sendable {
     }
 }
 
+public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
+    public let mode: RecordingCaptureMode
+    public let displayID: UInt32?
+    public let windowID: UInt32?
+    /// Absolute global capture bounds in logical points.
+    public let globalBounds: TraceRect
+    /// Display-local crop in logical points for region capture.
+    public let sourceRect: TraceRect?
+    public let windowTitle: String?
+    public let applicationName: String?
+
+    public init(
+        mode: RecordingCaptureMode,
+        displayID: UInt32? = nil,
+        windowID: UInt32? = nil,
+        globalBounds: TraceRect,
+        sourceRect: TraceRect? = nil,
+        windowTitle: String? = nil,
+        applicationName: String? = nil
+    ) {
+        self.mode = mode
+        self.displayID = displayID
+        self.windowID = windowID
+        self.globalBounds = globalBounds
+        self.sourceRect = sourceRect
+        self.windowTitle = windowTitle
+        self.applicationName = applicationName
+    }
+
+    public init(
+        recordingSource source: RecordingCaptureSource,
+        actualCaptureBounds: CGRect? = nil,
+        actualSourceRect: CGRect? = nil
+    ) {
+        mode = source.mode
+        displayID = source.displayID
+        windowID = source.windowID
+        globalBounds = TraceRect(actualCaptureBounds ?? source.captureBounds)
+        sourceRect = (actualSourceRect ?? source.sourceRect).map(TraceRect.init)
+        windowTitle = source.windowTitle
+        applicationName = source.applicationName
+    }
+}
+
 public struct TraceManifest: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.1"
+    public static let currentSchemaVersion = "0.2"
 
     public let schemaVersion: String
     public let id: UUID
@@ -62,6 +106,7 @@ public struct TraceManifest: Codable, Equatable, Sendable {
     public var state: TraceState
     public var durationSeconds: Double?
     public let dimensions: TraceDimensions?
+    public let captureSource: TraceCaptureMetadata?
     public var assets: [TraceAsset]
 
     public init(
@@ -73,6 +118,7 @@ public struct TraceManifest: Codable, Equatable, Sendable {
         state: TraceState = .ready,
         durationSeconds: Double? = nil,
         dimensions: TraceDimensions?,
+        captureSource: TraceCaptureMetadata? = nil,
         assets: [TraceAsset]
     ) {
         self.schemaVersion = schemaVersion
@@ -83,7 +129,19 @@ public struct TraceManifest: Codable, Equatable, Sendable {
         self.state = state
         self.durationSeconds = durationSeconds
         self.dimensions = dimensions
+        self.captureSource = captureSource
         self.assets = assets
+    }
+}
+
+private extension TraceRect {
+    init(_ rect: CGRect) {
+        self.init(
+            x: rect.minX,
+            y: rect.minY,
+            width: rect.width,
+            height: rect.height
+        )
     }
 }
 

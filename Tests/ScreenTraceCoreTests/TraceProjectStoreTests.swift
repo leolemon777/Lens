@@ -185,6 +185,61 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(reloaded, saved.manifest)
     }
 
+    func testRecordingManifestPersistsWindowCaptureContext() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let source = CaptureGeometry.windowRecordingSource(
+            WindowSelectionCandidate(
+                id: 42,
+                globalFrame: CGRect(x: 120, y: 80, width: 900, height: 600),
+                frontToBackOrder: 0,
+                title: "设计稿",
+                applicationName: "Sketch"
+            )
+        )
+
+        let session = try store.beginRecording(
+            width: 1_800,
+            height: 1_200,
+            captureSource: TraceCaptureMetadata(recordingSource: source)
+        )
+        let manifest = try store.loadManifest(from: session.packageURL)
+
+        XCTAssertEqual(manifest.schemaVersion, TraceManifest.currentSchemaVersion)
+        XCTAssertEqual(manifest.captureSource?.mode, .window)
+        XCTAssertEqual(manifest.captureSource?.windowID, 42)
+        XCTAssertEqual(manifest.captureSource?.windowTitle, "设计稿")
+        XCTAssertEqual(manifest.captureSource?.applicationName, "Sketch")
+        XCTAssertTrue(manifest.title.hasPrefix("Sketch 窗口录屏"))
+    }
+
+    func testLegacyPointOneManifestDecodesWithoutCaptureMetadata() throws {
+        let json = """
+        {
+          "schemaVersion": "0.1",
+          "id": "12345678-1234-1234-1234-123456789ABC",
+          "kind": "recording",
+          "createdAt": "2026-08-09T12:00:00Z",
+          "title": "旧录屏",
+          "state": "ready",
+          "dimensions": { "width": 1280, "height": 720 },
+          "assets": [
+            { "role": "screenVideo", "relativePath": "raw/screen.mp4" }
+          ]
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let manifest = try decoder.decode(TraceManifest.self, from: Data(json.utf8))
+
+        XCTAssertEqual(manifest.schemaVersion, "0.1")
+        XCTAssertNil(manifest.captureSource)
+        XCTAssertEqual(manifest.dimensions, TraceDimensions(width: 1_280, height: 720))
+    }
+
     func testRecordingCannotFinalizeWithoutNonemptyRawVideo() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)

@@ -60,6 +60,46 @@ final class CaptureGeometryTests: XCTestCase {
         XCTAssertEqual(ScreenshotCaptureMode.allCases.map(\.rawValue), ["region", "window", "display"])
     }
 
+    func testRecordingModesRemainStableForCrossPlatformRouting() {
+        XCTAssertEqual(RecordingCaptureMode.allCases.map(\.rawValue), ["region", "window", "display"])
+    }
+
+    func testRegionRecordingSourceClipsLocallyAndPreservesGlobalOffset() throws {
+        let display = CGRect(x: 1_440, y: -120, width: 1_440, height: 900)
+        let source = try XCTUnwrap(CaptureGeometry.regionRecordingSource(
+            displayID: 7,
+            localRect: CGRect(x: -20, y: 80, width: 660, height: 360),
+            displayBounds: display
+        ))
+
+        XCTAssertEqual(source.mode, .region)
+        XCTAssertEqual(source.displayID, 7)
+        XCTAssertEqual(source.sourceRect, CGRect(x: 0, y: 80, width: 640, height: 360))
+        XCTAssertEqual(source.captureBounds, CGRect(x: 1_440, y: -40, width: 640, height: 360))
+    }
+
+    func testRecordingPixelDimensionsUseRetinaScaleAndEvenCodecSizes() {
+        XCTAssertEqual(
+            CaptureGeometry.recordingPixelDimensions(
+                pointSize: CGSize(width: 641.2, height: 359.1),
+                pointPixelScale: 2
+            ),
+            TraceDimensions(width: 1_284, height: 720)
+        )
+    }
+
+    func testPointerNormalizationRejectsEventsOutsideRecordingCrop() {
+        let bounds = CGRect(x: 2_000, y: -100, width: 800, height: 500)
+
+        XCTAssertEqual(
+            CaptureGeometry.normalizedPoint(CGPoint(x: 2_400, y: 150), in: bounds),
+            TracePoint(x: 0.5, y: 0.5)
+        )
+        XCTAssertNil(
+            CaptureGeometry.normalizedPoint(CGPoint(x: 1_999, y: 150), in: bounds)
+        )
+    }
+
     private func candidate(id: UInt32, frame: CGRect, order: Int) -> WindowSelectionCandidate {
         WindowSelectionCandidate(
             id: id,

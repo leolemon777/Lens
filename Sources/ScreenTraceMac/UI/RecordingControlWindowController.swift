@@ -17,8 +17,8 @@ final class RecordingControlWindowController {
         configurePanel()
     }
 
-    func begin() {
-        model.reset()
+    func begin(sourceTitle: String) {
+        model.reset(sourceTitle: sourceTitle)
         showExisting()
     }
 

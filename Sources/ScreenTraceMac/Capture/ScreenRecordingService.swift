@@ -8,6 +8,8 @@ enum ScreenRecordingError: LocalizedError {
     case alreadyRecording
     case notRecording
     case displayUnavailable
+    case windowUnavailable
+    case emptySelection
     case unableToAddRecordingOutput
     case recordingDidNotFinalize
 
@@ -16,6 +18,8 @@ enum ScreenRecordingError: LocalizedError {
         case .alreadyRecording: "已经在录制。"
         case .notRecording: "当前没有正在进行的录制。"
         case .displayUnavailable: "无法找到要录制的显示器。"
+        case .windowUnavailable: "所选窗口已经关闭，请重新选择。"
+        case .emptySelection: "录屏选区为空。"
         case .unableToAddRecordingOutput: "无法创建系统录制输出。"
         case .recordingDidNotFinalize: "系统未能及时完成录屏文件。"
         }
@@ -50,32 +54,27 @@ final class ScreenRecordingService: NSObject {
     var isRecording: Bool { stream != nil }
 
     func start(
-        displayID: CGDirectDisplayID,
+        source: RecordingCaptureSource,
         options: ScreenRecordingOptions = ScreenRecordingOptions()
     ) async throws -> RecordingTraceSession {
         guard stream == nil else { throw ScreenRecordingError.alreadyRecording }
 
         let content = try await shareableContent()
-        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
-            throw ScreenRecordingError.displayUnavailable
-        }
-
-        let width = max(Int(CGDisplayPixelsWide(displayID)), 1)
-        let height = max(Int(CGDisplayPixelsHigh(displayID)), 1)
-        let session = try store.beginRecording(width: width, height: height)
+        let prepared = try prepare(source: source, content: content)
+        let session = try store.beginRecording(
+            width: prepared.dimensions.width,
+            height: prepared.dimensions.height,
+            captureSource: TraceCaptureMetadata(
+                recordingSource: source,
+                actualCaptureBounds: prepared.captureBounds,
+                actualSourceRect: prepared.sourceRect
+            )
+        )
 
         do {
-            let ownApplications = content.applications.filter {
-                $0.bundleIdentifier == Bundle.main.bundleIdentifier
-            }
-            let filter = SCContentFilter(
-                display: display,
-                excludingApplications: ownApplications,
-                exceptingWindows: []
-            )
             let configuration = SCStreamConfiguration()
-            configuration.width = width
-            configuration.height = height
+            configuration.width = prepared.dimensions.width
+            configuration.height = prepared.dimensions.height
             configuration.minimumFrameInterval = CMTime(
                 value: 1,
                 timescale: CMTimeScale(max(options.framesPerSecond, 1))
@@ -89,8 +88,21 @@ final class ScreenRecordingService: NSObject {
             configuration.channelCount = 2
             configuration.captureMicrophone = options.capturesMicrophone
             configuration.captureResolution = .best
+            configuration.preservesAspectRatio = true
+            if let sourceRect = prepared.sourceRect {
+                configuration.sourceRect = sourceRect
+            }
+            if source.mode == .window {
+                configuration.ignoreShadowsSingleWindow = true
+                configuration.ignoreGlobalClipSingleWindow = true
+                configuration.scalesToFit = true
+            }
 
-            let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
+            let stream = SCStream(
+                filter: prepared.filter,
+                configuration: configuration,
+                delegate: self
+            )
             let outputConfiguration = SCRecordingOutputConfiguration()
             outputConfiguration.outputURL = session.videoURL
             outputConfiguration.videoCodecType = .h264
@@ -101,7 +113,11 @@ final class ScreenRecordingService: NSObject {
             )
             try stream.addRecordingOutput(recordingOutput)
 
-            try pointerRecorder.start(session: session, displayID: displayID)
+            try pointerRecorder.start(
+                session: session,
+                captureBounds: prepared.captureBounds,
+                trackedWindowID: prepared.trackedWindowID
+            )
             try await startCapture(stream)
 
             self.stream = stream
@@ -200,6 +216,85 @@ final class ScreenRecordingService: NSObject {
         }
     }
 
+    private func prepare(
+        source: RecordingCaptureSource,
+        content: SCShareableContent
+    ) throws -> PreparedRecordingSource {
+        switch source.mode {
+        case .display, .region:
+            guard let displayID = source.displayID,
+                  let display = content.displays.first(where: { $0.displayID == displayID }) else {
+                throw ScreenRecordingError.displayUnavailable
+            }
+            let ownApplications = content.applications.filter {
+                $0.bundleIdentifier == Bundle.main.bundleIdentifier
+            }
+            let filter = SCContentFilter(
+                display: display,
+                excludingApplications: ownApplications,
+                exceptingWindows: []
+            )
+            let pointSize: CGSize
+            let sourceRect: CGRect?
+            let captureBounds: CGRect
+            if source.mode == .region {
+                guard let requested = source.sourceRect else {
+                    throw ScreenRecordingError.emptySelection
+                }
+                let localDisplayBounds = CGRect(
+                    origin: .zero,
+                    size: CGSize(width: display.width, height: display.height)
+                )
+                let clipped = requested.standardized.intersection(localDisplayBounds)
+                guard !clipped.isNull, clipped.width >= 3, clipped.height >= 3 else {
+                    throw ScreenRecordingError.emptySelection
+                }
+                pointSize = clipped.size
+                sourceRect = clipped
+                captureBounds = CaptureGeometry.globalRect(
+                    fromLocalRect: clipped,
+                    displayBounds: CGDisplayBounds(displayID)
+                )
+            } else {
+                pointSize = CGSize(width: display.width, height: display.height)
+                sourceRect = nil
+                captureBounds = CGDisplayBounds(displayID)
+            }
+            return PreparedRecordingSource(
+                filter: filter,
+                dimensions: CaptureGeometry.recordingPixelDimensions(
+                    pointSize: pointSize,
+                    pointPixelScale: CGFloat(filter.pointPixelScale)
+                ),
+                sourceRect: sourceRect,
+                captureBounds: captureBounds,
+                trackedWindowID: nil
+            )
+
+        case .window:
+            guard let windowID = source.windowID,
+                  let window = content.windows.first(where: { $0.windowID == windowID }),
+                  window.isOnScreen else {
+                throw ScreenRecordingError.windowUnavailable
+            }
+            let filter = SCContentFilter(desktopIndependentWindow: window)
+            let pointSize = filter.contentRect.size
+            guard pointSize.width >= 3, pointSize.height >= 3 else {
+                throw ScreenRecordingError.emptySelection
+            }
+            return PreparedRecordingSource(
+                filter: filter,
+                dimensions: CaptureGeometry.recordingPixelDimensions(
+                    pointSize: pointSize,
+                    pointPixelScale: CGFloat(filter.pointPixelScale)
+                ),
+                sourceRect: nil,
+                captureBounds: window.frame,
+                trackedWindowID: window.windowID
+            )
+        }
+    }
+
     private func startCapture(_ stream: SCStream) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             stream.startCapture { error in
@@ -211,6 +306,14 @@ final class ScreenRecordingService: NSObject {
             }
         }
     }
+}
+
+private struct PreparedRecordingSource {
+    let filter: SCContentFilter
+    let dimensions: TraceDimensions
+    let sourceRect: CGRect?
+    let captureBounds: CGRect
+    let trackedWindowID: CGWindowID?
 }
 
 extension ScreenRecordingService: SCRecordingOutputDelegate {

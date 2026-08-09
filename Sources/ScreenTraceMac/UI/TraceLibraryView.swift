@@ -196,6 +196,9 @@ private struct TraceLibraryCard: View {
                     if entry.ocrText?.isEmpty == false {
                         Label("OCR", systemImage: "text.viewfinder")
                     }
+                    if let capture = entry.manifest.captureSource {
+                        Label(capture.mode.libraryTitle, systemImage: capture.mode.librarySymbol)
+                    }
                     if let duration = entry.manifest.durationSeconds {
                         Text(durationText(duration))
                     }
@@ -292,5 +295,23 @@ private struct TraceLibraryCard: View {
     private func durationText(_ duration: Double) -> String {
         let total = max(Int(duration.rounded()), 0)
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+private extension RecordingCaptureMode {
+    var libraryTitle: String {
+        switch self {
+        case .region: "区域"
+        case .window: "窗口"
+        case .display: "屏幕"
+        }
+    }
+
+    var librarySymbol: String {
+        switch self {
+        case .region: "viewfinder"
+        case .window: "macwindow"
+        case .display: "display"
+        }
     }
 }

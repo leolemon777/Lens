@@ -5,6 +5,8 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
     case windowScreenshot
     case displayScreenshot
     case recording
+    case regionRecording
+    case windowRecording
     case ocr
     case scrollingCapture
     case pin
@@ -18,7 +20,9 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         case .screenshot: "截图"
         case .windowScreenshot: "窗口截图"
         case .displayScreenshot: "屏幕截图"
-        case .recording: "录屏"
+        case .recording: "屏幕录制"
+        case .regionRecording: "区域录制"
+        case .windowRecording: "窗口录制"
         case .ocr: "OCR"
         case .scrollingCapture: "长截图"
         case .pin: "贴图"
@@ -32,7 +36,9 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         case .screenshot: "区域 · 窗口 · 屏幕"
         case .windowScreenshot: "选择一个窗口"
         case .displayScreenshot: "当前显示器"
-        case .recording: "自然运镜"
+        case .recording: "当前显示器"
+        case .regionRecording: "选择一个区域"
+        case .windowRecording: "选择一个窗口"
         case .ocr: "识别文字"
         case .scrollingCapture: "滚动捕获"
         case .pin: "浮在桌面"
@@ -47,6 +53,8 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         case .windowScreenshot: "macwindow"
         case .displayScreenshot: "display"
         case .recording: "record.circle"
+        case .regionRecording: "viewfinder.circle"
+        case .windowRecording: "macwindow.badge.plus"
         case .ocr: "text.viewfinder"
         case .scrollingCapture: "rectangle.and.arrow.up.right.and.arrow.down.left"
         case .pin: "pin"
@@ -57,7 +65,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
 
     var tint: Color {
         switch self {
-        case .recording: .red
+        case .recording, .regionRecording, .windowRecording: .red
         case .screenshot, .windowScreenshot, .displayScreenshot: .cyan
         case .ocr: .indigo
         case .scrollingCapture: .orange
@@ -111,7 +119,7 @@ struct ActionCenterView: View {
     private var primaryActions: some View {
         HStack(spacing: 10) {
             screenshotMenu
-            actionTile(.recording, shortcut: "2")
+            recordingMenu
             actionTile(.ocr, shortcut: "3")
             actionTile(.scrollingCapture, shortcut: "4")
             actionTile(.pin, shortcut: "5")
@@ -144,6 +152,33 @@ struct ActionCenterView: View {
         .buttonStyle(TraceActionButtonStyle(tint: .cyan))
         .keyboardShortcut("1", modifiers: [])
         .help("选择截图模式")
+    }
+
+    private var recordingMenu: some View {
+        Menu {
+            Button {
+                onAction(.regionRecording)
+            } label: {
+                Label("录制区域", systemImage: "viewfinder.circle")
+            }
+            Button {
+                onAction(.windowRecording)
+            } label: {
+                Label("录制窗口", systemImage: "macwindow.badge.plus")
+            }
+            Button {
+                onAction(.recording)
+            } label: {
+                Label("录制当前屏幕", systemImage: "display")
+            }
+        } label: {
+            actionTileLabel(.recording)
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(TraceActionButtonStyle(tint: .red))
+        .keyboardShortcut("2", modifiers: [])
+        .help("选择录屏来源")
     }
 
     private func actionTile(_ action: ActionCenterAction, shortcut: KeyEquivalent) -> some View {

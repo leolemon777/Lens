@@ -4,15 +4,18 @@ import ScreenTraceCore
 
 @MainActor
 final class CaptureCoordinator: CaptureOverlayViewDelegate {
-    private enum CapturePurpose {
+    private enum CapturePurpose: Equatable {
         case screenshot
         case ocr
+        case recordingRegion
+        case recordingWindow
     }
 
     private let store: TraceProjectStore
     private let model: AppModel
     private let quickAccess: QuickAccessWindowController
     private let onTraceChanged: () -> Void
+    private let onRecordingSourceSelected: (RecordingCaptureSource) -> Void
     private let onOCRCompleted: (OCRDocument, SavedTrace) -> Void
     private let onOCRFailed: (Error, SavedTrace) -> Void
     private let captureService = ScreenCaptureService()
@@ -28,6 +31,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         model: AppModel,
         quickAccess: QuickAccessWindowController,
         onTraceChanged: @escaping () -> Void,
+        onRecordingSourceSelected: @escaping (RecordingCaptureSource) -> Void,
         onOCRCompleted: @escaping (OCRDocument, SavedTrace) -> Void,
         onOCRFailed: @escaping (Error, SavedTrace) -> Void
     ) {
@@ -35,6 +39,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         self.model = model
         self.quickAccess = quickAccess
         self.onTraceChanged = onTraceChanged
+        self.onRecordingSourceSelected = onRecordingSourceSelected
         self.onOCRCompleted = onOCRCompleted
         self.onOCRFailed = onOCRFailed
     }
@@ -50,12 +55,26 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private func beginRegionCapture(purpose: CapturePurpose) {
         guard canBeginCapture(), ensurePermission() else { return }
         pendingPurpose = purpose
-        showOverlays(mode: .region)
+        showOverlays(mode: .region(action: .screenshot))
     }
 
     func beginWindowCapture() {
+        beginWindowSelection(purpose: .screenshot)
+    }
+
+    func beginRegionRecordingSelection() {
         guard canBeginCapture(), ensurePermission() else { return }
-        pendingPurpose = .screenshot
+        pendingPurpose = .recordingRegion
+        showOverlays(mode: .region(action: .recording))
+    }
+
+    func beginWindowRecordingSelection() {
+        beginWindowSelection(purpose: .recordingWindow)
+    }
+
+    private func beginWindowSelection(purpose: CapturePurpose) {
+        guard canBeginCapture(), ensurePermission() else { return }
+        pendingPurpose = purpose
         isPreparingCapture = true
 
         Task { @MainActor [weak self] in
@@ -68,9 +87,13 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                 windowTargets = Dictionary(
                     uniqueKeysWithValues: targets.map { ($0.candidate.id, $0) }
                 )
-                showOverlays(mode: .window(candidates: targets.map(\.candidate)))
+                showOverlays(mode: .window(
+                    candidates: targets.map(\.candidate),
+                    action: purpose == .recordingWindow ? .recording : .screenshot
+                ))
             } catch {
                 windowTargets.removeAll()
+                pendingPurpose = .screenshot
                 showError(message: error.localizedDescription)
             }
         }
@@ -131,6 +154,21 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             displayBounds: displayBounds
         ).integral
         let purpose = pendingPurpose
+        if case .recordingRegion = purpose {
+            dismissOverlays()
+            windowTargets.removeAll()
+            pendingPurpose = .screenshot
+            guard let source = CaptureGeometry.regionRecordingSource(
+                displayID: displayID,
+                localRect: rect,
+                displayBounds: displayBounds
+            ) else {
+                showError(message: ScreenRecordingError.emptySelection.localizedDescription)
+                return
+            }
+            onRecordingSourceSelected(source)
+            return
+        }
         finishCapture(purpose: purpose) {
             try await self.captureService.capture(globalDisplayRect: globalRect)
         }
@@ -143,6 +181,15 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             showError(message: "所选窗口已经关闭，请重新选择。")
             return
         }
+        if case .recordingWindow = pendingPurpose {
+            dismissOverlays()
+            windowTargets.removeAll()
+            pendingPurpose = .screenshot
+            onRecordingSourceSelected(
+                CaptureGeometry.windowRecordingSource(target.candidate)
+            )
+            return
+        }
         finishCapture(purpose: .screenshot) {
             try await self.captureService.capture(window: target.window)
         }
@@ -152,6 +199,12 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         purpose: CapturePurpose,
         operation: @escaping @MainActor () async throws -> CGImage
     ) {
+        switch purpose {
+        case .screenshot, .ocr:
+            break
+        case .recordingRegion, .recordingWindow:
+            return
+        }
         guard !isFinishingCapture else { return }
         isFinishingCapture = true
         dismissOverlays()
@@ -174,6 +227,8 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                     quickAccess.show(trace: saved, image: image)
                 case .ocr:
                     await processOCR(cgImage: cgImage, saved: saved, thumbnail: image)
+                case .recordingRegion, .recordingWindow:
+                    break
                 }
             } catch {
                 showError(message: error.localizedDescription)

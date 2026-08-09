@@ -86,6 +86,15 @@ final class TraceLibraryViewTests: XCTestCase {
             state: state,
             durationSeconds: duration,
             dimensions: TraceDimensions(width: 960, height: 540),
+            captureSource: kind == .recording
+                ? TraceCaptureMetadata(
+                    mode: .window,
+                    windowID: 12,
+                    globalBounds: TraceRect(x: 80, y: 60, width: 960, height: 540),
+                    windowTitle: "产品演示",
+                    applicationName: "Safari"
+                )
+                : nil,
             assets: [TraceAsset(role: role, relativePath: assetURL.lastPathComponent)]
         )
         return TraceLibraryEntry(

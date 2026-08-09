@@ -11,6 +11,8 @@ final class TraceLibraryWindowController {
     var onAnnotateRequested: ((SavedTrace, NSImage) -> Void)?
     var onEditRecordingRequested: ((TraceLibraryEntry) -> Void)?
     var onTranscriptionRequested: ((TraceLibraryEntry) -> Void)?
+    var onOrganizationRequested: ((TraceLibraryEntry) -> Void)?
+    var onInsightsCustomizationRequested: ((TraceLibraryEntry, TraceInsightsCustomization?) -> Void)?
 
     init(store: TraceProjectStore) {
         self.store = store
@@ -46,6 +48,10 @@ final class TraceLibraryWindowController {
         model.setTranscribing(isTranscribing, id: traceID)
     }
 
+    func setOrganizing(_ isOrganizing: Bool, traceID: UUID) {
+        model.setOrganizing(isOrganizing, id: traceID)
+    }
+
     private func configureWindow() {
         window.title = "屏迹库"
         window.titleVisibility = .hidden
@@ -63,6 +69,10 @@ final class TraceLibraryWindowController {
             onCopy: { [weak self] in self?.copy($0) },
             onAnnotate: { [weak self] in self?.annotate($0) },
             onTranscribe: { [weak self] in self?.transcribe($0) },
+            onOrganize: { [weak self] in self?.organize($0) },
+            onSaveInsights: { [weak self] entry, customization in
+                self?.saveInsights(entry, customization: customization)
+            },
             onOpenFolder: { [weak self] in self?.openFolder() },
             onClose: { [weak self] in self?.hide() }
         )
@@ -112,6 +122,17 @@ final class TraceLibraryWindowController {
     private func transcribe(_ entry: TraceLibraryEntry) {
         guard entry.manifest.kind == .recording else { return }
         onTranscriptionRequested?(entry)
+    }
+
+    private func organize(_ entry: TraceLibraryEntry) {
+        onOrganizationRequested?(entry)
+    }
+
+    private func saveInsights(
+        _ entry: TraceLibraryEntry,
+        customization: TraceInsightsCustomization?
+    ) {
+        onInsightsCustomizationRequested?(entry, customization)
     }
 
     private func openFolder() {

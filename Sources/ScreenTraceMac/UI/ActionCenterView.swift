@@ -181,6 +181,10 @@ struct ActionCenterView: View {
             Toggle(isOn: $model.capturesCamera) {
                 Label("单独录制摄像头", systemImage: "video")
             }
+            Divider()
+            Toggle(isOn: $model.automaticallyTranscribesRecordings) {
+                Label("录完自动转写与整理", systemImage: "sparkles")
+            }
         } label: {
             actionTileLabel(.recording)
         }

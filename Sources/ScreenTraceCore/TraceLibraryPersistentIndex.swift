@@ -1,7 +1,7 @@
 import Foundation
 
 struct TraceLibraryPersistentIndex: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     var schemaVersion: Int
     var records: [TraceLibraryIndexRecord]
@@ -20,9 +20,11 @@ struct TraceLibraryIndexRecord: Codable, Equatable, Sendable {
     let manifestFingerprint: TraceLibraryFileFingerprint
     let ocrFingerprint: TraceLibraryFileFingerprint
     let transcriptFingerprint: TraceLibraryFileFingerprint
+    let insightsFingerprint: TraceLibraryFileFingerprint
     let manifest: TraceManifest
     let ocrText: String?
     let transcriptText: String?
+    let insights: TraceInsightsDocument?
 
     var cacheKey: String { packagePathComponents.joined(separator: "/") }
 }
@@ -53,16 +55,19 @@ struct TraceLibraryPersistentIndexStore: Sendable {
             let manifestURL = packageURL.appendingPathComponent("manifest.json")
             let ocrURL = packageURL.appendingPathComponent("analysis/ocr.json")
             let transcriptURL = packageURL.appendingPathComponent("analysis/transcript.json")
+            let insightsURL = packageURL.appendingPathComponent("analysis/insights.json")
             let manifestFingerprint = fingerprint(for: manifestURL)
             guard manifestFingerprint.exists else { continue }
             let ocrFingerprint = fingerprint(for: ocrURL)
             let transcriptFingerprint = fingerprint(for: transcriptURL)
+            let insightsFingerprint = fingerprint(for: insightsURL)
 
             let record: TraceLibraryIndexRecord
             if let cached = cachedRecords[key],
                cached.manifestFingerprint == manifestFingerprint,
                cached.ocrFingerprint == ocrFingerprint,
-               cached.transcriptFingerprint == transcriptFingerprint {
+               cached.transcriptFingerprint == transcriptFingerprint,
+               cached.insightsFingerprint == insightsFingerprint {
                 record = cached
             } else {
                 guard let rebuilt = rebuildRecord(
@@ -70,9 +75,11 @@ struct TraceLibraryPersistentIndexStore: Sendable {
                     manifestURL: manifestURL,
                     ocrURL: ocrURL,
                     transcriptURL: transcriptURL,
+                    insightsURL: insightsURL,
                     manifestFingerprint: manifestFingerprint,
                     ocrFingerprint: ocrFingerprint,
-                    transcriptFingerprint: transcriptFingerprint
+                    transcriptFingerprint: transcriptFingerprint,
+                    insightsFingerprint: insightsFingerprint
                 ) else { continue }
                 record = rebuilt
             }
@@ -95,9 +102,11 @@ struct TraceLibraryPersistentIndexStore: Sendable {
         manifestURL: URL,
         ocrURL: URL,
         transcriptURL: URL,
+        insightsURL: URL,
         manifestFingerprint: TraceLibraryFileFingerprint,
         ocrFingerprint: TraceLibraryFileFingerprint,
-        transcriptFingerprint: TraceLibraryFileFingerprint
+        transcriptFingerprint: TraceLibraryFileFingerprint,
+        insightsFingerprint: TraceLibraryFileFingerprint
     ) -> TraceLibraryIndexRecord? {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
@@ -121,14 +130,23 @@ struct TraceLibraryPersistentIndexStore: Sendable {
         } else {
             transcriptText = nil
         }
+        let insights: TraceInsightsDocument?
+        if insightsFingerprint.exists,
+           let data = try? Data(contentsOf: insightsURL) {
+            insights = try? decoder.decode(TraceInsightsDocument.self, from: data)
+        } else {
+            insights = nil
+        }
         return TraceLibraryIndexRecord(
             packagePathComponents: packagePathComponents,
             manifestFingerprint: manifestFingerprint,
             ocrFingerprint: ocrFingerprint,
             transcriptFingerprint: transcriptFingerprint,
+            insightsFingerprint: insightsFingerprint,
             manifest: manifest,
             ocrText: ocrText,
-            transcriptText: transcriptText
+            transcriptText: transcriptText,
+            insights: insights
         )
     }
 
@@ -163,7 +181,8 @@ struct TraceLibraryPersistentIndexStore: Sendable {
             primaryAssetURL: primaryURL,
             displayAssetURL: displayURL,
             ocrText: record.ocrText,
-            transcriptText: record.transcriptText
+            transcriptText: record.transcriptText,
+            insights: record.insights
         )
     }
 

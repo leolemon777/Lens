@@ -13,14 +13,17 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertTrue(initial.capturesSystemAudio)
         XCTAssertFalse(initial.capturesMicrophone)
         XCTAssertFalse(initial.capturesCamera)
+        XCTAssertTrue(initial.automaticallyTranscribesRecordings)
 
         initial.capturesSystemAudio = false
         initial.capturesMicrophone = true
         initial.capturesCamera = true
+        initial.automaticallyTranscribesRecordings = false
         let restored = AppModel(defaults: defaults)
 
         XCTAssertFalse(restored.capturesSystemAudio)
         XCTAssertTrue(restored.capturesMicrophone)
         XCTAssertTrue(restored.capturesCamera)
+        XCTAssertFalse(restored.automaticallyTranscribesRecordings)
     }
 }

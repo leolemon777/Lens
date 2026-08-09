@@ -106,6 +106,7 @@ final class ScreenRecordingService: NSObject {
                 actualCaptureBounds: prepared.captureBounds,
                 actualSourceRect: prepared.sourceRect
             ),
+            includesSystemAudio: options.capturesSystemAudio,
             includesMicrophone: options.capturesMicrophone,
             includesCamera: options.capturesCamera
         )

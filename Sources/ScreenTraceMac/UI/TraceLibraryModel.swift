@@ -10,6 +10,7 @@ final class TraceLibraryModel: ObservableObject {
     @Published var filter: TraceLibraryFilter = .all
     @Published private(set) var isLoading = false
     @Published private(set) var transcribingIDs: Set<UUID> = []
+    @Published private(set) var organizingIDs: Set<UUID> = []
 
     private var reloadTask: Task<Void, Never>?
 
@@ -43,6 +44,18 @@ final class TraceLibraryModel: ObservableObject {
             transcribingIDs.insert(id)
         } else {
             transcribingIDs.remove(id)
+        }
+    }
+
+    func isOrganizing(_ id: UUID) -> Bool {
+        organizingIDs.contains(id)
+    }
+
+    func setOrganizing(_ isOrganizing: Bool, id: UUID) {
+        if isOrganizing {
+            organizingIDs.insert(id)
+        } else {
+            organizingIDs.remove(id)
         }
     }
 

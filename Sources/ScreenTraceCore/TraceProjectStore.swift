@@ -245,6 +245,42 @@ public struct TraceProjectStore: Sendable {
         return try decoder.decode(TranscriptDocument.self, from: data)
     }
 
+    public func attachInsights(
+        _ document: TraceInsightsDocument,
+        to savedTrace: SavedTrace
+    ) throws -> SavedTrace {
+        var manifest = try loadManifest(from: savedTrace.packageURL)
+        manifest.schemaVersion = TraceManifest.currentSchemaVersion
+        let relativePath = "analysis/insights.json"
+        let outputURL = savedTrace.packageURL.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(document).write(to: outputURL, options: .atomic)
+        if !manifest.assets.contains(where: { $0.role == .insights }) {
+            manifest.assets.append(TraceAsset(role: .insights, relativePath: relativePath))
+        }
+        try writeManifest(manifest, to: savedTrace.packageURL)
+        return SavedTrace(
+            packageURL: savedTrace.packageURL,
+            rawAssetURL: savedTrace.rawAssetURL,
+            manifest: manifest
+        )
+    }
+
+    public func loadInsights(from packageURL: URL) throws -> TraceInsightsDocument {
+        let data = try Data(
+            contentsOf: packageURL.appendingPathComponent("analysis/insights.json")
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(TraceInsightsDocument.self, from: data)
+    }
+
     public func writeScreenshotEditPlan(
         _ plan: ScreenshotEditPlan,
         to savedTrace: SavedTrace
@@ -463,6 +499,7 @@ public struct TraceProjectStore: Sendable {
         width: Int,
         height: Int,
         captureSource: TraceCaptureMetadata? = nil,
+        includesSystemAudio: Bool = true,
         includesMicrophone: Bool = false,
         includesCamera: Bool = false,
         createdAt: Date = Date(),
@@ -531,6 +568,11 @@ public struct TraceProjectStore: Sendable {
                 TraceAsset(role: .recordingSegments, relativePath: "events/segments.json"),
                 TraceAsset(role: .editPlan, relativePath: "edits/edit-plan.json")
             ]
+            if includesSystemAudio {
+                assets.append(
+                    TraceAsset(role: .systemAudio, relativePath: "raw/screen.mp4")
+                )
+            }
             if includesMicrophone {
                 assets.append(
                     TraceAsset(role: .microphone, relativePath: "raw/microphone.caf")

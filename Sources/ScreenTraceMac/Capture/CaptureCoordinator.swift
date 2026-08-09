@@ -12,12 +12,18 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         case recordingWindow
     }
 
+    private enum OCRDelivery {
+        case interactive
+        case automatic
+    }
+
     private let store: TraceProjectStore
     private let model: AppModel
     private let quickAccess: QuickAccessWindowController
     private let onTraceChanged: () -> Void
     private let onRecordingSourceSelected: (RecordingCaptureSource) -> Void
     private let onOCRCompleted: (OCRDocument, SavedTrace) -> Void
+    private let onAutomaticOCRCompleted: (OCRDocument, SavedTrace) -> Void
     private let onOCRFailed: (Error, SavedTrace) -> Void
     private let onScrollingCaptureCompleted: (Int, Int, Error?) -> Void
     private let onScrollingCaptureFailed: (Error) -> Void
@@ -37,6 +43,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         onTraceChanged: @escaping () -> Void,
         onRecordingSourceSelected: @escaping (RecordingCaptureSource) -> Void,
         onOCRCompleted: @escaping (OCRDocument, SavedTrace) -> Void,
+        onAutomaticOCRCompleted: @escaping (OCRDocument, SavedTrace) -> Void,
         onOCRFailed: @escaping (Error, SavedTrace) -> Void,
         onScrollingCaptureCompleted: @escaping (Int, Int, Error?) -> Void,
         onScrollingCaptureFailed: @escaping (Error) -> Void
@@ -47,6 +54,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         self.onTraceChanged = onTraceChanged
         self.onRecordingSourceSelected = onRecordingSourceSelected
         self.onOCRCompleted = onOCRCompleted
+        self.onAutomaticOCRCompleted = onAutomaticOCRCompleted
         self.onOCRFailed = onOCRFailed
         self.onScrollingCaptureCompleted = onScrollingCaptureCompleted
         self.onScrollingCaptureFailed = onScrollingCaptureFailed
@@ -256,8 +264,18 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                 case .screenshot:
                     copyImageToClipboard(image)
                     quickAccess.show(trace: saved, image: image)
+                    scheduleAutomaticOCR(
+                        cgImage: cgImage,
+                        saved: saved,
+                        thumbnail: image
+                    )
                 case .ocr:
-                    await processOCR(cgImage: cgImage, saved: saved, thumbnail: image)
+                    await processOCR(
+                        cgImage: cgImage,
+                        saved: saved,
+                        thumbnail: image,
+                        delivery: .interactive
+                    )
                 case .scrollingCapture, .recordingRegion, .recordingWindow:
                     break
                 }
@@ -332,6 +350,11 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             onTraceChanged()
             copyImageToClipboard(image)
             quickAccess.show(trace: completed, image: image)
+            scheduleAutomaticOCR(
+                cgImage: assembly.image,
+                saved: completed,
+                thumbnail: image
+            )
             onScrollingCaptureCompleted(
                 assembly.frames.count,
                 assembly.image.height,
@@ -360,7 +383,8 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private func processOCR(
         cgImage: CGImage,
         saved: SavedTrace,
-        thumbnail: NSImage
+        thumbnail: NSImage,
+        delivery: OCRDelivery
     ) async {
         do {
             let document = try await ocrService.recognizeText(in: cgImage)
@@ -368,13 +392,35 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             model.setRecentTrace(updated, thumbnail: thumbnail)
             onTraceChanged()
             let text = document.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !text.isEmpty {
+            if delivery == .interactive, !text.isEmpty {
                 copyTextToClipboard(text)
             }
-            onOCRCompleted(document, updated)
+            switch delivery {
+            case .interactive:
+                onOCRCompleted(document, updated)
+            case .automatic:
+                onAutomaticOCRCompleted(document, updated)
+            }
         } catch {
             // OCR is analysis: its failure must never discard the screenshot captured above.
-            onOCRFailed(error, saved)
+            if delivery == .interactive {
+                onOCRFailed(error, saved)
+            }
+        }
+    }
+
+    private func scheduleAutomaticOCR(
+        cgImage: CGImage,
+        saved: SavedTrace,
+        thumbnail: NSImage
+    ) {
+        Task { @MainActor [weak self] in
+            await self?.processOCR(
+                cgImage: cgImage,
+                saved: saved,
+                thumbnail: thumbnail,
+                delivery: .automatic
+            )
         }
     }
 

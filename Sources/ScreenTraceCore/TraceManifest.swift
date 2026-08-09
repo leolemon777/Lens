@@ -37,6 +37,7 @@ public struct TraceAsset: Codable, Equatable, Sendable {
         case scrollingCapturePlan
         case ocr
         case transcript
+        case insights
     }
 
     public let role: Role
@@ -103,7 +104,7 @@ public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
 }
 
 public struct TraceManifest: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.5"
+    public static let currentSchemaVersion = "0.6"
 
     public var schemaVersion: String
     public let id: UUID

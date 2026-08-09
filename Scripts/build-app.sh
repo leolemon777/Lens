@@ -33,7 +33,7 @@ PLIST_PATH="$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :NSMicrophoneUsageDescription string 屏迹仅在你主动录屏时使用麦克风。" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string 屏迹仅在你主动开启摄像头录制时使用摄像头。" "$PLIST_PATH"
-/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 屏迹仅在你主动生成转写或字幕时使用本机语音识别。" "$PLIST_PATH"
+/usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 屏迹在你开启本地自动整理或主动生成字幕时使用设备端语音识别。" "$PLIST_PATH"
 
 codesign --force --deep --sign - "$APP_DIR"
 echo "$APP_DIR"

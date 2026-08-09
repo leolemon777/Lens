@@ -9,6 +9,8 @@ struct TraceLibraryView: View {
     let onCopy: (TraceLibraryEntry) -> Void
     let onAnnotate: (TraceLibraryEntry) -> Void
     let onTranscribe: (TraceLibraryEntry) -> Void
+    let onOrganize: (TraceLibraryEntry) -> Void
+    let onSaveInsights: (TraceLibraryEntry, TraceInsightsCustomization?) -> Void
     let onOpenFolder: () -> Void
     let onClose: () -> Void
 
@@ -49,7 +51,7 @@ struct TraceLibraryView: View {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("搜索标题、OCR 或转写", text: $model.query)
+                TextField("搜索标题、标签、OCR 或转写", text: $model.query)
                     .textFieldStyle(.plain)
                     .frame(width: 220)
                 if !model.query.isEmpty {
@@ -142,7 +144,10 @@ struct TraceLibraryView: View {
                             onCopy: { onCopy(entry) },
                             onAnnotate: { onAnnotate(entry) },
                             onTranscribe: { onTranscribe(entry) },
-                            isTranscribing: model.isTranscribing(entry.id)
+                            onOrganize: { onOrganize(entry) },
+                            onSaveInsights: { onSaveInsights(entry, $0) },
+                            isTranscribing: model.isTranscribing(entry.id),
+                            isOrganizing: model.isOrganizing(entry.id)
                         )
                     }
                 }
@@ -174,7 +179,12 @@ private struct TraceLibraryCard: View {
     let onCopy: () -> Void
     let onAnnotate: () -> Void
     let onTranscribe: () -> Void
+    let onOrganize: () -> Void
+    let onSaveInsights: (TraceInsightsCustomization?) -> Void
     let isTranscribing: Bool
+    let isOrganizing: Bool
+
+    @State private var showsInsights = false
 
     private var thumbnail: NSImage? {
         guard entry.manifest.kind == .screenshot else { return nil }
@@ -190,7 +200,7 @@ private struct TraceLibraryCard: View {
                 HStack(spacing: 6) {
                     Image(systemName: entry.manifest.kind == .screenshot ? "photo" : "video.fill")
                         .foregroundStyle(entry.manifest.kind == .screenshot ? .cyan : .red)
-                    Text(entry.manifest.title)
+                    Text(displayTitle)
                         .font(.system(size: 11.5, weight: .semibold))
                         .lineLimit(1)
                     Spacer(minLength: 0)
@@ -204,6 +214,13 @@ private struct TraceLibraryCard: View {
                     if entry.transcriptText?.isEmpty == false {
                         Label("转写", systemImage: "captions.bubble.fill")
                     }
+                    if entry.insights != nil {
+                        Label("已整理", systemImage: "sparkles")
+                    }
+                    if let count = entry.insights?.sensitiveFindings.count, count > 0 {
+                        Label("\(count) 项敏感", systemImage: "exclamationmark.shield.fill")
+                            .foregroundStyle(.orange)
+                    }
                     if let capture = entry.manifest.captureSource {
                         Label(capture.mode.libraryTitle, systemImage: capture.mode.librarySymbol)
                     }
@@ -213,6 +230,25 @@ private struct TraceLibraryCard: View {
                 }
                 .font(.system(size: 9.5, weight: .medium))
                 .foregroundStyle(.secondary)
+
+                if let summary = entry.insights?.resolvedSummary, !summary.isEmpty {
+                    Text(summary)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+                if let tags = entry.insights?.resolvedTags, !tags.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(Array(tags.prefix(3)), id: \.self) { tag in
+                            Text("#\(tag)")
+                                .font(.system(size: 8.5, weight: .semibold))
+                                .foregroundStyle(.cyan)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(.cyan.opacity(0.09), in: Capsule())
+                        }
+                    }
+                }
 
                 HStack(spacing: 7) {
                     cardButton(
@@ -245,6 +281,7 @@ private struct TraceLibraryCard: View {
                         .disabled(isTranscribing)
                     }
                     Spacer(minLength: 0)
+                    organizationButton
                     Button(action: onReveal) {
                         Image(systemName: "folder")
                     }
@@ -263,6 +300,43 @@ private struct TraceLibraryCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture(count: 2, perform: onOpen)
+        .popover(isPresented: $showsInsights, arrowEdge: .trailing) {
+            if let insights = entry.insights {
+                TraceInsightsPopover(
+                    insights: insights,
+                    isOrganizing: isOrganizing,
+                    onRegenerate: onOrganize,
+                    onSaveCustomization: onSaveInsights
+                )
+            }
+        }
+    }
+
+    private var displayTitle: String {
+        let suggested = entry.insights?.resolvedTitle
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return suggested.isEmpty ? entry.manifest.title : suggested
+    }
+
+    private var organizationButton: some View {
+        Button {
+            if entry.insights == nil {
+                onOrganize()
+            } else {
+                showsInsights.toggle()
+            }
+        } label: {
+            if isOrganizing {
+                ProgressView()
+                    .controlSize(.mini)
+            } else {
+                Image(systemName: entry.insights == nil ? "sparkles" : "sparkles.rectangle.stack.fill")
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(entry.insights == nil ? Color.secondary : Color.cyan)
+        .disabled(isOrganizing)
+        .help(entry.insights == nil ? "本地智能整理" : "查看整理结果")
     }
 
     @ViewBuilder
@@ -327,6 +401,315 @@ private struct TraceLibraryCard: View {
     private func durationText(_ duration: Double) -> String {
         let total = max(Int(duration.rounded()), 0)
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+struct TraceInsightsPopover: View {
+    let insights: TraceInsightsDocument
+    let isOrganizing: Bool
+    let onRegenerate: () -> Void
+    let onSaveCustomization: (TraceInsightsCustomization?) -> Void
+
+    @State private var isEditing = false
+    @State private var titleDraft: String
+    @State private var summaryDraft: String
+    @State private var tagsDraft: String
+
+    init(
+        insights: TraceInsightsDocument,
+        isOrganizing: Bool,
+        onRegenerate: @escaping () -> Void,
+        onSaveCustomization: @escaping (TraceInsightsCustomization?) -> Void
+    ) {
+        self.insights = insights
+        self.isOrganizing = isOrganizing
+        self.onRegenerate = onRegenerate
+        self.onSaveCustomization = onSaveCustomization
+        _titleDraft = State(initialValue: insights.resolvedTitle)
+        _summaryDraft = State(initialValue: insights.resolvedSummary)
+        _tagsDraft = State(initialValue: insights.resolvedTags.joined(separator: "、"))
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 9) {
+                    Image(systemName: "sparkles.rectangle.stack.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.cyan)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("本地智能整理")
+                            .font(.system(size: 13, weight: .semibold))
+                        Label("只读取当前项目 · 未上传", systemImage: "lock.shield.fill")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        if insights.customization != nil {
+                            Label("含人工校正", systemImage: "person.crop.circle.badge.checkmark")
+                                .font(.system(size: 8.5, weight: .semibold))
+                                .foregroundStyle(.cyan)
+                        }
+                    }
+                    Spacer()
+                    if isOrganizing { ProgressView().controlSize(.small) }
+                }
+
+                if isEditing {
+                    customizationEditor
+                }
+
+                if !insights.resolvedTitle.isEmpty {
+                    insightSection("标题建议", symbol: "text.quote") {
+                        Text(insights.resolvedTitle)
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                }
+                if !insights.resolvedSummary.isEmpty {
+                    insightSection("摘要", symbol: "text.alignleft") {
+                        Text(insights.resolvedSummary)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .textSelection(.enabled)
+                    }
+                }
+                if !insights.resolvedTags.isEmpty {
+                    insightSection("标签", symbol: "tag.fill") {
+                        FlowTags(tags: insights.resolvedTags)
+                    }
+                }
+                if !insights.keyPoints.isEmpty {
+                    insightSection("要点", symbol: "checklist") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(insights.keyPoints.enumerated()), id: \.offset) { _, point in
+                                Label(point, systemImage: "circle.fill")
+                                    .labelStyle(InsightBulletLabelStyle())
+                            }
+                        }
+                        .font(.system(size: 10, weight: .medium))
+                    }
+                }
+                if !insights.chapters.isEmpty {
+                    insightSection("章节", symbol: "list.number") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(insights.chapters, id: \.index) { chapter in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack {
+                                        Text(chapter.title)
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Text("\(time(chapter.startSeconds))–\(time(chapter.endSeconds))")
+                                            .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Text(chapter.summary)
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                        }
+                    }
+                }
+                if !insights.sensitiveFindings.isEmpty {
+                    insightSection("敏感信息提示", symbol: "exclamationmark.shield.fill") {
+                        VStack(alignment: .leading, spacing: 7) {
+                            ForEach(
+                                Array(insights.sensitiveFindings.enumerated()),
+                                id: \.offset
+                            ) { _, finding in
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Text(finding.kind.presentationTitle)
+                                        .font(.system(size: 9, weight: .semibold))
+                                    Text(finding.redactedPreview)
+                                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                        .textSelection(.enabled)
+                                    Spacer()
+                                    Text(finding.locationTitle)
+                                        .font(.system(size: 8, weight: .semibold))
+                                        .foregroundStyle(.secondary)
+                                    if finding.occurrenceCount > 1 {
+                                        Text("×\(finding.occurrenceCount)")
+                                            .font(.system(size: 8.5, weight: .bold))
+                                    }
+                                }
+                            }
+                        }
+                        .foregroundStyle(.orange)
+                    }
+                }
+
+                if isEditing {
+                    HStack {
+                        Button("取消") {
+                            resetDrafts()
+                            isEditing = false
+                        }
+                        Spacer()
+                        Button("保存校正") {
+                            onSaveCustomization(TraceInsightsCustomization(
+                                title: titleDraft,
+                                summary: summaryDraft,
+                                tags: parsedTags
+                            ))
+                            isEditing = false
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        Button {
+                            isEditing = true
+                        } label: {
+                            Label("校正", systemImage: "pencil")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isOrganizing)
+                        if insights.customization != nil {
+                            Button {
+                                onSaveCustomization(nil)
+                                resetDraftsToGeneratedValues()
+                            } label: {
+                                Label("恢复自动", systemImage: "arrow.uturn.backward")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(isOrganizing)
+                        }
+                        Button(action: onRegenerate) {
+                            Label("重新整理", systemImage: "arrow.clockwise")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isOrganizing)
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .frame(width: 380, height: 520)
+        .background(.ultraThinMaterial)
+        .onChange(of: insights) { _, updated in
+            guard !isEditing else { return }
+            titleDraft = updated.resolvedTitle
+            summaryDraft = updated.resolvedSummary
+            tagsDraft = updated.resolvedTags.joined(separator: "、")
+        }
+    }
+
+    private var customizationEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("人工校正", systemImage: "pencil.and.list.clipboard")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            TextField("标题", text: $titleDraft)
+                .textFieldStyle(.roundedBorder)
+            TextEditor(text: $summaryDraft)
+                .font(.system(size: 10.5, weight: .medium))
+                .frame(minHeight: 70)
+                .padding(5)
+                .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+            TextField("标签，用逗号或顿号分隔", text: $tagsDraft)
+                .textFieldStyle(.roundedBorder)
+            Text("只改整理层；OCR、转写和原始媒体不会改变。")
+                .font(.system(size: 8.5, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .background(.cyan.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var parsedTags: [String] {
+        tagsDraft.components(
+            separatedBy: CharacterSet(charactersIn: ",，、;；\n")
+        )
+    }
+
+    private func resetDrafts() {
+        titleDraft = insights.resolvedTitle
+        summaryDraft = insights.resolvedSummary
+        tagsDraft = insights.resolvedTags.joined(separator: "、")
+    }
+
+    private func resetDraftsToGeneratedValues() {
+        titleDraft = insights.suggestedTitle
+        summaryDraft = insights.summary
+        tagsDraft = insights.tags.joined(separator: "、")
+    }
+
+    private func insightSection<Content: View>(
+        _ title: String,
+        symbol: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            content()
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func time(_ seconds: Double) -> String {
+        let value = max(Int(seconds.rounded(.down)), 0)
+        return String(format: "%d:%02d", value / 60, value % 60)
+    }
+}
+
+private struct FlowTags: View {
+    let tags: [String]
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 68, maximum: 150), spacing: 5)
+    ]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 5) {
+            ForEach(tags, id: \.self) { tag in
+                Text("#\(tag)")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.cyan)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(.cyan.opacity(0.10), in: Capsule())
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
+private struct InsightBulletLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            configuration.icon
+                .font(.system(size: 4))
+                .foregroundStyle(.cyan)
+            configuration.title
+        }
+    }
+}
+
+private extension TraceSensitiveDataKind {
+    var presentationTitle: String {
+        switch self {
+        case .emailAddress: "邮箱"
+        case .phoneNumber: "电话"
+        case .paymentCard: "卡号"
+        case .governmentIdentifier: "证件号"
+        case .credential: "凭据"
+        }
+    }
+}
+
+private extension TraceSensitiveFinding {
+    var locationTitle: String {
+        let sourceTitle = switch source {
+        case .metadata: "元数据"
+        case .ocr: "OCR"
+        case .transcript: "转写"
+        }
+        guard let startSeconds else { return sourceTitle }
+        let value = max(Int(startSeconds.rounded(.down)), 0)
+        return String(format: "%@ %d:%02d", sourceTitle, value / 60, value % 60)
     }
 }
 

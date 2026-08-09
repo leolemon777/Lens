@@ -213,6 +213,16 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(manifest.captureSource?.windowTitle, "设计稿")
         XCTAssertEqual(manifest.captureSource?.applicationName, "Sketch")
         XCTAssertTrue(manifest.title.hasPrefix("Sketch 窗口录屏"))
+        XCTAssertTrue(manifest.assets.contains {
+            $0.role == .systemAudio && $0.relativePath == "raw/screen.mp4"
+        })
+
+        let silentSession = try store.beginRecording(
+            width: 640,
+            height: 360,
+            includesSystemAudio: false
+        )
+        XCTAssertFalse(silentSession.manifest.assets.contains { $0.role == .systemAudio })
     }
 
     func testRecordingCanReserveAndRemovePhysicalMicrophoneAsset() throws {

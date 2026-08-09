@@ -17,6 +17,7 @@ final class AppModel: ObservableObject {
         static let capturesSystemAudio = "recording.capturesSystemAudio"
         static let capturesMicrophone = "recording.capturesMicrophone"
         static let capturesCamera = "recording.capturesCamera"
+        static let automaticallyTranscribesRecordings = "analysis.automaticallyTranscribesRecordings"
     }
 
     private let defaults: UserDefaults
@@ -30,12 +31,23 @@ final class AppModel: ObservableObject {
     @Published var capturesCamera: Bool {
         didSet { defaults.set(capturesCamera, forKey: PreferenceKey.capturesCamera) }
     }
+    @Published var automaticallyTranscribesRecordings: Bool {
+        didSet {
+            defaults.set(
+                automaticallyTranscribesRecordings,
+                forKey: PreferenceKey.automaticallyTranscribesRecordings
+            )
+        }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         capturesSystemAudio = defaults.object(forKey: PreferenceKey.capturesSystemAudio) as? Bool ?? true
         capturesMicrophone = defaults.object(forKey: PreferenceKey.capturesMicrophone) as? Bool ?? false
         capturesCamera = defaults.object(forKey: PreferenceKey.capturesCamera) as? Bool ?? false
+        automaticallyTranscribesRecordings = defaults.object(
+            forKey: PreferenceKey.automaticallyTranscribesRecordings
+        ) as? Bool ?? true
     }
 
     func setRecentTrace(_ savedTrace: SavedTrace, thumbnail: NSImage) {

@@ -9,6 +9,7 @@ public struct TraceLibraryEntry: Identifiable, Equatable, Sendable {
     public let displayAssetURL: URL
     public let ocrText: String?
     public let transcriptText: String?
+    public let insights: TraceInsightsDocument?
 
     public init(
         packageURL: URL,
@@ -16,7 +17,8 @@ public struct TraceLibraryEntry: Identifiable, Equatable, Sendable {
         primaryAssetURL: URL,
         displayAssetURL: URL,
         ocrText: String?,
-        transcriptText: String? = nil
+        transcriptText: String? = nil,
+        insights: TraceInsightsDocument? = nil
     ) {
         self.packageURL = packageURL
         self.manifest = manifest
@@ -24,10 +26,28 @@ public struct TraceLibraryEntry: Identifiable, Equatable, Sendable {
         self.displayAssetURL = displayAssetURL
         self.ocrText = ocrText
         self.transcriptText = transcriptText
+        self.insights = insights
     }
 
     public var searchableText: String {
-        [manifest.title, ocrText ?? "", transcriptText ?? ""]
+        var values: [String] = [
+            manifest.title,
+            ocrText ?? "",
+            transcriptText ?? ""
+        ]
+        if let insights {
+            values.append(contentsOf: [
+                insights.suggestedTitle,
+                insights.summary,
+                insights.tags.joined(separator: " "),
+                insights.resolvedTitle,
+                insights.resolvedSummary,
+                insights.resolvedTags.joined(separator: " "),
+                insights.keyPoints.joined(separator: " "),
+                insights.chapters.map(\.title).joined(separator: " ")
+            ])
+        }
+        return values
             .joined(separator: "\n")
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }

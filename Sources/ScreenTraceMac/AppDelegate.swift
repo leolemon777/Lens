@@ -33,6 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onOCRCompleted: { [weak self] document, trace in
             self?.handleOCRCompleted(document, trace: trace)
         },
+        onAutomaticOCRCompleted: { [weak self] document, trace in
+            self?.beginOrganization(trace: trace, ocr: document)
+        },
         onOCRFailed: { [weak self] error, trace in
             self?.handleOCRFailed(error, trace: trace)
         },
@@ -61,6 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyManager: GlobalHotKeyManager?
     private var processingRecordingPackages: Set<URL> = []
     private var transcribingRecordingPackages: Set<URL> = []
+    private var organizingTracePackages: Set<URL> = []
+    private var pendingAutomaticTranscriptions: [TraceLibraryEntry] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ProcessInfo.processInfo.disableSuddenTermination()
@@ -116,6 +121,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         traceLibrary.onTranscriptionRequested = { [weak self] entry in
             self?.beginTranscription(for: entry)
+        }
+        traceLibrary.onOrganizationRequested = { [weak self] entry in
+            self?.beginOrganization(for: entry)
+        }
+        traceLibrary.onInsightsCustomizationRequested = { [weak self] entry, customization in
+            self?.saveInsightsCustomization(for: entry, customization: customization)
         }
         videoEditor.onSaved = { [weak self] saved in
             guard let self else { return }
@@ -333,6 +344,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleOCRCompleted(_ document: OCRDocument, trace: SavedTrace) {
+        beginOrganization(trace: trace, ocr: document, announcesResult: false)
         let text = document.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             toast.show(
@@ -360,14 +372,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
-    private func beginTranscription(for entry: TraceLibraryEntry) {
+    private func beginTranscription(
+        for entry: TraceLibraryEntry,
+        automatic: Bool = false
+    ) {
         let packageKey = entry.packageURL.standardizedFileURL
+        guard !transcribingRecordingPackages.contains(packageKey),
+              !pendingAutomaticTranscriptions.contains(where: { $0.id == entry.id }) else {
+            if !automatic {
+                toast.show(
+                    title: "这条录屏已经在转写队列中",
+                    detail: "完成后会自动生成字幕与整理结果",
+                    symbol: "waveform.badge.magnifyingglass"
+                )
+            }
+            return
+        }
         guard transcribingRecordingPackages.isEmpty else {
-            toast.show(
-                title: "另一条本机转写仍在进行",
-                detail: "完成后即可继续；结果会自动进入屏迹索引",
-                symbol: "waveform.badge.magnifyingglass"
-            )
+            if automatic {
+                pendingAutomaticTranscriptions.append(entry)
+            } else {
+                toast.show(
+                    title: "另一条本机转写仍在进行",
+                    detail: "完成后即可继续；结果会自动进入屏迹索引",
+                    symbol: "waveform.badge.magnifyingglass"
+                )
+            }
             return
         }
         transcribingRecordingPackages.insert(packageKey)
@@ -377,6 +407,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             defer {
                 transcribingRecordingPackages.remove(packageKey)
                 traceLibrary.setTranscribing(false, traceID: entry.id)
+                if !pendingAutomaticTranscriptions.isEmpty {
+                    let next = pendingAutomaticTranscriptions.removeFirst()
+                    beginTranscription(for: next, automatic: true)
+                }
             }
             do {
                 var status = LocalSpeechTranscriptionService.authorizationStatus
@@ -433,9 +467,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             to: entry.packageURL
                         )
                     }
+                    beginOrganization(trace: updatedTrace, transcript: document)
                     if plan.captions?.isEnabled == true {
                         await processRecording(updatedTrace)
                     }
+                } else {
+                    beginOrganization(trace: updatedTrace, transcript: document)
                 }
             } catch is CancellationError {
                 toast.show(
@@ -453,6 +490,119 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func beginOrganization(for entry: TraceLibraryEntry) {
+        beginOrganization(trace: SavedTrace(
+            packageURL: entry.packageURL,
+            rawAssetURL: entry.primaryAssetURL,
+            manifest: entry.manifest
+        ), announcesResult: true)
+    }
+
+    private func beginOrganization(
+        trace: SavedTrace,
+        ocr suppliedOCR: OCRDocument? = nil,
+        transcript suppliedTranscript: TranscriptDocument? = nil,
+        announcesResult: Bool = false
+    ) {
+        let packageKey = trace.packageURL.standardizedFileURL
+        guard organizingTracePackages.insert(packageKey).inserted else {
+            if announcesResult {
+                toast.show(
+                    title: "这条屏迹正在整理",
+                    detail: "完成后会自动更新标题、摘要、标签和章节",
+                    symbol: "sparkles"
+                )
+            }
+            return
+        }
+        traceLibrary.setOrganizing(true, traceID: trace.manifest.id)
+        let store = store
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                organizingTracePackages.remove(packageKey)
+                traceLibrary.setOrganizing(false, traceID: trace.manifest.id)
+            }
+            do {
+                let insights = try await Task.detached(priority: .userInitiated) {
+                    let manifest = try store.loadManifest(from: trace.packageURL)
+                    let ocr = suppliedOCR ?? (try? store.loadOCR(from: trace.packageURL))
+                    let transcript = suppliedTranscript
+                        ?? (try? store.loadTranscript(from: trace.packageURL))
+                    let previous = try? store.loadInsights(from: trace.packageURL)
+                    return LocalTraceOrganizer.organize(
+                        manifest: manifest,
+                        ocr: ocr,
+                        transcript: transcript
+                    ).replacingCustomization(previous?.customization)
+                }.value
+                _ = try store.attachInsights(insights, to: trace)
+                traceLibrary.reloadIfVisible()
+
+                var details: [String] = []
+                if !insights.tags.isEmpty {
+                    details.append(insights.tags.prefix(3).joined(separator: "、"))
+                }
+                if !insights.chapters.isEmpty {
+                    details.append("\(insights.chapters.count) 个章节")
+                }
+                if !insights.sensitiveFindings.isEmpty {
+                    details.append("\(insights.sensitiveFindings.count) 项敏感信息提示")
+                }
+                if announcesResult {
+                    toast.show(
+                        title: "本地整理已完成",
+                        detail: details.isEmpty
+                            ? "标题与内容索引已更新"
+                            : details.joined(separator: " · "),
+                        symbol: "sparkles.rectangle.stack.fill"
+                    )
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                if announcesResult {
+                    toast.show(
+                        title: "原始内容仍然安全",
+                        detail: "本地整理未完成：\(error.localizedDescription)",
+                        symbol: "exclamationmark.arrow.triangle.2.circlepath"
+                    )
+                }
+            }
+        }
+    }
+
+    private func saveInsightsCustomization(
+        for entry: TraceLibraryEntry,
+        customization: TraceInsightsCustomization?
+    ) {
+        do {
+            let current = try store.loadInsights(from: entry.packageURL)
+            let updated = current.replacingCustomization(customization)
+            let saved = SavedTrace(
+                packageURL: entry.packageURL,
+                rawAssetURL: entry.primaryAssetURL,
+                manifest: entry.manifest
+            )
+            _ = try store.attachInsights(updated, to: saved)
+            traceLibrary.reloadIfVisible()
+            toast.show(
+                title: customization == nil ? "已恢复自动整理" : "人工校正已保存",
+                detail: "OCR、转写和原始媒体均未改变",
+                symbol: customization == nil
+                    ? "arrow.uturn.backward.circle.fill"
+                    : "checkmark.circle.fill"
+            )
+        } catch {
+            toast.show(
+                title: "校正尚未保存",
+                detail: error.localizedDescription,
+                symbol: "exclamationmark.arrow.triangle.2.circlepath"
+            )
+        }
+    }
+
     private func transcriptionSource(
         for entry: TraceLibraryEntry
     ) throws -> (url: URL, role: TraceAsset.Role) {
@@ -466,6 +616,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             throw LocalSpeechTranscriptionError.missingSource
         }
         return (entry.primaryAssetURL, .screenVideo)
+    }
+
+    private func beginAutomaticTranscription(for trace: SavedTrace) {
+        guard let entry = libraryEntry(for: trace) else { return }
+        beginTranscription(for: entry, automatic: true)
+    }
+
+    private func libraryEntry(for trace: SavedTrace) -> TraceLibraryEntry? {
+        guard let manifest = try? store.loadManifest(from: trace.packageURL),
+              let primaryAsset = manifest.assets.first(where: { $0.role == .screenVideo }) else {
+            return nil
+        }
+        let primaryURL = trace.packageURL.appendingPathComponent(primaryAsset.relativePath)
+        guard FileManager.default.fileExists(atPath: primaryURL.path) else { return nil }
+        let displayURL = manifest.assets
+            .first(where: { $0.role == .renderedVideo })
+            .map { trace.packageURL.appendingPathComponent($0.relativePath) }
+            .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+            ?? primaryURL
+        let transcript = try? store.loadTranscript(from: trace.packageURL)
+        let insights = try? store.loadInsights(from: trace.packageURL)
+        return TraceLibraryEntry(
+            packageURL: trace.packageURL,
+            manifest: manifest,
+            primaryAssetURL: primaryURL,
+            displayAssetURL: displayURL,
+            ocrText: nil,
+            transcriptText: transcript?.fullText,
+            insights: insights
+        )
     }
 
     private func handleScrollingCaptureCompleted(
@@ -573,6 +753,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             do {
                 let saved = try await recordingService.stop()
+                let shouldAutomaticallyTranscribe = model.automaticallyTranscribesRecordings
+                    && saved.manifest.assets.contains {
+                        $0.role == .microphone || $0.role == .systemAudio
+                    }
                 let seconds = saved.manifest.durationSeconds ?? 0
                 let trackWarnings = [
                     recordingService.lastMicrophoneError == nil ? nil : "麦克风轨道异常",
@@ -588,6 +772,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 traceLibrary.reloadIfVisible()
                 await processRecording(saved)
+                if shouldAutomaticallyTranscribe {
+                    beginAutomaticTranscription(for: saved)
+                }
             } catch {
                 if recordingService.isRecording {
                     recordingControl.showExisting()

@@ -22,7 +22,21 @@ final class TraceLibraryViewTests: XCTestCase {
             assetURL: screenshotURL,
             state: .ready,
             duration: nil,
-            ocrText: "ScreenTrace launch checklist"
+            ocrText: "ScreenTrace launch checklist",
+            insights: TraceInsightsDocument(
+                engine: LocalTraceOrganizer.engineIdentifier,
+                suggestedTitle: "Safari · 屏迹发布检查",
+                summary: "检查本地发布流程、字幕与敏感信息提示。",
+                tags: ["产品", "ScreenTrace", "发布"],
+                keyPoints: ["确认所有媒体仍保存在本机"],
+                sensitiveFindings: [
+                    TraceSensitiveFinding(
+                        kind: .emailAddress,
+                        source: .ocr,
+                        redactedPreview: "a•••@example.com"
+                    )
+                ]
+            )
         )
         let recordingURL = root.appendingPathComponent("recording.mp4")
         let recording = makeEntry(
@@ -32,7 +46,8 @@ final class TraceLibraryViewTests: XCTestCase {
             assetURL: recordingURL,
             state: .processing,
             duration: 72,
-            ocrText: nil
+            ocrText: nil,
+            insights: nil
         )
         let model = TraceLibraryModel(
             store: TraceProjectStore(rootDirectory: root),
@@ -45,6 +60,8 @@ final class TraceLibraryViewTests: XCTestCase {
             onCopy: { _ in },
             onAnnotate: { _ in },
             onTranscribe: { _ in },
+            onOrganize: { _ in },
+            onSaveInsights: { _, _ in },
             onOpenFolder: {},
             onClose: {}
         )
@@ -68,6 +85,70 @@ final class TraceLibraryViewTests: XCTestCase {
         XCTAssertGreaterThan(png?.count ?? 0, 25_000)
     }
 
+    func testInsightsPopoverRendersWrappedTagsChaptersAndPrivacyWarnings() throws {
+        let insights = TraceInsightsDocument(
+            engine: LocalTraceOrganizer.engineIdentifier,
+            suggestedTitle: "屏迹本地发布与隐私检查",
+            summary: "整理结果仅引用本机 OCR 与转写，并保留原始素材和分析来源。",
+            tags: ["ScreenTrace", "产品", "发布", "隐私", "字幕", "macOS"],
+            keyPoints: [
+                "检查全部原始轨道仍然完整",
+                "确认整理文件不复制敏感原值"
+            ],
+            chapters: [
+                TraceChapter(
+                    index: 0,
+                    startSeconds: 0,
+                    endSeconds: 42,
+                    title: "产品目标",
+                    summary: "说明快速捕获和本地优先原则。"
+                ),
+                TraceChapter(
+                    index: 1,
+                    startSeconds: 42,
+                    endSeconds: 96,
+                    title: "发布检查",
+                    summary: "核对字幕、索引和隐私提醒。"
+                )
+            ],
+            sensitiveFindings: [
+                TraceSensitiveFinding(
+                    kind: .credential,
+                    source: .transcript,
+                    startSeconds: 71,
+                    endSeconds: 74,
+                    redactedPreview: "api_key: ••••"
+                )
+            ],
+            customization: TraceInsightsCustomization(
+                title: "人工校正：屏迹发布检查",
+                summary: "已核对本地处理、原始素材保护和隐私提示。",
+                tags: ["已审阅", "隐私", "发布"]
+            )
+        )
+        let rootView = TraceInsightsPopover(
+            insights: insights,
+            isOrganizing: false,
+            onRegenerate: {},
+            onSaveCustomization: { _ in }
+        )
+        let hostingView = NSHostingView(rootView: rootView)
+        hostingView.frame = CGRect(x: 0, y: 0, width: 420, height: 560)
+        hostingView.layoutSubtreeIfNeeded()
+
+        guard let representation = hostingView.bitmapImageRepForCachingDisplay(
+            in: hostingView.bounds
+        ) else {
+            throw XCTSkip("Unable to create insights snapshot")
+        }
+        hostingView.cacheDisplay(in: hostingView.bounds, to: representation)
+        let png = representation.representation(using: .png, properties: [:])
+
+        XCTAssertGreaterThanOrEqual(representation.pixelsWide, 420)
+        XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 560)
+        XCTAssertGreaterThan(png?.count ?? 0, 18_000)
+    }
+
     private func makeEntry(
         root: URL,
         kind: TraceKind,
@@ -75,7 +156,8 @@ final class TraceLibraryViewTests: XCTestCase {
         assetURL: URL,
         state: TraceState,
         duration: Double?,
-        ocrText: String?
+        ocrText: String?,
+        insights: TraceInsightsDocument?
     ) -> TraceLibraryEntry {
         let id = UUID()
         let package = root.appendingPathComponent("\(id.uuidString).screentrace", isDirectory: true)
@@ -103,7 +185,8 @@ final class TraceLibraryViewTests: XCTestCase {
             manifest: manifest,
             primaryAssetURL: assetURL,
             displayAssetURL: assetURL,
-            ocrText: ocrText
+            ocrText: ocrText,
+            insights: insights
         )
     }
 

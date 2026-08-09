@@ -9,6 +9,7 @@ final class TraceLibraryModel: ObservableObject {
     @Published var query = ""
     @Published var filter: TraceLibraryFilter = .all
     @Published private(set) var isLoading = false
+    @Published private(set) var transcribingIDs: Set<UUID> = []
 
     private var reloadTask: Task<Void, Never>?
 
@@ -31,6 +32,18 @@ final class TraceLibraryModel: ObservableObject {
 
     var recordingCount: Int {
         entries.count { $0.manifest.kind == .recording }
+    }
+
+    func isTranscribing(_ id: UUID) -> Bool {
+        transcribingIDs.contains(id)
+    }
+
+    func setTranscribing(_ isTranscribing: Bool, id: UUID) {
+        if isTranscribing {
+            transcribingIDs.insert(id)
+        } else {
+            transcribingIDs.remove(id)
+        }
     }
 
     func reload() {

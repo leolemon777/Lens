@@ -105,6 +105,100 @@ final class TraceLibraryTests: XCTestCase {
         )
     }
 
+    func testPersistentIndexInvalidatesWhenOCRChangesOutsideTheManifest() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let screenshot = try store.saveScreenshot(
+            pngData: Data([1, 2, 3]),
+            width: 640,
+            height: 360
+        )
+        _ = try store.attachOCR(makeOCR(text: "first indexed text"), to: screenshot)
+
+        XCTAssertEqual(store.libraryEntries().first?.ocrText, "first indexed text")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.libraryIndexURL.path))
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(makeOCR(text: "second, substantially longer indexed text")).write(
+            to: screenshot.packageURL.appendingPathComponent("analysis/ocr.json"),
+            options: .atomic
+        )
+
+        XCTAssertEqual(
+            store.libraryEntries().first?.ocrText,
+            "second, substantially longer indexed text"
+        )
+    }
+
+    func testCorruptPersistentIndexRebuildsAndRemovedPackagesArePruned() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let screenshot = try store.saveScreenshot(
+            pngData: Data([7, 8, 9]),
+            width: 320,
+            height: 180
+        )
+        XCTAssertEqual(store.libraryEntries().count, 1)
+        try Data("not an index".utf8).write(to: store.libraryIndexURL, options: .atomic)
+
+        XCTAssertEqual(store.libraryEntries().map(\.manifest.id), [screenshot.manifest.id])
+        let repairedData = try Data(contentsOf: store.libraryIndexURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        XCTAssertEqual(
+            try decoder.decode(TraceLibraryPersistentIndex.self, from: repairedData).records.count,
+            1
+        )
+
+        try FileManager.default.removeItem(at: screenshot.packageURL)
+        XCTAssertTrue(store.libraryEntries().isEmpty)
+        let prunedData = try Data(contentsOf: store.libraryIndexURL)
+        XCTAssertTrue(
+            try decoder.decode(TraceLibraryPersistentIndex.self, from: prunedData).records.isEmpty
+        )
+    }
+
+    func testPersistentIndexSkipsSymlinkPackagesAndRecursiveCycles() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let screenshot = try store.saveScreenshot(
+            pngData: Data([4, 5, 6]),
+            width: 320,
+            height: 180
+        )
+        let duplicate = root.appendingPathComponent("duplicate.screentrace")
+        try FileManager.default.createSymbolicLink(
+            at: duplicate,
+            withDestinationURL: screenshot.packageURL
+        )
+        let nested = root.appendingPathComponent("nested", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: nested.appendingPathComponent("cycle", isDirectory: true),
+            withDestinationURL: root
+        )
+
+        XCTAssertEqual(store.libraryEntries().map(\.manifest.id), [screenshot.manifest.id])
+    }
+
+    private func makeOCR(text: String) -> OCRDocument {
+        OCRDocument(
+            engine: "test",
+            recognitionLanguages: ["en-US"],
+            blocks: [
+                OCRTextBlock(
+                    text: text,
+                    confidence: 1,
+                    normalizedBounds: TraceRect(x: 0, y: 0, width: 1, height: 0.2)
+                )
+            ]
+        )
+    }
+
     private func temporaryRoot() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTraceLibraryTests-\(UUID().uuidString)", isDirectory: true)

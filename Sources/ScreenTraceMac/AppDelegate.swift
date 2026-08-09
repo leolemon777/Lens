@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let recordingControl = RecordingControlWindowController()
     private let previewRenderer = AutoPreviewRenderer()
     private let audioMixdownRenderer = AudioMixdownRenderer()
+    private let transcriptionService = LocalSpeechTranscriptionService()
     private let toast = ToastWindowController()
     private let permissionCenter = PermissionCenterWindowController()
     private lazy var annotationEditor = ScreenshotAnnotationEditorWindowController(store: store)
@@ -59,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private var hotKeyManager: GlobalHotKeyManager?
     private var processingRecordingPackages: Set<URL> = []
+    private var transcribingRecordingPackages: Set<URL> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ProcessInfo.processInfo.disableSuddenTermination()
@@ -111,6 +113,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         traceLibrary.onEditRecordingRequested = { [weak self] entry in
             self?.videoEditor.show(entry: entry)
+        }
+        traceLibrary.onTranscriptionRequested = { [weak self] entry in
+            self?.beginTranscription(for: entry)
         }
         videoEditor.onSaved = { [weak self] saved in
             guard let self else { return }
@@ -353,6 +358,99 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             detail: "文字识别未完成：\(error.localizedDescription)",
             symbol: "exclamationmark.arrow.triangle.2.circlepath"
         )
+    }
+
+    private func beginTranscription(for entry: TraceLibraryEntry) {
+        let packageKey = entry.packageURL.standardizedFileURL
+        guard transcribingRecordingPackages.isEmpty else {
+            toast.show(
+                title: "另一条本机转写仍在进行",
+                detail: "完成后即可继续；结果会自动进入屏迹索引",
+                symbol: "waveform.badge.magnifyingglass"
+            )
+            return
+        }
+        transcribingRecordingPackages.insert(packageKey)
+        traceLibrary.setTranscribing(true, traceID: entry.id)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                transcribingRecordingPackages.remove(packageKey)
+                traceLibrary.setTranscribing(false, traceID: entry.id)
+            }
+            do {
+                var status = LocalSpeechTranscriptionService.authorizationStatus
+                if status == .notDetermined {
+                    status = await LocalSpeechTranscriptionService.requestAuthorization()
+                }
+                switch status {
+                case .authorized:
+                    break
+                case .denied, .notDetermined:
+                    permissionCenter.show()
+                    throw LocalSpeechTranscriptionError.authorizationDenied
+                case .restricted:
+                    permissionCenter.show()
+                    throw LocalSpeechTranscriptionError.authorizationRestricted
+                @unknown default:
+                    throw LocalSpeechTranscriptionError.authorizationRestricted
+                }
+
+                let source = try transcriptionSource(for: entry)
+                toast.show(
+                    title: "正在本机生成转写",
+                    detail: "不会上传录屏或声音；完成后可直接搜索文字",
+                    symbol: "waveform.badge.magnifyingglass"
+                )
+                let document = try await transcriptionService.transcribe(
+                    audioURL: source.url,
+                    localeIdentifier: Locale.current.identifier,
+                    sourceRole: source.role
+                )
+                let saved = SavedTrace(
+                    packageURL: entry.packageURL,
+                    rawAssetURL: entry.primaryAssetURL,
+                    manifest: entry.manifest
+                )
+                _ = try store.attachTranscript(document, to: saved)
+                traceLibrary.reloadIfVisible()
+                let trimmed = document.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+                toast.show(
+                    title: trimmed.isEmpty ? "没有识别到讲解" : "本机转写已完成",
+                    detail: trimmed.isEmpty
+                        ? "录屏与原始音轨保持不变"
+                        : "\(document.segments.count) 个时间片段 · 已加入本地搜索",
+                    symbol: trimmed.isEmpty ? "text.magnifyingglass" : "captions.bubble.fill"
+                )
+            } catch is CancellationError {
+                toast.show(
+                    title: "转写已取消",
+                    detail: "录屏与原始音轨保持不变",
+                    symbol: "xmark.circle"
+                )
+            } catch {
+                toast.show(
+                    title: "原始录屏仍然安全",
+                    detail: "本机转写未完成：\(error.localizedDescription)",
+                    symbol: "exclamationmark.arrow.triangle.2.circlepath"
+                )
+            }
+        }
+    }
+
+    private func transcriptionSource(
+        for entry: TraceLibraryEntry
+    ) throws -> (url: URL, role: TraceAsset.Role) {
+        if let microphone = entry.manifest.assets.first(where: { $0.role == .microphone }) {
+            let url = entry.packageURL.appendingPathComponent(microphone.relativePath)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return (url, .microphone)
+            }
+        }
+        guard FileManager.default.fileExists(atPath: entry.primaryAssetURL.path) else {
+            throw LocalSpeechTranscriptionError.missingSource
+        }
+        return (entry.primaryAssetURL, .screenVideo)
     }
 
     private func handleScrollingCaptureCompleted(

@@ -10,6 +10,7 @@ final class TraceLibraryWindowController {
 
     var onAnnotateRequested: ((SavedTrace, NSImage) -> Void)?
     var onEditRecordingRequested: ((TraceLibraryEntry) -> Void)?
+    var onTranscriptionRequested: ((TraceLibraryEntry) -> Void)?
 
     init(store: TraceProjectStore) {
         self.store = store
@@ -41,6 +42,10 @@ final class TraceLibraryWindowController {
         model.reload()
     }
 
+    func setTranscribing(_ isTranscribing: Bool, traceID: UUID) {
+        model.setTranscribing(isTranscribing, id: traceID)
+    }
+
     private func configureWindow() {
         window.title = "屏迹库"
         window.titleVisibility = .hidden
@@ -57,6 +62,7 @@ final class TraceLibraryWindowController {
             onReveal: { [weak self] in self?.reveal($0) },
             onCopy: { [weak self] in self?.copy($0) },
             onAnnotate: { [weak self] in self?.annotate($0) },
+            onTranscribe: { [weak self] in self?.transcribe($0) },
             onOpenFolder: { [weak self] in self?.openFolder() },
             onClose: { [weak self] in self?.hide() }
         )
@@ -101,6 +107,11 @@ final class TraceLibraryWindowController {
             manifest: entry.manifest
         )
         onAnnotateRequested?(trace, image)
+    }
+
+    private func transcribe(_ entry: TraceLibraryEntry) {
+        guard entry.manifest.kind == .recording else { return }
+        onTranscriptionRequested?(entry)
     }
 
     private func openFolder() {

@@ -8,23 +8,26 @@ public struct TraceLibraryEntry: Identifiable, Equatable, Sendable {
     public let primaryAssetURL: URL
     public let displayAssetURL: URL
     public let ocrText: String?
+    public let transcriptText: String?
 
     public init(
         packageURL: URL,
         manifest: TraceManifest,
         primaryAssetURL: URL,
         displayAssetURL: URL,
-        ocrText: String?
+        ocrText: String?,
+        transcriptText: String? = nil
     ) {
         self.packageURL = packageURL
         self.manifest = manifest
         self.primaryAssetURL = primaryAssetURL
         self.displayAssetURL = displayAssetURL
         self.ocrText = ocrText
+        self.transcriptText = transcriptText
     }
 
     public var searchableText: String {
-        [manifest.title, ocrText ?? ""]
+        [manifest.title, ocrText ?? "", transcriptText ?? ""]
             .joined(separator: "\n")
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
     }

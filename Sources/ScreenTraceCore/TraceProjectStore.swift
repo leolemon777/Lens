@@ -45,6 +45,12 @@ public struct TraceProjectStore: Sendable {
         return pictures.appendingPathComponent("ScreenTrace", isDirectory: true)
     }
 
+    public var libraryIndexURL: URL {
+        rootDirectory
+            .appendingPathComponent(".index", isDirectory: true)
+            .appendingPathComponent("library-v1.json")
+    }
+
     public func saveScreenshot(
         pngData: Data,
         width: Int,
@@ -198,6 +204,45 @@ public struct TraceProjectStore: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(OCRDocument.self, from: data)
+    }
+
+    public func attachTranscript(
+        _ document: TranscriptDocument,
+        to savedTrace: SavedTrace
+    ) throws -> SavedTrace {
+        var manifest = try loadManifest(from: savedTrace.packageURL)
+        guard manifest.kind == .recording else {
+            throw TraceProjectStoreError.incompatibleTraceKind
+        }
+        manifest.schemaVersion = TraceManifest.currentSchemaVersion
+        let relativePath = "analysis/transcript.json"
+        let outputURL = savedTrace.packageURL.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(document).write(to: outputURL, options: .atomic)
+        if !manifest.assets.contains(where: { $0.role == .transcript }) {
+            manifest.assets.append(TraceAsset(role: .transcript, relativePath: relativePath))
+        }
+        try writeManifest(manifest, to: savedTrace.packageURL)
+        return SavedTrace(
+            packageURL: savedTrace.packageURL,
+            rawAssetURL: savedTrace.rawAssetURL,
+            manifest: manifest
+        )
+    }
+
+    public func loadTranscript(from packageURL: URL) throws -> TranscriptDocument {
+        let data = try Data(
+            contentsOf: packageURL.appendingPathComponent("analysis/transcript.json")
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(TranscriptDocument.self, from: data)
     }
 
     public func writeScreenshotEditPlan(
@@ -406,39 +451,12 @@ public struct TraceProjectStore: Sendable {
         return SavedTrace(packageURL: packageURL, rawAssetURL: rawAsset, manifest: manifest)
     }
 
-    /// Builds a tolerant local index. Invalid packages are skipped; valid interrupted captures remain visible.
+    /// Refreshes the disposable persistent index. Invalid packages are skipped; valid interrupted captures remain visible.
     public func libraryEntries() -> [TraceLibraryEntry] {
-        tracePackageURLs(in: rootDirectory).compactMap { packageURL in
-            guard let manifest = try? loadManifest(from: packageURL) else { return nil }
-            let primaryRole: TraceAsset.Role = manifest.kind == .screenshot ? .screenshot : .screenVideo
-            guard let primaryAsset = manifest.assets.first(where: { $0.role == primaryRole }) else {
-                return nil
-            }
-            let primaryURL = packageURL.appendingPathComponent(primaryAsset.relativePath)
-            let preferredDisplayRoles: [TraceAsset.Role] = manifest.kind == .screenshot
-                ? [.renderedScreenshot, .thumbnail]
-                : [.renderedVideo, .thumbnail]
-            let displayURL = preferredDisplayRoles.lazy.compactMap { role in
-                manifest.assets.first(where: { $0.role == role })
-            }
-            .map { packageURL.appendingPathComponent($0.relativePath) }
-            .first(where: { FileManager.default.fileExists(atPath: $0.path) })
-                ?? primaryURL
-            let ocrText = (try? loadOCR(from: packageURL))?.fullText
-            return TraceLibraryEntry(
-                packageURL: packageURL,
-                manifest: manifest,
-                primaryAssetURL: primaryURL,
-                displayAssetURL: displayURL,
-                ocrText: ocrText
-            )
-        }
-        .sorted { lhs, rhs in
-            if lhs.manifest.createdAt != rhs.manifest.createdAt {
-                return lhs.manifest.createdAt > rhs.manifest.createdAt
-            }
-            return lhs.manifest.id.uuidString > rhs.manifest.id.uuidString
-        }
+        TraceLibraryPersistentIndexStore(
+            rootDirectory: rootDirectory,
+            indexURL: libraryIndexURL
+        ).entries(packageURLs: tracePackageURLs(in: rootDirectory))
     }
 
     public func beginRecording(
@@ -774,19 +792,22 @@ public struct TraceProjectStore: Sendable {
     private func tracePackageURLs(in directory: URL) -> [URL] {
         guard let children = try? FileManager.default.contentsOfDirectory(
             at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .isHiddenKey, .isSymbolicLinkKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
 
         var packages: [URL] = []
         for child in children {
+            guard let values = try? child.resourceValues(
+                forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+            ), values.isSymbolicLink != true else {
+                continue
+            }
             if child.pathExtension == "screentrace" {
-                packages.append(child)
+                if values.isDirectory == true { packages.append(child) }
                 continue
             }
-            guard (try? child.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
-                continue
-            }
+            guard values.isDirectory == true else { continue }
             packages.append(contentsOf: tracePackageURLs(in: child))
         }
         return packages

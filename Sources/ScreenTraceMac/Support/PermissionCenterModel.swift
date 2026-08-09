@@ -2,11 +2,13 @@ import AppKit
 @preconcurrency import ApplicationServices
 import AVFoundation
 import Foundation
+import Speech
 
 enum SystemPermissionKind: String, CaseIterable, Identifiable {
     case screenCapture
     case microphone
     case camera
+    case speechRecognition
     case accessibility
 
     var id: String { rawValue }
@@ -16,6 +18,7 @@ enum SystemPermissionKind: String, CaseIterable, Identifiable {
         case .screenCapture: "屏幕与系统音频"
         case .microphone: "麦克风"
         case .camera: "摄像头"
+        case .speechRecognition: "本地语音识别"
         case .accessibility: "辅助功能"
         }
     }
@@ -25,6 +28,7 @@ enum SystemPermissionKind: String, CaseIterable, Identifiable {
         case .screenCapture: "截图、录屏和窗口识别"
         case .microphone: "录制讲解声音，可随时关闭"
         case .camera: "可选的人像摄像头轨道"
+        case .speechRecognition: "在本机生成录屏转写与字幕"
         case .accessibility: "全局快捷键与后续键盘事件轨"
         }
     }
@@ -34,6 +38,7 @@ enum SystemPermissionKind: String, CaseIterable, Identifiable {
         case .screenCapture: "rectangle.inset.filled.and.person.filled"
         case .microphone: "mic.fill"
         case .camera: "video.fill"
+        case .speechRecognition: "captions.bubble.fill"
         case .accessibility: "accessibility"
         }
     }
@@ -47,6 +52,21 @@ enum PermissionAccessState: String, Equatable {
 
     init(authorizationStatus: AVAuthorizationStatus) {
         switch authorizationStatus {
+        case .notDetermined:
+            self = .notDetermined
+        case .authorized:
+            self = .granted
+        case .denied:
+            self = .denied
+        case .restricted:
+            self = .restricted
+        @unknown default:
+            self = .restricted
+        }
+    }
+
+    init(speechAuthorizationStatus: SFSpeechRecognizerAuthorizationStatus) {
+        switch speechAuthorizationStatus {
         case .notDetermined:
             self = .notDetermined
         case .authorized:
@@ -99,6 +119,9 @@ final class PermissionCenterModel: ObservableObject {
             .camera: PermissionAccessState(
                 authorizationStatus: AVCaptureDevice.authorizationStatus(for: .video)
             ),
+            .speechRecognition: PermissionAccessState(
+                speechAuthorizationStatus: SFSpeechRecognizer.authorizationStatus()
+            ),
             .accessibility: AXIsProcessTrusted() ? .granted : .denied
         ]
     }
@@ -118,6 +141,14 @@ final class PermissionCenterModel: ObservableObject {
             handleMediaPermission(.audio, currentState: state, settingsPane: "Privacy_Microphone")
         case .camera:
             handleMediaPermission(.video, currentState: state, settingsPane: "Privacy_Camera")
+        case .speechRecognition:
+            if state == .notDetermined {
+                SFSpeechRecognizer.requestAuthorization { [weak self] _ in
+                    Task { @MainActor in self?.refresh() }
+                }
+            } else if state != .granted {
+                openPrivacyPane("Privacy_SpeechRecognition")
+            }
         case .accessibility:
             if state == .granted { return }
             let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String

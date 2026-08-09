@@ -34,6 +34,11 @@ final class TraceLibraryModelTests: XCTestCase {
         model.query = ""
         model.filter = .recordings
         XCTAssertEqual(model.visibleEntries.map(\.id), [recording.id])
+
+        model.setTranscribing(true, id: recording.id)
+        XCTAssertTrue(model.isTranscribing(recording.id))
+        model.setTranscribing(false, id: recording.id)
+        XCTAssertFalse(model.isTranscribing(recording.id))
     }
 
     private func makeEntry(

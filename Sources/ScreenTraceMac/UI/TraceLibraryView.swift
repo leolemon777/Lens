@@ -8,6 +8,7 @@ struct TraceLibraryView: View {
     let onReveal: (TraceLibraryEntry) -> Void
     let onCopy: (TraceLibraryEntry) -> Void
     let onAnnotate: (TraceLibraryEntry) -> Void
+    let onTranscribe: (TraceLibraryEntry) -> Void
     let onOpenFolder: () -> Void
     let onClose: () -> Void
 
@@ -48,7 +49,7 @@ struct TraceLibraryView: View {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("搜索标题或 OCR 文字", text: $model.query)
+                TextField("搜索标题、OCR 或转写", text: $model.query)
                     .textFieldStyle(.plain)
                     .frame(width: 220)
                 if !model.query.isEmpty {
@@ -139,7 +140,9 @@ struct TraceLibraryView: View {
                             onOpen: { onOpen(entry) },
                             onReveal: { onReveal(entry) },
                             onCopy: { onCopy(entry) },
-                            onAnnotate: { onAnnotate(entry) }
+                            onAnnotate: { onAnnotate(entry) },
+                            onTranscribe: { onTranscribe(entry) },
+                            isTranscribing: model.isTranscribing(entry.id)
                         )
                     }
                 }
@@ -170,6 +173,8 @@ private struct TraceLibraryCard: View {
     let onReveal: () -> Void
     let onCopy: () -> Void
     let onAnnotate: () -> Void
+    let onTranscribe: () -> Void
+    let isTranscribing: Bool
 
     private var thumbnail: NSImage? {
         guard entry.manifest.kind == .screenshot else { return nil }
@@ -196,6 +201,9 @@ private struct TraceLibraryCard: View {
                     if entry.ocrText?.isEmpty == false {
                         Label("OCR", systemImage: "text.viewfinder")
                     }
+                    if entry.transcriptText?.isEmpty == false {
+                        Label("转写", systemImage: "captions.bubble.fill")
+                    }
                     if let capture = entry.manifest.captureSource {
                         Label(capture.mode.libraryTitle, systemImage: capture.mode.librarySymbol)
                     }
@@ -217,6 +225,24 @@ private struct TraceLibraryCard: View {
                     if entry.manifest.kind == .screenshot {
                         cardButton("复制", symbol: "doc.on.doc", action: onCopy)
                         cardButton("标注", symbol: "pencil.tip", action: onAnnotate)
+                    } else {
+                        Button(action: onTranscribe) {
+                            HStack(spacing: 4) {
+                                if isTranscribing {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                } else {
+                                    Image(systemName: "waveform.badge.magnifyingglass")
+                                }
+                                Text(entry.transcriptText?.isEmpty == false ? "重转写" : "转写")
+                            }
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 5)
+                            .background(.primary.opacity(0.055), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isTranscribing)
                     }
                     Spacer(minLength: 0)
                     Button(action: onReveal) {

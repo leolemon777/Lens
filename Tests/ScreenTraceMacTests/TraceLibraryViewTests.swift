@@ -44,6 +44,7 @@ final class TraceLibraryViewTests: XCTestCase {
             onReveal: { _ in },
             onCopy: { _ in },
             onAnnotate: { _ in },
+            onTranscribe: { _ in },
             onOpenFolder: {},
             onClose: {}
         )

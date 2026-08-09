@@ -1,4 +1,5 @@
 import AVFoundation
+import Speech
 import XCTest
 @testable import ScreenTraceMac
 
@@ -29,10 +30,29 @@ final class PermissionCenterModelTests: XCTestCase {
         XCTAssertEqual(PermissionAccessState.restricted.primaryActionTitle, "打开设置")
     }
 
+    func testSpeechAuthorizationStatusMapsToPermissionPresentation() {
+        XCTAssertEqual(
+            PermissionAccessState(speechAuthorizationStatus: .notDetermined),
+            .notDetermined
+        )
+        XCTAssertEqual(
+            PermissionAccessState(speechAuthorizationStatus: .authorized),
+            .granted
+        )
+        XCTAssertEqual(
+            PermissionAccessState(speechAuthorizationStatus: .denied),
+            .denied
+        )
+        XCTAssertEqual(
+            PermissionAccessState(speechAuthorizationStatus: .restricted),
+            .restricted
+        )
+    }
+
     func testPermissionKindsRemainCompleteAndOrdered() {
         XCTAssertEqual(
             SystemPermissionKind.allCases.map(\.rawValue),
-            ["screenCapture", "microphone", "camera", "accessibility"]
+            ["screenCapture", "microphone", "camera", "speechRecognition", "accessibility"]
         )
     }
 }

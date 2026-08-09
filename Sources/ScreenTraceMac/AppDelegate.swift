@@ -33,6 +33,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         },
         onOCRFailed: { [weak self] error, trace in
             self?.handleOCRFailed(error, trace: trace)
+        },
+        onScrollingCaptureCompleted: { [weak self] frameCount, height, warning in
+            self?.handleScrollingCaptureCompleted(
+                frameCount: frameCount,
+                height: height,
+                warning: warning
+            )
+        },
+        onScrollingCaptureFailed: { [weak self] error in
+            self?.toast.show(
+                title: "长截图未完成",
+                detail: error.localizedDescription,
+                symbol: "exclamationmark.arrow.triangle.2.circlepath"
+            )
         }
     )
     private lazy var recordingService = ScreenRecordingService(
@@ -114,6 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .toggleActionCenter:
                 if self?.recordingService.isRecording == true {
                     self?.recordingControl.showExisting()
+                } else if self?.captureCoordinator.showScrollingCaptureControlIfActive() == true {
+                    return
                 } else {
                     self?.actionCenter.toggle()
                 }
@@ -136,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(menuItem("窗口截图", action: #selector(beginWindowScreenshot)))
         menu.addItem(menuItem("当前屏幕截图", action: #selector(beginDisplayScreenshot)))
         menu.addItem(menuItem("选区 OCR", action: #selector(beginOCR)))
+        menu.addItem(menuItem("滚动长截图", action: #selector(beginScrollingCapture)))
         menu.addItem(menuItem("录制区域", action: #selector(beginRegionRecording)))
         menu.addItem(menuItem("录制窗口", action: #selector(beginWindowRecording)))
         menu.addItem(menuItem("录制当前屏幕", action: #selector(beginRecording)))
@@ -194,7 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             captureCoordinator.beginOCRCapture()
         case .scrollingCapture:
             actionCenter.hide()
-            toast.show(title: "长截图已进入 M3", detail: "将支持浏览器与普通滚动视图", symbol: "arrow.up.and.down")
+            captureCoordinator.beginScrollingCapture()
         case .pin:
             actionCenter.hide()
             if let recent = model.recentTrace {
@@ -247,6 +264,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func beginOCR() {
         actionCenter.hide()
         captureCoordinator.beginOCRCapture()
+    }
+
+    @objc private func beginScrollingCapture() {
+        actionCenter.hide()
+        captureCoordinator.beginScrollingCapture()
     }
 
     @objc private func beginRecording() {
@@ -309,6 +331,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             detail: "文字识别未完成：\(error.localizedDescription)",
             symbol: "exclamationmark.arrow.triangle.2.circlepath"
         )
+    }
+
+    private func handleScrollingCaptureCompleted(
+        frameCount: Int,
+        height: Int,
+        warning: Error?
+    ) {
+        if let warning {
+            toast.show(
+                title: "长截图已复制",
+                detail: "\(frameCount) 帧 · \(height) px；部分源数据保留受限：\(warning.localizedDescription)",
+                symbol: "checkmark.circle"
+            )
+        } else {
+            toast.show(
+                title: "长截图已拼接并复制",
+                detail: "\(frameCount) 帧 · \(height) px · 原始帧与拼接计划均已保留",
+                symbol: "arrow.up.and.down.text.horizontal"
+            )
+        }
     }
 
     private func startDisplayRecording() {

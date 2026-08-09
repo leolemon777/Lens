@@ -49,6 +49,7 @@ public struct TraceProjectStore: Sendable {
         pngData: Data,
         width: Int,
         height: Int,
+        titlePrefix: String = "截图",
         createdAt: Date = Date(),
         id: UUID = UUID()
     ) throws -> SavedTrace {
@@ -76,11 +77,13 @@ public struct TraceProjectStore: Sendable {
             try FileManager.default.createDirectory(at: previewsDirectory, withIntermediateDirectories: true)
             try pngData.write(to: rawAssetURL, options: .atomic)
 
+            let normalizedTitlePrefix = titlePrefix
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             let manifest = TraceManifest(
                 id: id,
                 kind: .screenshot,
                 createdAt: createdAt,
-                title: "截图 \(Self.displayTimestamp.string(from: createdAt))",
+                title: "\(normalizedTitlePrefix.isEmpty ? "截图" : normalizedTitlePrefix) \(Self.displayTimestamp.string(from: createdAt))",
                 dimensions: TraceDimensions(width: width, height: height),
                 assets: [TraceAsset(role: .screenshot, relativePath: "raw/screenshot.png")]
             )
@@ -195,6 +198,137 @@ public struct TraceProjectStore: Sendable {
             contentsOf: packageURL.appendingPathComponent("edits/screenshot-edit.json")
         )
         return try JSONDecoder().decode(ScreenshotEditPlan.self, from: data)
+    }
+
+    public func attachScrollingCapture(
+        _ plan: ScrollingCapturePlan,
+        framePNGs: [Data],
+        to savedTrace: SavedTrace
+    ) throws -> SavedTrace {
+        var manifest = try loadManifest(from: savedTrace.packageURL)
+        guard manifest.kind == .screenshot else {
+            throw TraceProjectStoreError.incompatibleTraceKind
+        }
+        guard !plan.frames.isEmpty,
+              manifest.dimensions == plan.outputDimensions,
+              plan.frames.count == framePNGs.count,
+              plan.viewportDimensions.width > 0,
+              plan.viewportDimensions.height > 0,
+              plan.outputDimensions.width == plan.viewportDimensions.width,
+              plan.outputDimensions.height >= plan.viewportDimensions.height,
+              plan.sourceRect.x >= 0,
+              plan.sourceRect.y >= 0,
+              plan.sourceRect.width > 0,
+              plan.sourceRect.height > 0 else {
+            throw TraceProjectStoreError.invalidDimensions
+        }
+
+        var expectedVerticalOffset = 0
+        for (position, frame) in plan.frames.enumerated() {
+            let isFirstFrame = position == 0
+            let validContribution = isFirstFrame
+                ? frame.appendedHeightPixels == plan.viewportDimensions.height
+                : frame.appendedHeightPixels > 0
+                    && frame.appendedHeightPixels < plan.viewportDimensions.height
+            if !isFirstFrame {
+                expectedVerticalOffset += frame.appendedHeightPixels
+            }
+            guard frame.index == position,
+                  frame.verticalOffsetPixels == expectedVerticalOffset,
+                  validContribution else {
+                throw TraceProjectStoreError.invalidDimensions
+            }
+        }
+        guard plan.viewportDimensions.height + expectedVerticalOffset
+                == plan.outputDimensions.height else {
+            throw TraceProjectStoreError.invalidDimensions
+        }
+
+        let rawDirectory = savedTrace.packageURL.appendingPathComponent(
+            "raw/scrolling",
+            isDirectory: true
+        )
+        let planURL = savedTrace.packageURL.appendingPathComponent(
+            "events/scrolling-capture.json"
+        )
+        guard !FileManager.default.fileExists(atPath: rawDirectory.path),
+              !FileManager.default.fileExists(atPath: planURL.path) else {
+            throw TraceProjectStoreError.packageAlreadyExists
+        }
+        let stagingID = UUID().uuidString
+        let stagingDirectory = savedTrace.packageURL.appendingPathComponent(
+            "raw/.scrolling-\(stagingID)",
+            isDirectory: true
+        )
+        let stagingPlanURL = savedTrace.packageURL.appendingPathComponent(
+            "events/.scrolling-\(stagingID).json"
+        )
+        var committedMedia = false
+        do {
+            try FileManager.default.createDirectory(
+                at: stagingDirectory,
+                withIntermediateDirectories: true
+            )
+            for (position, pair) in zip(plan.frames, framePNGs).enumerated() {
+                let frame = pair.0
+                let png = pair.1
+                let expectedPath = String(
+                    format: "raw/scrolling/frame-%03d.png",
+                    position
+                )
+                guard frame.relativePath == expectedPath,
+                      !png.isEmpty else {
+                    throw TraceProjectStoreError.invalidDimensions
+                }
+                try png.write(
+                    to: stagingDirectory.appendingPathComponent(
+                        String(format: "frame-%03d.png", position)
+                    ),
+                    options: .atomic
+                )
+            }
+
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            try encoder.encode(plan).write(to: stagingPlanURL, options: .atomic)
+            try FileManager.default.moveItem(at: stagingDirectory, to: rawDirectory)
+            committedMedia = true
+            try FileManager.default.moveItem(at: stagingPlanURL, to: planURL)
+
+            manifest.assets.removeAll {
+                $0.role == .scrollingCaptureFrame || $0.role == .scrollingCapturePlan
+            }
+            manifest.assets.append(contentsOf: plan.frames.map {
+                TraceAsset(role: .scrollingCaptureFrame, relativePath: $0.relativePath)
+            })
+            manifest.assets.append(
+                TraceAsset(
+                    role: .scrollingCapturePlan,
+                    relativePath: "events/scrolling-capture.json"
+                )
+            )
+            try writeManifest(manifest, to: savedTrace.packageURL)
+            return SavedTrace(
+                packageURL: savedTrace.packageURL,
+                rawAssetURL: savedTrace.rawAssetURL,
+                manifest: manifest
+            )
+        } catch {
+            try? FileManager.default.removeItem(at: stagingDirectory)
+            try? FileManager.default.removeItem(at: stagingPlanURL)
+            if committedMedia {
+                try? FileManager.default.removeItem(at: rawDirectory)
+                try? FileManager.default.removeItem(at: planURL)
+            }
+            throw error
+        }
+    }
+
+    public func loadScrollingCapturePlan(from packageURL: URL) throws -> ScrollingCapturePlan {
+        let data = try Data(
+            contentsOf: packageURL.appendingPathComponent("events/scrolling-capture.json")
+        )
+        return try JSONDecoder().decode(ScrollingCapturePlan.self, from: data)
     }
 
     public func completeScreenshotEditing(

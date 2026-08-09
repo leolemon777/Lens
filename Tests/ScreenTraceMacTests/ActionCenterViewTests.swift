@@ -9,12 +9,14 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertTrue(ActionCenterAction.allCases.contains(.regionRecording))
         XCTAssertTrue(ActionCenterAction.allCases.contains(.windowRecording))
         XCTAssertTrue(ActionCenterAction.allCases.contains(.recording))
+        XCTAssertTrue(ActionCenterAction.allCases.contains(.scrollingCapture))
     }
 
     func testCaptureOverlayExplainsScreenshotAndRecordingIntentsSeparately() {
         XCTAssertTrue(CaptureOverlayAction.screenshot.windowGuidance.contains("截取"))
         XCTAssertTrue(CaptureOverlayAction.recording.windowGuidance.contains("开始录制"))
         XCTAssertTrue(CaptureOverlayAction.recording.regionGuidance.contains("录制区域"))
+        XCTAssertTrue(CaptureOverlayAction.scrollingCapture.regionGuidance.contains("滚动内容"))
     }
 
     func testActionCenterRendersRecordingAndScreenshotMenusAtPanelSize() throws {

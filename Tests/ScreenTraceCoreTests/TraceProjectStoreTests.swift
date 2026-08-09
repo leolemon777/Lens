@@ -461,4 +461,89 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: session.videoURL), partialBytes)
         XCTAssertTrue(store.recoverInterruptedRecordings().isEmpty)
     }
+
+    func testScrollingCaptureArchivesEverySourceFrameAndAssemblyPlan() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let screenshot = try store.saveScreenshot(
+            pngData: Data([1, 2, 3]),
+            width: 800,
+            height: 1_070,
+            titlePrefix: "长截图"
+        )
+        let frames = [
+            ScrollingCaptureFrame(
+                index: 0,
+                relativePath: "raw/scrolling/frame-000.png",
+                verticalOffsetPixels: 0,
+                appendedHeightPixels: 600,
+                overlapDifference: 0
+            ),
+            ScrollingCaptureFrame(
+                index: 1,
+                relativePath: "raw/scrolling/frame-001.png",
+                verticalOffsetPixels: 470,
+                appendedHeightPixels: 470,
+                overlapDifference: 0.018
+            )
+        ]
+        let plan = ScrollingCapturePlan(
+            displayID: 7,
+            sourceRect: TraceRect(x: 100, y: 80, width: 400, height: 300),
+            viewportDimensions: TraceDimensions(width: 800, height: 600),
+            outputDimensions: TraceDimensions(width: 800, height: 1_070),
+            frames: frames
+        )
+
+        let malformedPlan = ScrollingCapturePlan(
+            displayID: 7,
+            sourceRect: TraceRect(x: 100, y: 80, width: 400, height: 300),
+            viewportDimensions: TraceDimensions(width: 800, height: 600),
+            outputDimensions: TraceDimensions(width: 800, height: 1_070),
+            frames: []
+        )
+        XCTAssertThrowsError(try store.attachScrollingCapture(
+            malformedPlan,
+            framePNGs: [],
+            to: screenshot
+        )) { error in
+            XCTAssertEqual(error as? TraceProjectStoreError, .invalidDimensions)
+        }
+
+        let updated = try store.attachScrollingCapture(
+            plan,
+            framePNGs: [Data([9, 8]), Data([7, 6, 5])],
+            to: screenshot
+        )
+
+        XCTAssertTrue(updated.manifest.title.hasPrefix("长截图"))
+        XCTAssertEqual(try store.loadScrollingCapturePlan(from: screenshot.packageURL), plan)
+        XCTAssertEqual(
+            try Data(contentsOf: screenshot.packageURL.appendingPathComponent(frames[0].relativePath)),
+            Data([9, 8])
+        )
+        XCTAssertEqual(
+            updated.manifest.assets.filter { $0.role == .scrollingCaptureFrame }.count,
+            2
+        )
+        XCTAssertEqual(updated.manifest.assets.filter { $0.role == .scrollingCapturePlan }, [
+            TraceAsset(
+                role: .scrollingCapturePlan,
+                relativePath: "events/scrolling-capture.json"
+            )
+        ])
+        XCTAssertThrowsError(try store.attachScrollingCapture(
+            plan,
+            framePNGs: [Data([0]), Data([0])],
+            to: updated
+        )) { error in
+            XCTAssertEqual(error as? TraceProjectStoreError, .packageAlreadyExists)
+        }
+        XCTAssertEqual(
+            try Data(contentsOf: screenshot.packageURL.appendingPathComponent(frames[0].relativePath)),
+            Data([9, 8])
+        )
+    }
 }

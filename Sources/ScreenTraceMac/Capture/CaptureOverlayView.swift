@@ -9,11 +9,13 @@ enum CaptureOverlayMode {
 enum CaptureOverlayAction {
     case screenshot
     case recording
+    case scrollingCapture
 
     var regionGuidance: String {
         switch self {
         case .screenshot: "拖动选择区域  ·  Esc 取消"
         case .recording: "拖动选择录制区域  ·  Esc 取消"
+        case .scrollingCapture: "拖动选择滚动内容区域  ·  Esc 取消"
         }
     }
 
@@ -21,6 +23,7 @@ enum CaptureOverlayAction {
         switch self {
         case .screenshot: "移动选择窗口  ·  单击截取  ·  Esc 取消"
         case .recording: "移动选择窗口  ·  单击开始录制  ·  Esc 取消"
+        case .scrollingCapture: "选择需要滚动拼接的内容区域"
         }
     }
 }
@@ -216,6 +219,7 @@ final class CaptureOverlayView: NSView {
         let accent: NSColor = switch mode {
         case .region(.recording), .window(_, .recording): .systemRed
         case .region(.screenshot), .window(_, .screenshot): .systemCyan
+        case .region(.scrollingCapture), .window(_, .scrollingCapture): .systemOrange
         }
         accent.withAlphaComponent(0.76).setStroke()
         let glow = NSBezierPath(roundedRect: rect.insetBy(dx: -1, dy: -1), xRadius: 5, yRadius: 5)

@@ -9,6 +9,7 @@ enum ScreenCaptureServiceError: LocalizedError {
     case emptySelection
     case noImageReturned
     case noEligibleWindows
+    case displayUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -20,6 +21,8 @@ enum ScreenCaptureServiceError: LocalizedError {
             return "系统没有返回截图图像。"
         case .noEligibleWindows:
             return "当前屏幕上没有可截取的普通窗口。"
+        case .displayUnavailable:
+            return "用于长截图的显示器已断开。"
         }
     }
 }
@@ -27,6 +30,13 @@ enum ScreenCaptureServiceError: LocalizedError {
 struct WindowCaptureTarget {
     let window: SCWindow
     let candidate: WindowSelectionCandidate
+}
+
+struct ScrollingCaptureTarget {
+    let displayID: CGDirectDisplayID
+    let sourceRect: CGRect
+    let filter: SCContentFilter
+    let configuration: SCStreamConfiguration
 }
 
 @MainActor
@@ -102,6 +112,65 @@ struct ScreenCaptureService {
             SCScreenshotManager.captureImage(
                 contentFilter: filter,
                 configuration: configuration
+            ) { image, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let image {
+                    continuation.resume(returning: image)
+                } else {
+                    continuation.resume(throwing: ScreenCaptureServiceError.noImageReturned)
+                }
+            }
+        }
+    }
+
+    func prepareScrollingRegion(
+        displayID: CGDirectDisplayID,
+        localDisplayRect: CGRect,
+        excludingProcessID: pid_t
+    ) async throws -> ScrollingCaptureTarget {
+        let content = try await shareableContent()
+        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
+            throw ScreenCaptureServiceError.displayUnavailable
+        }
+        let localBounds = CGRect(origin: .zero, size: display.frame.size)
+        let sourceRect = localDisplayRect.standardized.intersection(localBounds)
+        guard !sourceRect.isNull, sourceRect.width >= 3, sourceRect.height >= 3 else {
+            throw ScreenCaptureServiceError.emptySelection
+        }
+        let excludedApplications = content.applications.filter {
+            $0.processID == excludingProcessID
+        }
+        let filter = SCContentFilter(
+            display: display,
+            excludingApplications: excludedApplications,
+            exceptingWindows: []
+        )
+        let scale = max(CGFloat(filter.pointPixelScale), 1)
+        let configuration = SCStreamConfiguration()
+        configuration.sourceRect = sourceRect
+        configuration.width = max(Int(ceil(sourceRect.width * scale)), 1)
+        configuration.height = max(Int(ceil(sourceRect.height * scale)), 1)
+        configuration.captureResolution = .best
+        configuration.showsCursor = false
+        configuration.showMouseClicks = false
+        configuration.scalesToFit = false
+        configuration.preservesAspectRatio = true
+        configuration.shouldBeOpaque = true
+
+        return ScrollingCaptureTarget(
+            displayID: displayID,
+            sourceRect: sourceRect,
+            filter: filter,
+            configuration: configuration
+        )
+    }
+
+    func captureScrollingRegion(_ target: ScrollingCaptureTarget) async throws -> CGImage {
+        return try await withCheckedThrowingContinuation { continuation in
+            SCScreenshotManager.captureImage(
+                contentFilter: target.filter,
+                configuration: target.configuration
             ) { image, error in
                 if let error {
                     continuation.resume(throwing: error)

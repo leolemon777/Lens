@@ -7,6 +7,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private enum CapturePurpose: Equatable {
         case screenshot
         case ocr
+        case scrollingCapture
         case recordingRegion
         case recordingWindow
     }
@@ -18,8 +19,11 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private let onRecordingSourceSelected: (RecordingCaptureSource) -> Void
     private let onOCRCompleted: (OCRDocument, SavedTrace) -> Void
     private let onOCRFailed: (Error, SavedTrace) -> Void
+    private let onScrollingCaptureCompleted: (Int, Int, Error?) -> Void
+    private let onScrollingCaptureFailed: (Error) -> Void
     private let captureService = ScreenCaptureService()
     private let ocrService = VisionOCRService()
+    private let scrollingCapture = ScrollingCaptureSessionController()
     private var overlayWindows: [CaptureOverlayWindow] = []
     private var windowTargets: [CGWindowID: WindowCaptureTarget] = [:]
     private var pendingPurpose: CapturePurpose = .screenshot
@@ -33,7 +37,9 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         onTraceChanged: @escaping () -> Void,
         onRecordingSourceSelected: @escaping (RecordingCaptureSource) -> Void,
         onOCRCompleted: @escaping (OCRDocument, SavedTrace) -> Void,
-        onOCRFailed: @escaping (Error, SavedTrace) -> Void
+        onOCRFailed: @escaping (Error, SavedTrace) -> Void,
+        onScrollingCaptureCompleted: @escaping (Int, Int, Error?) -> Void,
+        onScrollingCaptureFailed: @escaping (Error) -> Void
     ) {
         self.store = store
         self.model = model
@@ -42,6 +48,8 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         self.onRecordingSourceSelected = onRecordingSourceSelected
         self.onOCRCompleted = onOCRCompleted
         self.onOCRFailed = onOCRFailed
+        self.onScrollingCaptureCompleted = onScrollingCaptureCompleted
+        self.onScrollingCaptureFailed = onScrollingCaptureFailed
     }
 
     func beginRegionCapture() {
@@ -52,10 +60,26 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         beginRegionCapture(purpose: .ocr)
     }
 
+    func beginScrollingCapture() {
+        beginRegionCapture(purpose: .scrollingCapture)
+    }
+
+    @discardableResult
+    func showScrollingCaptureControlIfActive() -> Bool {
+        guard scrollingCapture.isActive else { return false }
+        scrollingCapture.showExisting()
+        return true
+    }
+
     private func beginRegionCapture(purpose: CapturePurpose) {
         guard canBeginCapture(), ensurePermission() else { return }
         pendingPurpose = purpose
-        showOverlays(mode: .region(action: .screenshot))
+        let action: CaptureOverlayAction = switch purpose {
+        case .recordingRegion: .recording
+        case .scrollingCapture: .scrollingCapture
+        default: .screenshot
+        }
+        showOverlays(mode: .region(action: action))
     }
 
     func beginWindowCapture() {
@@ -169,6 +193,13 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             onRecordingSourceSelected(source)
             return
         }
+        if case .scrollingCapture = purpose {
+            dismissOverlays()
+            windowTargets.removeAll()
+            pendingPurpose = .screenshot
+            startScrollingCapture(displayID: displayID, localRect: rect)
+            return
+        }
         finishCapture(purpose: purpose) {
             try await self.captureService.capture(globalDisplayRect: globalRect)
         }
@@ -202,7 +233,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         switch purpose {
         case .screenshot, .ocr:
             break
-        case .recordingRegion, .recordingWindow:
+        case .scrollingCapture, .recordingRegion, .recordingWindow:
             return
         }
         guard !isFinishingCapture else { return }
@@ -227,7 +258,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                     quickAccess.show(trace: saved, image: image)
                 case .ocr:
                     await processOCR(cgImage: cgImage, saved: saved, thumbnail: image)
-                case .recordingRegion, .recordingWindow:
+                case .scrollingCapture, .recordingRegion, .recordingWindow:
                     break
                 }
             } catch {
@@ -236,12 +267,91 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         }
     }
 
-    private func saveCapturedImage(_ cgImage: CGImage) throws -> (SavedTrace, NSImage) {
+    private func startScrollingCapture(
+        displayID: CGDirectDisplayID,
+        localRect: CGRect
+    ) {
+        let sourceRect = localRect.standardized.integral
+        isPreparingCapture = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { isPreparingCapture = false }
+            do {
+                let target = try await captureService.prepareScrollingRegion(
+                    displayID: displayID,
+                    localDisplayRect: sourceRect,
+                    excludingProcessID: ProcessInfo.processInfo.processIdentifier
+                )
+                let capturedDisplayID = target.displayID
+                let capturedSourceRect = target.sourceRect
+                scrollingCapture.onCompleted = { [weak self] assembly, captureWarning in
+                    self?.completeScrollingCapture(
+                        assembly,
+                        displayID: capturedDisplayID,
+                        sourceRect: capturedSourceRect,
+                        captureWarning: captureWarning
+                    )
+                }
+                scrollingCapture.onFailed = { [weak self] error in
+                    self?.onScrollingCaptureFailed(error)
+                }
+                scrollingCapture.begin { [captureService] in
+                    try await captureService.captureScrollingRegion(target)
+                }
+            } catch {
+                onScrollingCaptureFailed(error)
+            }
+        }
+    }
+
+    private func completeScrollingCapture(
+        _ assembly: ScrollingCaptureAssembly,
+        displayID: CGDirectDisplayID,
+        sourceRect: CGRect,
+        captureWarning: Error?
+    ) {
+        do {
+            let (saved, image) = try saveCapturedImage(
+                assembly.image,
+                titlePrefix: "长截图"
+            )
+            let plan = assembly.plan(displayID: displayID, sourceRect: sourceRect)
+            var completed = saved
+            var archiveWarning: Error?
+            do {
+                completed = try store.attachScrollingCapture(
+                    plan,
+                    framePNGs: assembly.framePNGs,
+                    to: saved
+                )
+            } catch {
+                // The assembled PNG is already safe and immediately usable.
+                archiveWarning = error
+            }
+            model.setRecentTrace(completed, thumbnail: image)
+            onTraceChanged()
+            copyImageToClipboard(image)
+            quickAccess.show(trace: completed, image: image)
+            onScrollingCaptureCompleted(
+                assembly.frames.count,
+                assembly.image.height,
+                captureWarning ?? archiveWarning
+            )
+        } catch {
+            onScrollingCaptureFailed(error)
+        }
+    }
+
+    private func saveCapturedImage(
+        _ cgImage: CGImage,
+        titlePrefix: String = "截图"
+    ) throws -> (SavedTrace, NSImage) {
         let pngData = try ImageEncoding.pngData(from: cgImage)
         let saved = try store.saveScreenshot(
             pngData: pngData,
             width: cgImage.width,
-            height: cgImage.height
+            height: cgImage.height,
+            titlePrefix: titlePrefix
         )
         let image = ImageEncoding.nsImage(from: cgImage)
         return (saved, image)
@@ -269,7 +379,10 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     }
 
     private func canBeginCapture() -> Bool {
-        overlayWindows.isEmpty && !isPreparingCapture && !isFinishingCapture
+        overlayWindows.isEmpty
+            && !isPreparingCapture
+            && !isFinishingCapture
+            && !scrollingCapture.isActive
     }
 
     private func ensurePermission() -> Bool {

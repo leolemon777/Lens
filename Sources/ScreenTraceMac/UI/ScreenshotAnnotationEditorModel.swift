@@ -18,6 +18,7 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
     private var undoStack: [[ScreenshotAnnotation]] = []
     private var redoStack: [[ScreenshotAnnotation]] = []
     private var draftID = UUID()
+    private var draftPathPoints: [TracePoint] = []
     private var selectionInteractionActive = false
     private var activeTransform: ActiveTransform?
 
@@ -66,6 +67,14 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
     }
 
     func updateDraft(start: TracePoint, end: TracePoint) {
+        if selectedTool == .freehand {
+            if draftPathPoints.isEmpty {
+                appendDraftPathPoint(clamped(start))
+            }
+            appendDraftPathPoint(clamped(end))
+            draftAnnotation = makeFreehandAnnotation(id: draftID, points: draftPathPoints)
+            return
+        }
         draftAnnotation = makeAnnotation(
             id: draftID,
             start: clamped(start),
@@ -77,7 +86,17 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
     func commitDraft(start: TracePoint, end: TracePoint) -> Bool {
         let start = clamped(start)
         let end = clamped(end)
-        guard let annotation = makeAnnotation(id: draftID, start: start, end: end) else {
+        let annotation: ScreenshotAnnotation?
+        if selectedTool == .freehand {
+            if draftPathPoints.isEmpty {
+                appendDraftPathPoint(start)
+            }
+            appendDraftPathPoint(end)
+            annotation = makeFreehandAnnotation(id: draftID, points: draftPathPoints)
+        } else {
+            annotation = makeAnnotation(id: draftID, start: start, end: end)
+        }
+        guard let annotation else {
             cancelDraft()
             return false
         }
@@ -86,12 +105,14 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
         selectedAnnotationID = nil
         draftAnnotation = nil
         draftID = UUID()
+        draftPathPoints.removeAll(keepingCapacity: true)
         return true
     }
 
     func cancelDraft() {
         draftAnnotation = nil
         draftID = UUID()
+        draftPathPoints.removeAll(keepingCapacity: true)
     }
 
     func undo() {
@@ -244,12 +265,15 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
 
         let minimumExtent = 0.006
         let bounds: TraceRect
-        if selectedTool == .text && deltaX < minimumExtent && deltaY < minimumExtent {
+        if (selectedTool == .text || selectedTool == .step)
+            && deltaX < minimumExtent && deltaY < minimumExtent {
+            let defaultSize = selectedTool == .step ? 0.075 : 0.08
+            let defaultWidth = selectedTool == .step ? defaultSize : 0.26
             bounds = TraceRect(
-                x: min(start.x, 0.72),
-                y: min(start.y, 0.92),
-                width: 0.26,
-                height: 0.08
+                x: min(max(start.x - (selectedTool == .step ? defaultSize / 2 : 0), 0), 1 - defaultWidth),
+                y: min(max(start.y - (selectedTool == .step ? defaultSize / 2 : 0), 0), 1 - defaultSize),
+                width: defaultWidth,
+                height: defaultSize
             )
         } else {
             guard deltaX >= minimumExtent || deltaY >= minimumExtent else { return nil }
@@ -269,25 +293,106 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
                 blue: selectedColor.blue,
                 alpha: 0.10
             )
+        case .highlight:
+            TraceColor(
+                red: selectedColor.red,
+                green: selectedColor.green,
+                blue: selectedColor.blue,
+                alpha: 0.28
+            )
+        case .step:
+            selectedColor
         default:
             nil
         }
         let style = ScreenshotAnnotationStyle(
-            lineWidth: 0.006,
+            lineWidth: selectedTool == .highlight ? 0 : 0.006,
             fontSize: 0.045,
             color: selectedColor,
             fillColor: fillColor,
             intensity: selectedTool == .pixelate ? 0.055 : 0.035
         )
+        let annotationText: String? = switch selectedTool {
+        case .text: normalizedTextDraft
+        case .step: String(nextStepNumber)
+        default: nil
+        }
         return ScreenshotAnnotation(
             id: id,
             kind: selectedTool,
             bounds: bounds,
             start: selectedTool == .arrow ? start : nil,
             end: selectedTool == .arrow ? end : nil,
-            text: selectedTool == .text ? normalizedTextDraft : nil,
+            text: annotationText,
             style: style
         )
+    }
+
+    private func makeFreehandAnnotation(
+        id: UUID,
+        points: [TracePoint]
+    ) -> ScreenshotAnnotation? {
+        let simplified = simplifyPath(points, minimumDistance: 0.0015)
+        guard simplified.count >= 2,
+              let bounds = ScreenshotAnnotationGeometry.bounds(for: simplified),
+              let first = simplified.first,
+              let last = simplified.last,
+              hypot(last.x - first.x, last.y - first.y) >= 0.006
+                || pathLength(simplified) >= 0.012 else {
+            return nil
+        }
+        return ScreenshotAnnotation(
+            id: id,
+            kind: .freehand,
+            bounds: bounds,
+            points: simplified,
+            style: ScreenshotAnnotationStyle(
+                lineWidth: 0.006,
+                color: selectedColor
+            )
+        )
+    }
+
+    private var nextStepNumber: Int {
+        annotations
+            .filter { $0.kind == .step }
+            .compactMap { $0.text.flatMap(Int.init) }
+            .max()
+            .map { $0 + 1 }
+            ?? 1
+    }
+
+    private func appendDraftPathPoint(_ point: TracePoint) {
+        guard let last = draftPathPoints.last else {
+            draftPathPoints.append(point)
+            return
+        }
+        guard hypot(point.x - last.x, point.y - last.y) >= 0.0008 else { return }
+        draftPathPoints.append(point)
+    }
+
+    private func simplifyPath(
+        _ points: [TracePoint],
+        minimumDistance: Double
+    ) -> [TracePoint] {
+        guard let first = points.first else { return [] }
+        var result = [first]
+        for point in points.dropFirst() {
+            guard let last = result.last else { continue }
+            if hypot(point.x - last.x, point.y - last.y) >= minimumDistance {
+                result.append(point)
+            }
+        }
+        if let last = points.last, result.last != last {
+            result.append(last)
+        }
+        return result
+    }
+
+    private func pathLength(_ points: [TracePoint]) -> Double {
+        zip(points, points.dropFirst()).reduce(0) { partial, pair in
+            partial + hypot(pair.1.x - pair.0.x, pair.1.y - pair.0.y)
+        }
     }
 
     private var normalizedTextDraft: String {

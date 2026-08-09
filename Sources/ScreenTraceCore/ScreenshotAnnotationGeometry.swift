@@ -89,6 +89,11 @@ public enum ScreenshotAnnotationGeometry {
         if let end = annotation.end {
             result.end = TracePoint(x: end.x + deltaX, y: end.y + deltaY)
         }
+        if let points = annotation.points {
+            result.points = points.map {
+                TracePoint(x: $0.x + deltaX, y: $0.y + deltaY)
+            }
+        }
         return result
     }
 
@@ -139,6 +144,14 @@ public enum ScreenshotAnnotationGeometry {
 
         var result = annotation
         result.bounds = resizedBounds
+        if let points = annotation.points {
+            result.points = remapped(
+                points,
+                from: original,
+                to: resizedBounds,
+                minimumExtent: minimumExtent
+            )
+        }
         if annotation.kind == .text {
             let scale = resizedBounds.height / max(original.height, minimumExtent)
             result.style.fontSize = min(max(annotation.style.fontSize * scale, 0.012), 0.25)
@@ -164,6 +177,28 @@ public enum ScreenshotAnnotationGeometry {
         )
     }
 
+    public static func bounds(
+        for points: [TracePoint],
+        minimumExtent: Double = 0.006
+    ) -> TraceRect? {
+        guard let first = points.first else { return nil }
+        var minX = first.x
+        var maxX = first.x
+        var minY = first.y
+        var maxY = first.y
+        for point in points.dropFirst() {
+            minX = min(minX, point.x)
+            maxX = max(maxX, point.x)
+            minY = min(minY, point.y)
+            maxY = max(maxY, point.y)
+        }
+        return bounds(
+            from: TracePoint(x: minX, y: minY),
+            to: TracePoint(x: maxX, y: maxY),
+            minimumExtent: minimumExtent
+        )
+    }
+
     private static func applicableHandles(
         for annotation: ScreenshotAnnotation
     ) -> [ScreenshotAnnotationResizeHandle] {
@@ -186,6 +221,14 @@ public enum ScreenshotAnnotationGeometry {
                     y: annotation.bounds.y + annotation.bounds.height
                 )
             return distance(from: point, toSegmentFrom: start, to: end) <= tolerance
+        }
+        if annotation.kind == .freehand, let points = annotation.points {
+            if points.count == 1 {
+                return hypot(point.x - points[0].x, point.y - points[0].y) <= tolerance
+            }
+            return zip(points, points.dropFirst()).contains { start, end in
+                distance(from: point, toSegmentFrom: start, to: end) <= tolerance
+            }
         }
         return point.x >= annotation.bounds.x - tolerance
             && point.x <= annotation.bounds.x + annotation.bounds.width + tolerance
@@ -245,5 +288,23 @@ public enum ScreenshotAnnotationGeometry {
             x: min(max(point.x, 0), 1),
             y: min(max(point.y, 0), 1)
         )
+    }
+
+    private static func remapped(
+        _ points: [TracePoint],
+        from source: TraceRect,
+        to destination: TraceRect,
+        minimumExtent: Double
+    ) -> [TracePoint] {
+        let sourceWidth = max(source.width, minimumExtent)
+        let sourceHeight = max(source.height, minimumExtent)
+        return points.map { point in
+            let relativeX = (point.x - source.x) / sourceWidth
+            let relativeY = (point.y - source.y) / sourceHeight
+            return TracePoint(
+                x: min(max(destination.x + relativeX * destination.width, 0), 1),
+                y: min(max(destination.y + relativeY * destination.height, 0), 1)
+            )
+        }
     }
 }

@@ -105,11 +105,51 @@ final class ScreenshotAnnotationGeometryTests: XCTestCase {
         XCTAssertEqual(resized.bounds, TraceRect(x: 0.6, y: 0.2, width: 0.25, height: 0.7))
     }
 
+    func testFreehandHitTestingMovementAndResizeTransformEveryPoint() {
+        let path = annotation(
+            kind: .freehand,
+            bounds: TraceRect(x: 0.1, y: 0.2, width: 0.4, height: 0.2),
+            points: [
+                TracePoint(x: 0.1, y: 0.2),
+                TracePoint(x: 0.3, y: 0.4),
+                TracePoint(x: 0.5, y: 0.2)
+            ]
+        )
+
+        XCTAssertEqual(
+            ScreenshotAnnotationGeometry.topmostAnnotationID(
+                in: [path],
+                at: TracePoint(x: 0.3, y: 0.39),
+                tolerance: 0.02
+            ),
+            path.id
+        )
+        XCTAssertNil(ScreenshotAnnotationGeometry.topmostAnnotationID(
+            in: [path],
+            at: TracePoint(x: 0.3, y: 0.7),
+            tolerance: 0.02
+        ))
+
+        let moved = ScreenshotAnnotationGeometry.moved(path, byX: 0.1, y: 0.2)
+        XCTAssertEqual(moved.points?.first, TracePoint(x: 0.2, y: 0.4))
+
+        let resized = ScreenshotAnnotationGeometry.resized(
+            path,
+            handle: .bottomRight,
+            to: TracePoint(x: 0.9, y: 0.8)
+        )
+        XCTAssertEqual(resized.points?[0], TracePoint(x: 0.1, y: 0.2))
+        XCTAssertEqual(resized.points?[1].x ?? 0, 0.5, accuracy: 0.000_001)
+        XCTAssertEqual(resized.points?[1].y ?? 0, 0.8, accuracy: 0.000_001)
+        XCTAssertEqual(resized.points?[2], TracePoint(x: 0.9, y: 0.2))
+    }
+
     private func annotation(
         kind: ScreenshotAnnotationKind,
         bounds: TraceRect,
         start: TracePoint? = nil,
         end: TracePoint? = nil,
+        points: [TracePoint]? = nil,
         text: String? = nil,
         style: ScreenshotAnnotationStyle = ScreenshotAnnotationStyle()
     ) -> ScreenshotAnnotation {
@@ -118,6 +158,7 @@ final class ScreenshotAnnotationGeometryTests: XCTestCase {
             bounds: bounds,
             start: start,
             end: end,
+            points: points,
             text: text,
             style: style
         )

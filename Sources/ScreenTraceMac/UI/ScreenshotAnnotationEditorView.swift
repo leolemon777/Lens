@@ -226,7 +226,11 @@ struct ScreenshotAnnotationEditorView: View {
     }
 
     private func annotationGesture(in imageRect: CGRect) -> some Gesture {
-        DragGesture(minimumDistance: model.isSelectionMode || model.selectedTool == .text ? 0 : 1)
+        DragGesture(
+            minimumDistance: model.isSelectionMode
+                || model.selectedTool == .text
+                || model.selectedTool == .step ? 0 : 1
+        )
             .onChanged { value in
                 let start = normalizedPoint(value.startLocation, in: imageRect)
                 let end = normalizedPoint(value.location, in: imageRect)
@@ -306,6 +310,39 @@ struct ScreenshotAnnotationEditorView: View {
             context.stroke(Path(ellipseIn: rect), with: .color(color), lineWidth: lineWidth)
         case .arrow:
             drawArrow(annotation, context: &context, imageRect: imageRect, color: color, lineWidth: lineWidth)
+        case .freehand:
+            drawFreehand(
+                annotation,
+                context: &context,
+                imageRect: imageRect,
+                color: color,
+                lineWidth: lineWidth
+            )
+        case .highlight:
+            context.fill(
+                Path(roundedRect: rect, cornerRadius: max(2, rect.height * 0.12)),
+                with: .color(color.opacity(annotation.style.fillColor?.alpha ?? 0.28))
+            )
+        case .step:
+            let diameter = min(rect.width, rect.height)
+            let circle = CGRect(
+                x: rect.midX - diameter / 2,
+                y: rect.midY - diameter / 2,
+                width: diameter,
+                height: diameter
+            )
+            context.fill(Path(ellipseIn: circle), with: .color(color))
+            context.stroke(
+                Path(ellipseIn: circle.insetBy(dx: 1, dy: 1)),
+                with: .color(.white.opacity(0.85)),
+                lineWidth: max(1.5, lineWidth * 0.34)
+            )
+            context.draw(
+                Text(annotation.text ?? "1")
+                    .font(.system(size: max(12, diameter * 0.50), weight: .bold))
+                    .foregroundStyle(.white),
+                at: CGPoint(x: circle.midX, y: circle.midY)
+            )
         case .text:
             let text = Text(annotation.text ?? "文字")
                 .font(.system(size: max(12, annotation.style.fontSize * min(imageRect.width, imageRect.height)), weight: .bold))
@@ -324,6 +361,26 @@ struct ScreenshotAnnotationEditorView: View {
                 at: CGPoint(x: rect.midX, y: rect.midY)
             )
         }
+    }
+
+    private func drawFreehand(
+        _ annotation: ScreenshotAnnotation,
+        context: inout GraphicsContext,
+        imageRect: CGRect,
+        color: Color,
+        lineWidth: CGFloat
+    ) {
+        guard let points = annotation.points, let first = points.first else { return }
+        var path = Path()
+        path.move(to: viewPoint(first, in: imageRect))
+        for point in points.dropFirst() {
+            path.addLine(to: viewPoint(point, in: imageRect))
+        }
+        context.stroke(
+            path,
+            with: .color(color),
+            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+        )
     }
 
     private func drawArrow(
@@ -422,6 +479,9 @@ private extension ScreenshotAnnotationKind {
         case .rectangle: "矩形"
         case .ellipse: "椭圆"
         case .arrow: "箭头"
+        case .freehand: "画笔"
+        case .highlight: "高亮"
+        case .step: "编号"
         case .text: "文字"
         case .blur: "模糊"
         case .pixelate: "像素"
@@ -433,6 +493,9 @@ private extension ScreenshotAnnotationKind {
         case .rectangle: "rectangle"
         case .ellipse: "circle"
         case .arrow: "arrow.up.right"
+        case .freehand: "pencil.tip"
+        case .highlight: "highlighter"
+        case .step: "1.circle"
         case .text: "textformat"
         case .blur: "drop"
         case .pixelate: "square.grid.3x3"

@@ -135,6 +135,32 @@ struct ScreenshotAnnotationRenderer {
                 context.strokeEllipse(in: rect)
             case .arrow:
                 drawArrow(annotation, in: context, width: CGFloat(width), height: CGFloat(height), lineWidth: lineWidth)
+            case .freehand:
+                drawFreehand(
+                    annotation,
+                    in: context,
+                    width: CGFloat(width),
+                    height: CGFloat(height)
+                )
+            case .highlight:
+                context.setFillColor(cgColor(
+                    annotation.style.fillColor
+                        ?? TraceColor(
+                            red: annotation.style.color.red,
+                            green: annotation.style.color.green,
+                            blue: annotation.style.color.blue,
+                            alpha: 0.28
+                        )
+                ))
+                context.addPath(CGPath(
+                    roundedRect: rect,
+                    cornerWidth: max(2, rect.height * 0.12),
+                    cornerHeight: max(2, rect.height * 0.12),
+                    transform: nil
+                ))
+                context.fillPath()
+            case .step:
+                drawStep(annotation, in: context, rect: rect)
             case .text:
                 drawText(annotation, in: context, rect: rect, shortestSide: shortestSide)
             case .blur, .pixelate:
@@ -147,6 +173,61 @@ struct ScreenshotAnnotationRenderer {
             throw ScreenshotAnnotationRendererError.unableToCreateBitmap
         }
         return output
+    }
+
+    private func drawFreehand(
+        _ annotation: ScreenshotAnnotation,
+        in context: CGContext,
+        width: CGFloat,
+        height: CGFloat
+    ) {
+        guard let points = annotation.points, let first = points.first else { return }
+        context.move(to: topLeftPoint(first, width: width, height: height))
+        for point in points.dropFirst() {
+            context.addLine(to: topLeftPoint(point, width: width, height: height))
+        }
+        context.strokePath()
+    }
+
+    private func drawStep(
+        _ annotation: ScreenshotAnnotation,
+        in context: CGContext,
+        rect: CGRect
+    ) {
+        let diameter = min(rect.width, rect.height)
+        guard diameter >= 2 else { return }
+        let circle = CGRect(
+            x: rect.midX - diameter / 2,
+            y: rect.midY - diameter / 2,
+            width: diameter,
+            height: diameter
+        )
+        context.setFillColor(cgColor(annotation.style.color))
+        context.fillEllipse(in: circle)
+        context.setStrokeColor(CGColor(gray: 1, alpha: 0.86))
+        context.setLineWidth(max(1.5, diameter * 0.035))
+        context.strokeEllipse(in: circle.insetBy(dx: 1, dy: 1))
+
+        let label = annotation.text ?? "1"
+        let fontSize = max(12, diameter * 0.50)
+        let font = CTFontCreateWithName("Helvetica-Bold" as CFString, fontSize, nil)
+        let attributes: [CFString: Any] = [
+            kCTFontAttributeName: font,
+            kCTForegroundColorAttributeName: CGColor(gray: 1, alpha: 1)
+        ]
+        let line = CTLineCreateWithAttributedString(
+            CFAttributedStringCreate(nil, label as CFString, attributes as CFDictionary)
+        )
+        let bounds = CTLineGetBoundsWithOptions(line, [.useOpticalBounds])
+        context.saveGState()
+        context.translateBy(
+            x: circle.midX - bounds.midX,
+            y: circle.midY + bounds.midY
+        )
+        context.scaleBy(x: 1, y: -1)
+        context.textPosition = .zero
+        CTLineDraw(line, context)
+        context.restoreGState()
     }
 
     private func drawArrow(

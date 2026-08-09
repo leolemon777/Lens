@@ -5,13 +5,21 @@ import XCTest
 final class ScreenshotEditPlanTests: XCTestCase {
     func testPlanRoundTripsAllAnnotationKinds() throws {
         let annotations = ScreenshotAnnotationKind.allCases.enumerated().map { index, kind in
-            ScreenshotAnnotation(
+            let text: String? = switch kind {
+            case .text: "ScreenTrace"
+            case .step: "1"
+            default: nil
+            }
+            return ScreenshotAnnotation(
                 id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index + 1))!,
                 kind: kind,
                 bounds: TraceRect(x: 0.1, y: 0.2, width: 0.3, height: 0.2),
                 start: kind == .arrow ? TracePoint(x: 0.1, y: 0.2) : nil,
                 end: kind == .arrow ? TracePoint(x: 0.4, y: 0.4) : nil,
-                text: kind == .text ? "ScreenTrace" : nil,
+                points: kind == .freehand
+                    ? [TracePoint(x: 0.1, y: 0.2), TracePoint(x: 0.4, y: 0.4)]
+                    : nil,
+                text: text,
                 style: ScreenshotAnnotationStyle(
                     lineWidth: 0.008,
                     fontSize: 0.05,

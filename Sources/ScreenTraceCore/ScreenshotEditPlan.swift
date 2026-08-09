@@ -4,6 +4,9 @@ public enum ScreenshotAnnotationKind: String, Codable, CaseIterable, Sendable {
     case rectangle
     case ellipse
     case arrow
+    case freehand
+    case highlight
+    case step
     case text
     case blur
     case pixelate
@@ -63,6 +66,8 @@ public struct ScreenshotAnnotation: Codable, Equatable, Identifiable, Sendable {
     /// Normalized start and end points used by directional tools such as arrows.
     public var start: TracePoint?
     public var end: TracePoint?
+    /// Normalized top-left-origin points used by freehand paths.
+    public var points: [TracePoint]?
     public var text: String?
     public var style: ScreenshotAnnotationStyle
 
@@ -72,6 +77,7 @@ public struct ScreenshotAnnotation: Codable, Equatable, Identifiable, Sendable {
         bounds: TraceRect,
         start: TracePoint? = nil,
         end: TracePoint? = nil,
+        points: [TracePoint]? = nil,
         text: String? = nil,
         style: ScreenshotAnnotationStyle = ScreenshotAnnotationStyle()
     ) {
@@ -80,13 +86,14 @@ public struct ScreenshotAnnotation: Codable, Equatable, Identifiable, Sendable {
         self.bounds = bounds
         self.start = start
         self.end = end
+        self.points = points
         self.text = text
         self.style = style
     }
 }
 
 public struct ScreenshotEditPlan: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.1"
+    public static let currentSchemaVersion = "0.2"
 
     public let schemaVersion: String
     public let sourceDimensions: TraceDimensions

@@ -90,6 +90,57 @@ final class ScreenshotAnnotationRendererTests: XCTestCase {
         XCTAssertLessThan(outsideDifference, 2)
     }
 
+    func testFreehandHighlightAndStepRenderAsDistinctEditableObjects() throws {
+        let source = try solidImage(width: 500, height: 320, gray: 1)
+        let plan = ScreenshotEditPlan(
+            sourceDimensions: TraceDimensions(width: source.width, height: source.height),
+            annotations: [
+                ScreenshotAnnotation(
+                    kind: .freehand,
+                    bounds: TraceRect(x: 0.08, y: 0.12, width: 0.72, height: 0.26),
+                    points: [
+                        TracePoint(x: 0.08, y: 0.28),
+                        TracePoint(x: 0.28, y: 0.12),
+                        TracePoint(x: 0.52, y: 0.38),
+                        TracePoint(x: 0.80, y: 0.18)
+                    ],
+                    style: ScreenshotAnnotationStyle(lineWidth: 0.018, color: .blue)
+                ),
+                ScreenshotAnnotation(
+                    kind: .highlight,
+                    bounds: TraceRect(x: 0.12, y: 0.52, width: 0.56, height: 0.14),
+                    style: ScreenshotAnnotationStyle(
+                        lineWidth: 0,
+                        color: .yellow,
+                        fillColor: TraceColor(red: 1, green: 0.8, blue: 0, alpha: 0.34)
+                    )
+                ),
+                ScreenshotAnnotation(
+                    kind: .step,
+                    bounds: TraceRect(x: 0.78, y: 0.62, width: 0.12, height: 0.18),
+                    text: "3",
+                    style: ScreenshotAnnotationStyle(color: .red, fillColor: .red)
+                )
+            ]
+        )
+
+        let output = try ScreenshotAnnotationRenderer().render(source: source, plan: plan)
+        let pixels = try rgbaPixels(output)
+
+        XCTAssertGreaterThan(
+            countPixels(pixels, matching: { $0.b > 190 && $0.r < 150 }),
+            500
+        )
+        XCTAssertGreaterThan(
+            countPixels(pixels, matching: { $0.r > 235 && $0.g > 210 && $0.b < 230 }),
+            2_000
+        )
+        XCTAssertGreaterThan(
+            countPixels(pixels, matching: { $0.r > 210 && $0.g < 130 && $0.b < 130 }),
+            700
+        )
+    }
+
     func testMismatchedDimensionsAreRejected() throws {
         let source = try solidImage(width: 100, height: 80, gray: 1)
         let plan = ScreenshotEditPlan(sourceDimensions: TraceDimensions(width: 101, height: 80))

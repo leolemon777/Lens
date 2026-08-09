@@ -52,6 +52,77 @@ final class ScreenshotAnnotationEditorModelTests: XCTestCase {
         XCTAssertEqual(model.annotations[0].bounds.width, 0.26)
     }
 
+    func testStepToolNumbersClicksAndHighlightUsesTranslucentFill() {
+        let model = makeModel()
+        model.activateDrawingTool(.step)
+
+        XCTAssertTrue(model.commitDraft(
+            start: TracePoint(x: 0.2, y: 0.25),
+            end: TracePoint(x: 0.2, y: 0.25)
+        ))
+        XCTAssertTrue(model.commitDraft(
+            start: TracePoint(x: 0.7, y: 0.65),
+            end: TracePoint(x: 0.7, y: 0.65)
+        ))
+        XCTAssertEqual(model.annotations.map(\.text), ["1", "2"])
+        XCTAssertEqual(model.annotations[0].bounds.width, 0.075, accuracy: 0.000_001)
+
+        model.activateDrawingTool(.highlight)
+        XCTAssertTrue(model.commitDraft(
+            start: TracePoint(x: 0.1, y: 0.4),
+            end: TracePoint(x: 0.8, y: 0.5)
+        ))
+        XCTAssertEqual(model.annotations.last?.kind, .highlight)
+        XCTAssertEqual(model.annotations.last?.style.fillColor?.alpha, 0.28)
+        XCTAssertEqual(model.annotations.last?.style.lineWidth, 0)
+    }
+
+    func testFreehandCollectsPathAndMovesAsOneObject() {
+        let model = makeModel()
+        model.activateDrawingTool(.freehand)
+        model.updateDraft(
+            start: TracePoint(x: 0.1, y: 0.2),
+            end: TracePoint(x: 0.2, y: 0.3)
+        )
+        model.updateDraft(
+            start: TracePoint(x: 0.1, y: 0.2),
+            end: TracePoint(x: 0.35, y: 0.25)
+        )
+
+        XCTAssertTrue(model.commitDraft(
+            start: TracePoint(x: 0.1, y: 0.2),
+            end: TracePoint(x: 0.48, y: 0.4)
+        ))
+        XCTAssertEqual(model.annotations[0].kind, .freehand)
+        XCTAssertEqual(model.annotations[0].points, [
+            TracePoint(x: 0.1, y: 0.2),
+            TracePoint(x: 0.2, y: 0.3),
+            TracePoint(x: 0.35, y: 0.25),
+            TracePoint(x: 0.48, y: 0.4)
+        ])
+
+        let originalFirst = model.annotations[0].points?.first
+        model.activateSelectionTool()
+        model.beginSelectionInteraction(
+            at: TracePoint(x: 0.2, y: 0.3),
+            hitTolerance: 0.08,
+            handleTolerance: 0.01
+        )
+        model.updateSelectionInteraction(to: TracePoint(x: 0.3, y: 0.4))
+        model.endSelectionInteraction()
+
+        XCTAssertEqual(
+            model.selectedAnnotation?.points?.first?.x ?? 0,
+            (originalFirst?.x ?? 0) + 0.1,
+            accuracy: 0.000_001
+        )
+        XCTAssertEqual(
+            model.selectedAnnotation?.points?.first?.y ?? 0,
+            (originalFirst?.y ?? 0) + 0.1,
+            accuracy: 0.000_001
+        )
+    }
+
     func testUndoRedoAndClearPreserveObjectHistory() {
         let model = makeModel()
         model.selectedTool = .ellipse

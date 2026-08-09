@@ -115,6 +115,48 @@ public struct TraceProjectStore: Sendable {
         return try JSONDecoder().decode(AutoEditPlan.self, from: data)
     }
 
+    public func writeAutoEditPlan(
+        _ requestedPlan: AutoEditPlan,
+        to packageURL: URL
+    ) throws -> SavedTrace {
+        var manifest = try loadManifest(from: packageURL)
+        guard manifest.kind == .recording else {
+            throw TraceProjectStoreError.incompatibleTraceKind
+        }
+        var plan = requestedPlan
+        plan.schemaVersion = AutoEditPlan.currentSchemaVersion
+        if let duration = manifest.durationSeconds,
+           duration >= VideoEditTimeline.minimumSegmentDurationSeconds {
+            plan.timeline = (plan.timeline ?? VideoEditTimeline(
+                sourceDurationSeconds: duration
+            )).normalized(sourceDurationSeconds: duration)
+        }
+
+        let relativePath = "edits/edit-plan.json"
+        let outputURL = packageURL.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(plan).write(to: outputURL, options: .atomic)
+
+        if !manifest.assets.contains(where: { $0.role == .editPlan }) {
+            manifest.assets.append(TraceAsset(role: .editPlan, relativePath: relativePath))
+        }
+        manifest.state = .processing
+        try writeManifest(manifest, to: packageURL)
+        let rawAssetURL = manifest.assets.first(where: { $0.role == .screenVideo })
+            .map { packageURL.appendingPathComponent($0.relativePath) }
+            ?? packageURL.appendingPathComponent("raw/screen.mp4")
+        return SavedTrace(
+            packageURL: packageURL,
+            rawAssetURL: rawAssetURL,
+            manifest: manifest
+        )
+    }
+
     public func loadRecordingSegmentIndex(from packageURL: URL) throws -> RecordingSegmentIndex {
         let data = try Data(contentsOf: packageURL.appendingPathComponent("events/segments.json"))
         return try JSONDecoder().decode(RecordingSegmentIndex.self, from: data)
@@ -663,6 +705,10 @@ public struct TraceProjectStore: Sendable {
         let clicks = try TraceEventReader.read(ClickEvent.self, from: session.clickEventsURL)
         let pointerEvents = try TraceEventReader.read(PointerEvent.self, from: session.pointerEventsURL)
         var plan = (try? loadAutoEditPlan(from: session.packageURL)) ?? AutoEditPlan()
+        plan.schemaVersion = AutoEditPlan.currentSchemaVersion
+        plan.timeline = (plan.timeline ?? VideoEditTimeline(
+            sourceDurationSeconds: durationSeconds
+        )).normalized(sourceDurationSeconds: durationSeconds)
         plan.cursor.keyframes = CursorPathPlanner().plan(events: pointerEvents)
         plan.interaction?.clickPulses = clicks.compactMap { click in
             guard click.phase == .down, let position = click.normalizedLocation else { return nil }

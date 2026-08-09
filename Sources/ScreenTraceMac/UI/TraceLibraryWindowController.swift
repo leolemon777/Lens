@@ -9,6 +9,7 @@ final class TraceLibraryWindowController {
     private let window: TraceLibraryWindow
 
     var onAnnotateRequested: ((SavedTrace, NSImage) -> Void)?
+    var onEditRecordingRequested: ((TraceLibraryEntry) -> Void)?
 
     init(store: TraceProjectStore) {
         self.store = store
@@ -66,6 +67,10 @@ final class TraceLibraryWindowController {
     }
 
     private func open(_ entry: TraceLibraryEntry) {
+        if entry.manifest.kind == .recording {
+            onEditRecordingRequested?(entry)
+            return
+        }
         let url = FileManager.default.fileExists(atPath: entry.displayAssetURL.path)
             ? entry.displayAssetURL
             : entry.packageURL

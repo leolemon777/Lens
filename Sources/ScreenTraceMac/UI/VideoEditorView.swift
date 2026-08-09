@@ -1,0 +1,558 @@
+import AVKit
+import Combine
+import ScreenTraceCore
+import SwiftUI
+
+struct VideoEditorView: View {
+    @ObservedObject var model: VideoEditorModel
+    @ObservedObject var playback: VideoEditorPlaybackController
+    let title: String
+    let onSave: () -> Void
+    let onClose: () -> Void
+
+    private let playbackTimer = Timer.publish(
+        every: 0.1,
+        on: .main,
+        in: .common
+    ).autoconnect()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider().opacity(0.32)
+            HStack(spacing: 0) {
+                workspace
+                Divider().opacity(0.32)
+                inspector
+            }
+        }
+        .frame(minWidth: 1_060, minHeight: 680)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(nsColor: .windowBackgroundColor),
+                    Color.black.opacity(0.075)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .onReceive(playbackTimer) { _ in playback.refreshTime() }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(.red.opacity(0.14))
+                    .frame(width: 38, height: 38)
+                Image(systemName: "timeline.selection")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.red)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(1)
+                Label("非破坏性编辑 · 原始录屏与独立轨道不会改写", systemImage: "lock.shield")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if model.isDirty {
+                Text("未保存")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.orange.opacity(0.12), in: Capsule())
+            }
+            Button(action: model.undo) {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .disabled(!model.canUndo)
+            .help("撤销")
+            Button(action: model.redo) {
+                Image(systemName: "arrow.uturn.forward")
+            }
+            .disabled(!model.canRedo)
+            .help("重做")
+            Button(action: onSave) {
+                HStack(spacing: 6) {
+                    if model.isProcessing {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(model.isProcessing
+                        ? "正在生成"
+                        : (model.isDirty ? "保存并重新生成" : "重新生成预览"))
+                }
+            }
+                .buttonStyle(.borderedProminent)
+                .tint(.cyan)
+                .disabled(model.isProcessing)
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 28, height: 28)
+                    .background(.primary.opacity(0.055), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("关闭")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+    }
+
+    private var workspace: some View {
+        VStack(spacing: 14) {
+            preview
+            transport
+            timeline
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var preview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(.black)
+            if playback.player.currentItem == nil {
+                VStack(spacing: 10) {
+                    if playback.isLoading {
+                        ProgressView()
+                            .controlSize(.large)
+                        Text("正在构建非破坏性预览…")
+                    } else {
+                        Image(systemName: "play.rectangle.on.rectangle")
+                            .font(.system(size: 34, weight: .light))
+                        Text(playback.errorMessage ?? "预览将在素材加载后出现")
+                    }
+                }
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white.opacity(0.68))
+            } else {
+                VideoPlayer(player: playback.player)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .padding(8)
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(.white.opacity(0.10), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.22), radius: 22, y: 12)
+        .aspectRatio(16 / 9, contentMode: .fit)
+        .frame(maxHeight: 460)
+    }
+
+    private var transport: some View {
+        HStack(spacing: 11) {
+            Button(action: playback.togglePlayback) {
+                Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 32, height: 32)
+                    .background(.primary.opacity(0.07), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(playback.isLoading || playback.durationSeconds <= 0)
+            Text(timeText(playback.currentTimeSeconds))
+                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .trailing)
+            Slider(
+                value: Binding(
+                    get: { playback.currentTimeSeconds },
+                    set: { playback.seek(to: $0) }
+                ),
+                in: 0...max(playback.durationSeconds, 0.01)
+            )
+            Text(timeText(playback.durationSeconds))
+                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .leading)
+            Text("成片 \(timeText(model.outputDurationSeconds))")
+                .font(.system(size: 9.5, weight: .bold))
+                .foregroundStyle(.cyan)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.cyan.opacity(0.11), in: Capsule())
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var timeline: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Label("时间线", systemImage: "timeline.selection")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("\(model.activeSegments.count) 个片段")
+                    .font(.system(size: 9.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                timelineButton("设为入点", symbol: "inset.filled.leadinghalf.rectangle") {
+                    model.trimSelectedStart(toOutputTime: playback.currentTimeSeconds)
+                }
+                timelineButton("分割", symbol: "scissors") {
+                    model.split(atOutputTime: playback.currentTimeSeconds)
+                }
+                timelineButton("设为出点", symbol: "inset.filled.trailinghalf.rectangle") {
+                    model.trimSelectedEnd(toOutputTime: playback.currentTimeSeconds)
+                }
+                timelineButton("移出成片", symbol: "trash") {
+                    model.removeSelectedSegment()
+                }
+                .disabled(!model.canRemoveSelectedSegment)
+            }
+            GeometryReader { proxy in
+                let total = max(model.outputDurationSeconds, 0.001)
+                let spacing = CGFloat(max(model.activeSegments.count - 1, 0)) * 4
+                let availableWidth = max(proxy.size.width - spacing, 1)
+                ZStack(alignment: .leading) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(model.activeSegments.enumerated()), id: \.element.id) { index, segment in
+                            Button {
+                                model.selectSegment(segment.id)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("片段 \(index + 1)")
+                                        .font(.system(size: 9.5, weight: .bold))
+                                    Text(String(format: "%.1f–%.1f s · %.2gx", segment.sourceStartSeconds, segment.sourceEndSeconds, segment.playbackRate))
+                                        .font(.system(size: 8.5, weight: .medium, design: .rounded))
+                                        .opacity(0.74)
+                                }
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                                .padding(.horizontal, 9)
+                                .background(
+                                    LinearGradient(
+                                        colors: index.isMultiple(of: 2)
+                                            ? [.cyan.opacity(0.76), .blue.opacity(0.72)]
+                                            : [.indigo.opacity(0.76), .purple.opacity(0.68)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    in: RoundedRectangle(cornerRadius: 9)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 9)
+                                        .stroke(
+                                            model.selectedSegmentID == segment.id
+                                                ? .white.opacity(0.95)
+                                                : .white.opacity(0.16),
+                                            lineWidth: model.selectedSegmentID == segment.id ? 2 : 1
+                                        )
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .frame(
+                                width: max(
+                                    availableWidth * segment.outputDurationSeconds / total,
+                                    56
+                                )
+                            )
+                        }
+                    }
+                    Rectangle()
+                        .fill(.white)
+                        .frame(width: 2)
+                        .shadow(color: .black.opacity(0.45), radius: 2)
+                        .offset(x: availableWidth * min(
+                            max(playback.currentTimeSeconds / total, 0),
+                            1
+                        ))
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(height: 58)
+
+            if let selected = model.selectedSegment {
+                HStack(spacing: 8) {
+                    Text("所选片段速度")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Picker("速度", selection: Binding(
+                        get: { selected.playbackRate },
+                        set: { model.setSelectedPlaybackRate($0) }
+                    )) {
+                        Text("0.5×").tag(0.5)
+                        Text("1×").tag(1.0)
+                        Text("1.5×").tag(1.5)
+                        Text("2×").tag(2.0)
+                        Text("3×").tag(3.0)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 260)
+                    Spacer()
+                    Text("源素材 \(timeText(model.sourceDurationSeconds))")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(13)
+        .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var inspector: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                inspectorSection("画面", symbol: "rectangle.inset.filled") {
+                    Toggle("背景画布", isOn: Binding(
+                        get: { model.canvasEnabled },
+                        set: { model.setCanvasEnabled($0) }
+                    ))
+                    valueSlider(
+                        "留白",
+                        value: Binding(
+                            get: { model.plan.canvas?.margin ?? 0.055 },
+                            set: { model.setCanvasMargin($0) }
+                        ),
+                        range: 0...0.18
+                    )
+                    valueSlider(
+                        "圆角",
+                        value: Binding(
+                            get: { model.plan.canvas?.cornerRadius ?? 0.026 },
+                            set: { model.setCanvasCornerRadius($0) }
+                        ),
+                        range: 0...0.12
+                    )
+                    HStack {
+                        Text("背景")
+                        Spacer()
+                        presetButton(colors: [.gray, .teal]) {
+                            model.setCanvasPreset(topHex: "#D9D6CF", bottomHex: "#9EA9A7")
+                        }
+                        presetButton(colors: [.indigo, .purple]) {
+                            model.setCanvasPreset(topHex: "#667EEA", bottomHex: "#764BA2")
+                        }
+                        presetButton(colors: [.orange, .pink]) {
+                            model.setCanvasPreset(topHex: "#F6D365", bottomHex: "#FDA085")
+                        }
+                        presetButton(colors: [.black, .gray]) {
+                            model.setCanvasPreset(topHex: "#232526", bottomHex: "#414345")
+                        }
+                    }
+                }
+
+                inspectorSection("运镜与交互", symbol: "camera.metering.center.weighted") {
+                    Toggle("自动运镜", isOn: Binding(
+                        get: { model.cameraMotionEnabled },
+                        set: { model.setCameraMotionEnabled($0) }
+                    ))
+                    valueSlider(
+                        "缩放强度",
+                        value: Binding(
+                            get: { model.plan.camera.zoomIntensity },
+                            set: { model.setZoomIntensity($0) }
+                        ),
+                        range: 0...1
+                    )
+                    Toggle("重绘光标", isOn: Binding(
+                        get: { model.cursorEnabled },
+                        set: { model.setCursorEnabled($0) }
+                    ))
+                    valueSlider(
+                        "光标大小",
+                        value: Binding(
+                            get: { model.plan.cursor.scale },
+                            set: { model.setCursorScale($0) }
+                        ),
+                        range: 0.7...2.2
+                    )
+                    Toggle("点击反馈", isOn: Binding(
+                        get: { model.clickPulseEnabled },
+                        set: { model.setClickPulseEnabled($0) }
+                    ))
+                }
+
+                inspectorSection("讲解人像", symbol: "person.crop.circle") {
+                    Toggle("显示摄像头", isOn: Binding(
+                        get: { model.presenterEnabled },
+                        set: { model.setPresenterEnabled($0) }
+                    ))
+                    .disabled(!model.hasCameraTrack)
+                    if model.hasCameraTrack {
+                        HStack(spacing: 6) {
+                            Text("形状")
+                            Spacer()
+                            choiceButton(
+                                "圆形",
+                                selected: model.plan.presenterCamera?.shape != .roundedRectangle
+                            ) {
+                                model.setPresenterShape(.circle)
+                            }
+                            choiceButton(
+                                "圆角矩形",
+                                selected: model.plan.presenterCamera?.shape == .roundedRectangle
+                            ) {
+                                model.setPresenterShape(.roundedRectangle)
+                            }
+                        }
+                        HStack(spacing: 5) {
+                            Text("位置")
+                            Spacer()
+                            ForEach([
+                                ("左上", AutoEditPlan.PresenterCamera.Anchor.topLeading),
+                                ("右上", AutoEditPlan.PresenterCamera.Anchor.topTrailing),
+                                ("左下", AutoEditPlan.PresenterCamera.Anchor.bottomLeading),
+                                ("右下", AutoEditPlan.PresenterCamera.Anchor.bottomTrailing)
+                            ], id: \.0) { item in
+                                choiceButton(
+                                    item.0,
+                                    selected: model.plan.presenterCamera?.anchor == item.1
+                                ) {
+                                    model.setPresenterAnchor(item.1)
+                                }
+                            }
+                        }
+                        valueSlider(
+                            "大小",
+                            value: Binding(
+                                get: { model.plan.presenterCamera?.size ?? 0.19 },
+                                set: { model.setPresenterSize($0) }
+                            ),
+                            range: 0.10...0.36
+                        )
+                        Toggle("镜像", isOn: Binding(
+                            get: { model.plan.presenterCamera?.isMirrored != false },
+                            set: { model.setPresenterMirrored($0) }
+                        ))
+                    } else {
+                        Text("这条录屏没有摄像头原始轨。")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                inspectorSection("声音", symbol: "waveform") {
+                    Toggle("启用混音", isOn: Binding(
+                        get: { model.audioEnabled },
+                        set: { model.setAudioEnabled($0) }
+                    ))
+                    valueSlider(
+                        "系统声音",
+                        value: Binding(
+                            get: { model.plan.audio?.systemVolume ?? 1 },
+                            set: { model.setSystemVolume($0) }
+                        ),
+                        range: 0...1.5
+                    )
+                    if model.hasMicrophoneTrack {
+                        valueSlider(
+                            "麦克风",
+                            value: Binding(
+                                get: { model.plan.audio?.microphoneVolume ?? 1 },
+                                set: { model.setMicrophoneVolume($0) }
+                            ),
+                            range: 0...1.5
+                        )
+                        Toggle("讲话时自动压低系统声", isOn: Binding(
+                            get: { model.plan.audio?.ducksSystemUnderNarration != false },
+                            set: { model.setDuckingEnabled($0) }
+                        ))
+                    }
+                }
+
+                Button("恢复到打开时的方案", action: model.resetToAutomaticPlan)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(14)
+        }
+        .frame(width: 292)
+        .background(.thinMaterial)
+    }
+
+    private func inspectorSection<Content: View>(
+        _ title: String,
+        symbol: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 11, weight: .semibold))
+            Divider().opacity(0.3)
+            content()
+                .font(.system(size: 10.5, weight: .medium))
+        }
+        .padding(12)
+        .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func valueSlider(
+        _ title: String,
+        value: Binding<Double>,
+        range: ClosedRange<Double>
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .frame(width: 62, alignment: .leading)
+            Slider(value: value, in: range)
+            Text(String(format: "%.2f", value.wrappedValue))
+                .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, alignment: .trailing)
+        }
+    }
+
+    private func presetButton(
+        colors: [Color],
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Circle()
+                .fill(LinearGradient(
+                    colors: colors,
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ))
+                .frame(width: 20, height: 20)
+                .overlay(Circle().stroke(.white.opacity(0.35), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func timelineButton(
+        _ title: String,
+        symbol: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 9, weight: .semibold))
+        }
+        .buttonStyle(.borderless)
+    }
+
+    private func choiceButton(
+        _ title: String,
+        selected: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 8.5, weight: .semibold))
+                .foregroundStyle(selected ? Color.white : Color.secondary)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(
+                    selected ? Color.cyan.opacity(0.76) : Color.primary.opacity(0.055),
+                    in: Capsule()
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func timeText(_ seconds: Double) -> String {
+        let value = max(seconds.isFinite ? seconds : 0, 0)
+        let total = Int(value.rounded(.down))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}

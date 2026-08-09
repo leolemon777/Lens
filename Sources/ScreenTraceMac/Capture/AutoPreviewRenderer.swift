@@ -52,7 +52,8 @@ final class AutoPreviewRenderer {
                 screenURL: temporaryURL,
                 cameraURL: cameraURL,
                 outputURL: outputURL,
-                layout: presenter
+                layout: presenter,
+                timeline: plan.timeline
             )
         } catch {
             lastPresenterCameraError = error
@@ -69,7 +70,18 @@ final class AutoPreviewRenderer {
         outputURL: URL,
         plan: AutoEditPlan
     ) async throws -> URL {
-        let asset = AVURLAsset(url: inputURL)
+        let asset: AVAsset
+        if let timeline = plan.timeline {
+            asset = try await VideoTimelineCompositionBuilder().build(
+                inputURL: inputURL,
+                timeline: timeline,
+                includesVideo: true,
+                includesAudio: true,
+                requiresVideo: true
+            )
+        } else {
+            asset = AVURLAsset(url: inputURL)
+        }
         let cursorImage = try systemCursorImage()
         let clickRingImage = try clickRingImage()
         let composition = try await withCheckedThrowingContinuation {
@@ -197,9 +209,19 @@ final class AutoPreviewRenderer {
         clickRingImage: CIImage
     ) -> CIImage {
         let extent = source.extent
-        let camera = EffectTimeline.cameraState(
-            at: time,
-            keyframes: plan.camera.keyframes
+        let sourceTime = plan.timeline?.position(atOutputTime: time)?.sourceTimeSeconds
+            ?? time
+        let plannedCamera = EffectTimeline.cameraState(
+            at: sourceTime,
+            keyframes: plan.camera.mode == "off" ? [] : plan.camera.keyframes
+        )
+        let intensityMultiplier = min(max(plan.camera.zoomIntensity, 0), 1) / 0.42
+        let camera = CameraFrameState(
+            scale: min(max(
+                1 + (plannedCamera.scale - 1) * intensityMultiplier,
+                1
+            ), 3),
+            center: plannedCamera.center
         )
         let scale = max(camera.scale, 1)
         let viewportSize = CGSize(
@@ -234,7 +256,7 @@ final class AutoPreviewRenderer {
 
         if let interaction = plan.interaction, interaction.showsClickPulse {
             for pulse in interaction.clickPulses {
-                let elapsed = time - pulse.time
+                let elapsed = sourceTime - pulse.time
                 guard elapsed >= 0, elapsed <= pulse.duration else { continue }
                 let progress = min(max(elapsed / pulse.duration, 0), 1)
                 let eased = progress * progress * (3 - 2 * progress)
@@ -265,17 +287,19 @@ final class AutoPreviewRenderer {
             }
         }
 
-        let cursorPosition = EffectTimeline.cursorPosition(
-            at: time,
-            keyframes: plan.cursor.keyframes
-        )
+        let cursorPosition = plan.cursor.isEnabled == false
+            ? nil
+            : EffectTimeline.cursorPosition(
+                at: sourceTime,
+                keyframes: plan.cursor.keyframes
+            )
         let cursorIsIdle: Bool = {
             guard plan.cursor.hidesWhenIdle,
-                  let lastActivity = EffectTimeline.lastCursorActivity(
-                      at: time,
+                      let lastActivity = EffectTimeline.lastCursorActivity(
+                      at: sourceTime,
                       keyframes: plan.cursor.keyframes
                   ) else { return false }
-            return time - lastActivity > 1.8
+            return sourceTime - lastActivity > 1.8
         }()
 
         if let cursorPosition, !cursorIsIdle {

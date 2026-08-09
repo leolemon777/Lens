@@ -108,6 +108,65 @@ final class AudioMixdownRendererTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testTimelineCutsRemainAlignedAcrossVideoSystemAndMicrophoneAudio() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTimelineMixTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let videoURL = directory.appendingPathComponent("video.mp4")
+        let systemURL = directory.appendingPathComponent("system.caf")
+        let rawURL = directory.appendingPathComponent("raw.mp4")
+        let editedURL = directory.appendingPathComponent("edited.mp4")
+        let microphoneURL = directory.appendingPathComponent("microphone.caf")
+        let outputURL = directory.appendingPathComponent("mixed.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: videoURL,
+            frameCount: 48,
+            framesPerSecond: 24
+        )
+        try makeTone(at: systemURL, frameCount: 96_000) { _ in 0.04 }
+        try makeTone(at: microphoneURL, frameCount: 96_000) { frame in
+            (9_600..<86_400).contains(frame) ? 0.16 : 0
+        }
+        try await mux(videoURL: videoURL, audioURL: systemURL, outputURL: rawURL)
+        var editPlan = AutoEditPlan()
+        editPlan.canvas?.isEnabled = false
+        editPlan.presenterCamera?.isEnabled = false
+        editPlan.timeline = VideoEditTimeline(
+            sourceDurationSeconds: 2,
+            segments: [
+                VideoEditSegment(sourceStartSeconds: 0.2, sourceEndSeconds: 0.7),
+                VideoEditSegment(
+                    sourceStartSeconds: 1,
+                    sourceEndSeconds: 1.8,
+                    playbackRate: 2
+                )
+            ]
+        )
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: rawURL,
+            outputURL: editedURL,
+            plan: editPlan
+        )
+
+        _ = try await AudioMixdownRenderer().render(
+            inputURL: editedURL,
+            microphoneURL: microphoneURL,
+            outputURL: outputURL,
+            plan: try XCTUnwrap(editPlan.audio),
+            timeline: editPlan.timeline
+        )
+
+        let output = AVURLAsset(url: outputURL)
+        let duration = try await output.load(.duration).seconds
+        let videoTracks = try await output.loadTracks(withMediaType: .video)
+        let audioTracks = try await output.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(videoTracks.count, 1)
+        XCTAssertEqual(audioTracks.count, 1)
+        XCTAssertEqual(duration, 0.9, accuracy: 0.10)
+    }
+
     private func makeTone(
         at url: URL,
         frameCount: AVAudioFrameCount,

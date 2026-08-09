@@ -33,10 +33,22 @@ final class AudioMixdownRenderer: @unchecked Sendable {
         inputURL: URL,
         microphoneURL: URL,
         outputURL: URL,
-        plan: AutoEditPlan.Audio
+        plan: AutoEditPlan.Audio,
+        timeline: VideoEditTimeline? = nil
     ) async throws -> URL {
         let inputAsset = AVURLAsset(url: inputURL)
-        let microphoneAsset = AVURLAsset(url: microphoneURL)
+        let microphoneAsset: AVAsset
+        if let timeline {
+            microphoneAsset = try await VideoTimelineCompositionBuilder().build(
+                inputURL: microphoneURL,
+                timeline: timeline,
+                includesVideo: false,
+                includesAudio: true,
+                requiresAudio: true
+            )
+        } else {
+            microphoneAsset = AVURLAsset(url: microphoneURL)
+        }
         guard let sourceVideo = try await inputAsset.loadTracks(withMediaType: .video).first else {
             throw AudioMixdownRendererError.missingVideoTrack
         }
@@ -91,10 +103,26 @@ final class AudioMixdownRenderer: @unchecked Sendable {
             let duckedVolume = Float(plan.systemVolume * plan.duckedSystemVolume)
             systemParameters.setVolume(baseVolume, at: .zero)
             if plan.ducksSystemUnderNarration {
-                let activity = try analyzer.analyze(
+                let sourceActivity = try analyzer.analyze(
                     url: microphoneURL,
                     thresholdDecibels: plan.narrationThresholdDecibels
                 )
+                let activity: [NarrationActivityRange]
+                if let timeline {
+                    activity = sourceActivity.flatMap { sourceRange in
+                        timeline.outputRanges(forSourceRange: VideoEditTimeRange(
+                            startSeconds: sourceRange.startSeconds,
+                            endSeconds: sourceRange.endSeconds
+                        )).map {
+                            NarrationActivityRange(
+                                startSeconds: $0.startSeconds,
+                                endSeconds: $0.endSeconds
+                            )
+                        }
+                    }
+                } else {
+                    activity = sourceActivity
+                }
                 let envelopes = Self.duckingEnvelopes(
                     activity: activity,
                     attackSeconds: plan.duckAttackSeconds,

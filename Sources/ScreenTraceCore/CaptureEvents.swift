@@ -78,6 +78,8 @@ public struct ClickEvent: Codable, Equatable, Sendable {
 }
 
 public struct AutoEditPlan: Codable, Equatable, Sendable {
+    public static let currentSchemaVersion = "0.2"
+
     public struct ClickPulse: Codable, Equatable, Sendable {
         public let time: Double
         public let position: TracePoint
@@ -172,17 +174,21 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     }
 
     public struct Cursor: Codable, Equatable, Sendable {
+        /// Nil in legacy projects means enabled.
+        public var isEnabled: Bool?
         public var smoothing: Double
         public var scale: Double
         public var hidesWhenIdle: Bool
         public var keyframes: [CursorKeyframe]
 
         public init(
+            isEnabled: Bool? = true,
             smoothing: Double,
             scale: Double,
             hidesWhenIdle: Bool,
             keyframes: [CursorKeyframe] = []
         ) {
+            self.isEnabled = isEnabled
             self.smoothing = smoothing
             self.scale = scale
             self.hidesWhenIdle = hidesWhenIdle
@@ -284,7 +290,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         }
     }
 
-    public let schemaVersion: String
+    public var schemaVersion: String
     public var preset: String
     public var cursor: Cursor
     public var camera: Camera
@@ -292,16 +298,18 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     public var audio: Audio?
     public var canvas: Canvas?
     public var interaction: Interaction?
+    public var timeline: VideoEditTimeline?
 
     public init(
-        schemaVersion: String = "0.1",
+        schemaVersion: String = AutoEditPlan.currentSchemaVersion,
         preset: String = "natural",
         cursor: Cursor = Cursor(smoothing: 0.72, scale: 1.15, hidesWhenIdle: true),
         camera: Camera = Camera(mode: "event-driven", zoomIntensity: 0.42, followPointer: true),
         presenterCamera: PresenterCamera? = PresenterCamera(),
         audio: Audio? = Audio(),
         canvas: Canvas? = Canvas(),
-        interaction: Interaction? = Interaction()
+        interaction: Interaction? = Interaction(),
+        timeline: VideoEditTimeline? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.preset = preset
@@ -311,5 +319,6 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         self.audio = audio
         self.canvas = canvas
         self.interaction = interaction
+        self.timeline = timeline
     }
 }

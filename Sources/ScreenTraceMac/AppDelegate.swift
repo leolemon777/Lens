@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let permissionCenter = PermissionCenterWindowController()
     private lazy var annotationEditor = ScreenshotAnnotationEditorWindowController(store: store)
     private lazy var traceLibrary = TraceLibraryWindowController(store: store)
+    private lazy var videoEditor = VideoEditorWindowController(store: store)
 
     private lazy var captureCoordinator = CaptureCoordinator(
         store: store,
@@ -57,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self?.handle(action)
     }
     private var hotKeyManager: GlobalHotKeyManager?
+    private var processingRecordingPackages: Set<URL> = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ProcessInfo.processInfo.disableSuddenTermination()
@@ -106,6 +108,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         traceLibrary.onAnnotateRequested = { [weak self] trace, image in
             self?.annotationEditor.show(trace: trace, fallbackImage: image)
+        }
+        traceLibrary.onEditRecordingRequested = { [weak self] entry in
+            self?.videoEditor.show(entry: entry)
+        }
+        videoEditor.onSaved = { [weak self] saved in
+            guard let self else { return }
+            traceLibrary.reloadIfVisible()
+            toast.show(
+                title: "编辑方案已保存",
+                detail: "正在按新时间线和效果重新生成预览；原始轨道保持不变",
+                symbol: "timeline.selection"
+            )
+            await processRecording(saved)
+        }
+        videoEditor.onFailure = { [weak self] error in
+            self?.toast.show(
+                title: "编辑方案未保存",
+                detail: error.localizedDescription,
+                symbol: "exclamationmark.arrow.triangle.2.circlepath"
+            )
         }
     }
 
@@ -542,6 +564,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func processRecording(_ saved: SavedTrace) async {
+        let packageKey = saved.packageURL.standardizedFileURL
+        while processingRecordingPackages.contains(packageKey) {
+            do {
+                try await Task.sleep(for: .milliseconds(120))
+                try Task.checkCancellation()
+            } catch {
+                return
+            }
+        }
+        processingRecordingPackages.insert(packageKey)
+        defer { processingRecordingPackages.remove(packageKey) }
         do {
             let plan = try store.loadAutoEditPlan(from: saved.packageURL)
             let outputURL = saved.packageURL.appendingPathComponent("previews/auto.mp4")
@@ -569,7 +602,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         inputURL: outputURL,
                         microphoneURL: microphoneURL,
                         outputURL: mixedURL,
-                        plan: audioPlan
+                        plan: audioPlan,
+                        timeline: plan.timeline
                     )
                     _ = try FileManager.default.replaceItemAt(
                         outputURL,

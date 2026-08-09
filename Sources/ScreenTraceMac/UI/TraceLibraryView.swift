@@ -207,7 +207,13 @@ private struct TraceLibraryCard: View {
                 .foregroundStyle(.secondary)
 
                 HStack(spacing: 7) {
-                    cardButton("打开", symbol: "arrow.up.right.square", action: onOpen)
+                    cardButton(
+                        entry.manifest.kind == .screenshot ? "打开" : "编辑",
+                        symbol: entry.manifest.kind == .screenshot
+                            ? "arrow.up.right.square"
+                            : "timeline.selection",
+                        action: onOpen
+                    )
                     if entry.manifest.kind == .screenshot {
                         cardButton("复制", symbol: "doc.on.doc", action: onCopy)
                         cardButton("标注", symbol: "pencil.tip", action: onAnnotate)

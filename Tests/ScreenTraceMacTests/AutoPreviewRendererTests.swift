@@ -82,6 +82,49 @@ final class AutoPreviewRendererTests: XCTestCase {
     }
 
     @MainActor
+    func testNonDestructiveTimelineCutsAndSpeedsRenderedPreview() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTimelineRenderTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inputURL = directory.appendingPathComponent("input.mp4")
+        let outputURL = directory.appendingPathComponent("timeline.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: inputURL,
+            frameCount: 48,
+            framesPerSecond: 24
+        )
+        var plan = AutoEditPlan()
+        plan.presenterCamera?.isEnabled = false
+        plan.timeline = VideoEditTimeline(
+            sourceDurationSeconds: 2,
+            segments: [
+                VideoEditSegment(
+                    sourceStartSeconds: 0.25,
+                    sourceEndSeconds: 0.75
+                ),
+                VideoEditSegment(
+                    sourceStartSeconds: 1,
+                    sourceEndSeconds: 1.75,
+                    playbackRate: 2
+                )
+            ]
+        )
+
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: inputURL,
+            outputURL: outputURL,
+            plan: plan
+        )
+
+        let output = AVURLAsset(url: outputURL)
+        let duration = try await output.load(.duration).seconds
+        let videoTracks = try await output.loadTracks(withMediaType: .video)
+        XCTAssertEqual(videoTracks.count, 1)
+        XCTAssertEqual(duration, 0.875, accuracy: 0.09)
+    }
+
+    @MainActor
     func testSyntheticPresenterCameraTrackIsCompositedIntoAutomaticPreview() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTracePresenterTests-\(UUID().uuidString)", isDirectory: true)

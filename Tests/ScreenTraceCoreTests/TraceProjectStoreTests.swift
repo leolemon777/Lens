@@ -437,11 +437,49 @@ final class TraceProjectStoreTests: XCTestCase {
 
         XCTAssertTrue(plan.camera.keyframes.contains { $0.reason == .clickFocus })
         XCTAssertEqual(plan.interaction?.clickPulses.count, 1)
+        XCTAssertEqual(plan.timeline?.sourceDurationSeconds, 4)
+        XCTAssertEqual(plan.timeline?.segments.count, 1)
         let persisted = try JSONDecoder().decode(
             AutoEditPlan.self,
             from: Data(contentsOf: session.editPlanURL)
         )
         XCTAssertEqual(persisted, plan)
+    }
+
+    func testEditorPlanSaveNormalizesTimelineAndMarksPreviewForProcessing() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let session = try store.beginRecording(width: 640, height: 360)
+        try Data([1, 2, 3]).write(to: session.videoURL)
+        let saved = try store.finalizeRecording(
+            session,
+            durationSeconds: 10,
+            state: .ready
+        )
+        var plan = try store.loadAutoEditPlan(from: saved.packageURL)
+        plan.timeline = VideoEditTimeline(
+            sourceDurationSeconds: 40,
+            segments: [VideoEditSegment(
+                sourceStartSeconds: 2,
+                sourceEndSeconds: 30,
+                playbackRate: 9
+            )]
+        )
+
+        let updated = try store.writeAutoEditPlan(plan, to: saved.packageURL)
+        let reloaded = try store.loadAutoEditPlan(from: saved.packageURL)
+
+        XCTAssertEqual(updated.manifest.state, .processing)
+        XCTAssertEqual(reloaded.schemaVersion, AutoEditPlan.currentSchemaVersion)
+        XCTAssertEqual(reloaded.timeline?.sourceDurationSeconds, 10)
+        XCTAssertEqual(reloaded.timeline?.segments.first?.sourceEndSeconds, 10)
+        XCTAssertEqual(reloaded.timeline?.segments.first?.playbackRate, 4)
+        XCTAssertEqual(
+            updated.manifest.assets.filter { $0.role == .editPlan }.count,
+            1
+        )
     }
 
     func testLaunchRecoveryMarksCapturingProjectsInterruptedWithoutDeletingMedia() throws {

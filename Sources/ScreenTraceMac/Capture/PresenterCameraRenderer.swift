@@ -31,10 +31,22 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         screenURL: URL,
         cameraURL: URL,
         outputURL: URL,
-        layout: AutoEditPlan.PresenterCamera
+        layout: AutoEditPlan.PresenterCamera,
+        timeline: VideoEditTimeline? = nil
     ) async throws -> URL {
         let screenAsset = AVURLAsset(url: screenURL)
-        let cameraAsset = AVURLAsset(url: cameraURL)
+        let cameraAsset: AVAsset
+        if let timeline {
+            cameraAsset = try await VideoTimelineCompositionBuilder().build(
+                inputURL: cameraURL,
+                timeline: timeline,
+                includesVideo: true,
+                includesAudio: false,
+                requiresVideo: true
+            )
+        } else {
+            cameraAsset = AVURLAsset(url: cameraURL)
+        }
         guard let screenTrack = try await screenAsset.loadTracks(withMediaType: .video).first else {
             throw PresenterCameraRendererError.missingScreenTrack
         }

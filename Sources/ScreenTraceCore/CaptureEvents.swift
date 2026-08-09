@@ -78,7 +78,7 @@ public struct ClickEvent: Codable, Equatable, Sendable {
 }
 
 public struct AutoEditPlan: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.6"
+    public static let currentSchemaVersion = "0.7"
 
     public struct ClickPulse: Codable, Equatable, Sendable {
         public let time: Double
@@ -519,6 +519,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     public var interaction: Interaction?
     public var timeline: VideoEditTimeline?
     public var captions: Captions?
+    public var videoAnnotations: [VideoAnnotation]?
 
     public init(
         schemaVersion: String = AutoEditPlan.currentSchemaVersion,
@@ -530,7 +531,8 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         canvas: Canvas? = Canvas(),
         interaction: Interaction? = Interaction(),
         timeline: VideoEditTimeline? = nil,
-        captions: Captions? = Captions()
+        captions: Captions? = Captions(),
+        videoAnnotations: [VideoAnnotation]? = []
     ) {
         self.schemaVersion = schemaVersion
         self.preset = preset
@@ -542,5 +544,6 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         self.interaction = interaction
         self.timeline = timeline
         self.captions = captions
+        self.videoAnnotations = videoAnnotations
     }
 }

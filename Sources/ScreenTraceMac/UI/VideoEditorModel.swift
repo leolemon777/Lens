@@ -4,11 +4,27 @@ import ScreenTraceCore
 
 @MainActor
 final class VideoEditorModel: ObservableObject {
+    struct VideoAnnotationOutputBand: Identifiable {
+        let annotationID: UUID
+        let rangeIndex: Int
+        let range: VideoEditTimeRange
+
+        var id: String { "\(annotationID.uuidString)-\(rangeIndex)" }
+    }
+
     @Published private(set) var plan: AutoEditPlan
     @Published private(set) var selectedSegmentID: UUID?
     @Published private(set) var isDirty = false
     @Published private(set) var isProcessing = false
     @Published private(set) var presenterThumbnail: NSImage?
+    @Published private(set) var isVideoAnnotationEditing = false
+    @Published private(set) var isVideoAnnotationSelectionMode = false
+    @Published private(set) var selectedVideoAnnotationID: UUID?
+    @Published private(set) var videoAnnotationDraft: ScreenshotAnnotation?
+    @Published var selectedVideoAnnotationTool: ScreenshotAnnotationKind = .arrow
+    @Published var selectedVideoAnnotationColor: TraceColor = .red
+    @Published var videoAnnotationTextDraft = "重点"
+    @Published var defaultVideoAnnotationDurationSeconds = 2.0
 
     let sourceDurationSeconds: Double
     let hasCameraTrack: Bool
@@ -22,11 +38,27 @@ final class VideoEditorModel: ObservableObject {
     private var undoHistory: [AutoEditPlan] = []
     private var redoHistory: [AutoEditPlan] = []
     private var presenterInteractionStartPlan: AutoEditPlan?
+    private var videoAnnotationDraftID = UUID()
+    private var videoAnnotationDraftPath: [TracePoint] = []
+    private var videoAnnotationInteractionActive = false
+    private var activeVideoAnnotationTransform: ActiveVideoAnnotationTransform?
     private var captionPlacementCache: (
         configuration: AutoEditPlan.Captions,
         timeline: VideoEditTimeline,
         cues: [CaptionCue]
     )?
+
+    private struct ActiveVideoAnnotationTransform {
+        enum Operation {
+            case move
+            case resize(ScreenshotAnnotationResizeHandle)
+        }
+
+        let baseline: AutoEditPlan
+        let original: VideoAnnotation
+        let startPoint: TracePoint
+        let operation: Operation
+    }
 
     init(
         plan requestedPlan: AutoEditPlan,
@@ -41,6 +73,9 @@ final class VideoEditorModel: ObservableObject {
         plan.timeline = (plan.timeline ?? VideoEditTimeline(
             sourceDurationSeconds: duration
         )).normalized(sourceDurationSeconds: duration)
+        plan.videoAnnotations = (plan.videoAnnotations ?? []).compactMap {
+            $0.normalized(sourceDurationSeconds: duration)
+        }
         plan.captions?.customCues?.sort {
             if $0.sourceStartSeconds != $1.sourceStartSeconds {
                 return $0.sourceStartSeconds < $1.sourceStartSeconds
@@ -127,6 +162,48 @@ final class VideoEditorModel: ObservableObject {
     var captionsEnabled: Bool { plan.captions?.isEnabled == true }
     var captionSourceCues: [CaptionSourceCue] {
         plan.captions?.customCues ?? automaticCaptionSourceCues
+    }
+    var videoAnnotations: [VideoAnnotation] { plan.videoAnnotations ?? [] }
+    var selectedVideoAnnotation: VideoAnnotation? {
+        guard let selectedVideoAnnotationID else { return nil }
+        return videoAnnotations.first { $0.id == selectedVideoAnnotationID }
+    }
+    var videoAnnotationOutputBands: [VideoAnnotationOutputBand] {
+        videoAnnotations.flatMap { item in
+            VideoAnnotationPlanner.outputRanges(for: item, timeline: timeline)
+                .enumerated()
+                .map { index, range in
+                    VideoAnnotationOutputBand(
+                        annotationID: item.id,
+                        rangeIndex: index,
+                        range: range
+                    )
+                }
+        }
+    }
+
+    func visibleVideoAnnotations(
+        atOutputTime outputTime: Double
+    ) -> [(item: VideoAnnotation, opacity: Double)] {
+        let contributions = timeline.sourceContributions(atOutputTime: outputTime)
+        return videoAnnotations.compactMap { item in
+            let isOnContributingSource = contributions.contains {
+                $0.sourceTimeSeconds >= item.sourceStartSeconds
+                    && $0.sourceTimeSeconds < item.sourceEndSeconds
+            }
+            let opacity = min(contributions.reduce(0) { partial, contribution in
+                partial + item.opacity(atSourceTime: contribution.sourceTimeSeconds)
+                    * contribution.weight
+            }, 1)
+            guard opacity > 0.000_1
+                    || item.id == selectedVideoAnnotationID && isOnContributingSource else {
+                return nil
+            }
+            return (item, max(
+                opacity,
+                item.id == selectedVideoAnnotationID ? 0.22 : 0.001
+            ))
+        }
     }
 
     func selectSegment(_ id: UUID) {
@@ -486,6 +563,326 @@ final class VideoEditorModel: ObservableObject {
         isDirty = plan != savedPlan
     }
 
+    func activateVideoAnnotationSelection() {
+        cancelVideoAnnotationDraft()
+        cancelVideoAnnotationInteraction()
+        isVideoAnnotationEditing = true
+        isVideoAnnotationSelectionMode = true
+    }
+
+    func selectVideoAnnotation(_ id: UUID) {
+        guard videoAnnotations.contains(where: { $0.id == id }) else { return }
+        activateVideoAnnotationSelection()
+        selectedVideoAnnotationID = id
+        if let selected = selectedVideoAnnotation {
+            selectedVideoAnnotationColor = selected.annotation.style.color
+            if selected.annotation.kind == .text, let text = selected.annotation.text {
+                videoAnnotationTextDraft = text
+            }
+            defaultVideoAnnotationDurationSeconds = selected.sourceDurationSeconds
+        }
+    }
+
+    func activateVideoAnnotationTool(_ tool: ScreenshotAnnotationKind) {
+        cancelVideoAnnotationDraft()
+        cancelVideoAnnotationInteraction()
+        selectedVideoAnnotationTool = tool
+        isVideoAnnotationEditing = true
+        isVideoAnnotationSelectionMode = false
+        selectedVideoAnnotationID = nil
+    }
+
+    func finishVideoAnnotationEditing() {
+        cancelVideoAnnotationDraft()
+        endVideoAnnotationInteraction()
+        isVideoAnnotationEditing = false
+    }
+
+    func updateVideoAnnotationDraft(start: TracePoint, end: TracePoint) {
+        guard isVideoAnnotationEditing, !isVideoAnnotationSelectionMode else { return }
+        if selectedVideoAnnotationTool == .freehand {
+            if videoAnnotationDraftPath.isEmpty {
+                appendVideoAnnotationDraftPoint(clamped(start))
+            }
+            appendVideoAnnotationDraftPoint(clamped(end))
+            videoAnnotationDraft = makeVideoFreehandAnnotation(
+                id: videoAnnotationDraftID,
+                points: videoAnnotationDraftPath
+            )
+        } else {
+            videoAnnotationDraft = makeVideoAnnotation(
+                id: videoAnnotationDraftID,
+                start: clamped(start),
+                end: clamped(end)
+            )
+        }
+    }
+
+    @discardableResult
+    func commitVideoAnnotationDraft(
+        start: TracePoint,
+        end: TracePoint,
+        atOutputTime outputTime: Double
+    ) -> Bool {
+        guard isVideoAnnotationEditing,
+              !isVideoAnnotationSelectionMode,
+              sourceDurationSeconds >= VideoEditTimeline.minimumSegmentDurationSeconds else {
+            cancelVideoAnnotationDraft()
+            return false
+        }
+        let startPoint = clamped(start)
+        let endPoint = clamped(end)
+        let annotation: ScreenshotAnnotation?
+        if selectedVideoAnnotationTool == .freehand {
+            if videoAnnotationDraftPath.isEmpty {
+                appendVideoAnnotationDraftPoint(startPoint)
+            }
+            appendVideoAnnotationDraftPoint(endPoint)
+            annotation = makeVideoFreehandAnnotation(
+                id: videoAnnotationDraftID,
+                points: videoAnnotationDraftPath
+            )
+        } else {
+            annotation = makeVideoAnnotation(
+                id: videoAnnotationDraftID,
+                start: startPoint,
+                end: endPoint
+            )
+        }
+        guard let annotation else {
+            cancelVideoAnnotationDraft()
+            return false
+        }
+
+        let minimumDuration = VideoEditTimeline.minimumSegmentDurationSeconds
+        let sourceStart = min(
+            max(sourceTime(atOutputTime: outputTime), 0),
+            max(sourceDurationSeconds - minimumDuration, 0)
+        )
+        let requestedDuration = min(max(
+            defaultVideoAnnotationDurationSeconds,
+            minimumDuration
+        ), 30)
+        let sourceEnd = min(
+            max(sourceStart + requestedDuration, sourceStart + minimumDuration),
+            sourceDurationSeconds
+        )
+        let item = VideoAnnotation(
+            annotation: annotation,
+            sourceStartSeconds: sourceStart,
+            sourceEndSeconds: sourceEnd
+        )
+        mutate { plan in
+            if plan.videoAnnotations == nil { plan.videoAnnotations = [] }
+            plan.videoAnnotations?.append(item)
+        }
+        videoAnnotationDraft = nil
+        videoAnnotationDraftID = UUID()
+        videoAnnotationDraftPath.removeAll(keepingCapacity: true)
+        return true
+    }
+
+    func cancelVideoAnnotationDraft() {
+        videoAnnotationDraft = nil
+        videoAnnotationDraftID = UUID()
+        videoAnnotationDraftPath.removeAll(keepingCapacity: true)
+    }
+
+    func beginVideoAnnotationSelectionInteraction(
+        at point: TracePoint,
+        outputTime: Double,
+        hitTolerance: Double,
+        handleTolerance: Double
+    ) {
+        guard isVideoAnnotationEditing,
+              isVideoAnnotationSelectionMode,
+              !videoAnnotationInteractionActive else { return }
+        videoAnnotationInteractionActive = true
+        let point = clamped(point)
+        let contributions = timeline.sourceContributions(atOutputTime: outputTime)
+        let activeItems = videoAnnotations.filter {
+            let item = $0
+            return contributions.contains {
+                $0.sourceTimeSeconds >= item.sourceStartSeconds
+                    && $0.sourceTimeSeconds < item.sourceEndSeconds
+            }
+        }
+
+        if let selected = selectedVideoAnnotation,
+           activeItems.contains(where: { $0.id == selected.id }),
+           let handle = ScreenshotAnnotationGeometry.resizeHandle(
+               for: selected.annotation,
+               at: point,
+               tolerance: handleTolerance
+           ) {
+            activeVideoAnnotationTransform = ActiveVideoAnnotationTransform(
+                baseline: plan,
+                original: selected,
+                startPoint: point,
+                operation: .resize(handle)
+            )
+            return
+        }
+
+        guard let hitID = ScreenshotAnnotationGeometry.topmostAnnotationID(
+            in: activeItems.map(\.annotation),
+            at: point,
+            tolerance: hitTolerance
+        ), let hit = activeItems.first(where: { $0.id == hitID }) else {
+            selectedVideoAnnotationID = nil
+            activeVideoAnnotationTransform = nil
+            return
+        }
+        selectedVideoAnnotationID = hitID
+        selectedVideoAnnotationColor = hit.annotation.style.color
+        if hit.annotation.kind == .text, let text = hit.annotation.text {
+            videoAnnotationTextDraft = text
+        }
+        activeVideoAnnotationTransform = ActiveVideoAnnotationTransform(
+            baseline: plan,
+            original: hit,
+            startPoint: point,
+            operation: .move
+        )
+    }
+
+    func updateVideoAnnotationSelectionInteraction(to point: TracePoint) {
+        guard videoAnnotationInteractionActive,
+              let activeVideoAnnotationTransform else { return }
+        let annotation: ScreenshotAnnotation
+        switch activeVideoAnnotationTransform.operation {
+        case .move:
+            annotation = ScreenshotAnnotationGeometry.moved(
+                activeVideoAnnotationTransform.original.annotation,
+                byX: clamped(point).x - activeVideoAnnotationTransform.startPoint.x,
+                y: clamped(point).y - activeVideoAnnotationTransform.startPoint.y
+            )
+        case let .resize(handle):
+            annotation = ScreenshotAnnotationGeometry.resized(
+                activeVideoAnnotationTransform.original.annotation,
+                handle: handle,
+                to: clamped(point)
+            )
+        }
+        var updated = plan
+        guard let index = updated.videoAnnotations?.firstIndex(where: {
+            $0.id == activeVideoAnnotationTransform.original.id
+        }) else { return }
+        updated.videoAnnotations?[index].annotation = annotation
+        guard updated != plan else { return }
+        plan = updated
+        isDirty = plan != savedPlan
+    }
+
+    func endVideoAnnotationInteraction() {
+        guard videoAnnotationInteractionActive else { return }
+        videoAnnotationInteractionActive = false
+        guard let activeVideoAnnotationTransform else { return }
+        self.activeVideoAnnotationTransform = nil
+        guard activeVideoAnnotationTransform.baseline != plan else { return }
+        undoHistory.append(activeVideoAnnotationTransform.baseline)
+        if undoHistory.count > 80 { undoHistory.removeFirst() }
+        redoHistory.removeAll()
+        isDirty = plan != savedPlan
+    }
+
+    func cancelVideoAnnotationInteraction() {
+        videoAnnotationInteractionActive = false
+        guard let activeVideoAnnotationTransform else { return }
+        plan = activeVideoAnnotationTransform.baseline
+        self.activeVideoAnnotationTransform = nil
+        isDirty = plan != savedPlan
+    }
+
+    func deleteSelectedVideoAnnotation() {
+        guard let selectedVideoAnnotationID else { return }
+        mutate { plan in
+            plan.videoAnnotations?.removeAll { $0.id == selectedVideoAnnotationID }
+        }
+        self.selectedVideoAnnotationID = nil
+    }
+
+    func setVideoAnnotationColor(_ color: TraceColor) {
+        selectedVideoAnnotationColor = color
+        guard let selectedVideoAnnotationID else { return }
+        mutate { plan in
+            guard let index = plan.videoAnnotations?.firstIndex(where: {
+                $0.id == selectedVideoAnnotationID
+            }) else { return }
+            plan.videoAnnotations?[index].annotation.style.color = color
+            if let fill = plan.videoAnnotations?[index].annotation.style.fillColor {
+                plan.videoAnnotations?[index].annotation.style.fillColor = TraceColor(
+                    red: color.red,
+                    green: color.green,
+                    blue: color.blue,
+                    alpha: fill.alpha
+                )
+            }
+        }
+    }
+
+    func setSelectedVideoAnnotationDuration(_ duration: Double) {
+        let value = min(max(
+            duration.isFinite ? duration : 2,
+            VideoEditTimeline.minimumSegmentDurationSeconds
+        ), 30)
+        defaultVideoAnnotationDurationSeconds = value
+        guard let selectedVideoAnnotationID else { return }
+        mutate { plan in
+            guard let index = plan.videoAnnotations?.firstIndex(where: {
+                $0.id == selectedVideoAnnotationID
+            }), let item = plan.videoAnnotations?[index] else { return }
+            plan.videoAnnotations?[index].sourceEndSeconds = min(
+                item.sourceStartSeconds + value,
+                sourceDurationSeconds
+            )
+        }
+    }
+
+    func setSelectedVideoAnnotationFadeDuration(_ duration: Double) {
+        guard let selectedVideoAnnotationID else { return }
+        mutate { plan in
+            guard let index = plan.videoAnnotations?.firstIndex(where: {
+                $0.id == selectedVideoAnnotationID
+            }) else { return }
+            plan.videoAnnotations?[index].fadeDurationSeconds = min(max(
+                duration.isFinite ? duration : 0.16,
+                0
+            ), 1)
+        }
+    }
+
+    func setSelectedVideoAnnotationLineWidth(_ value: Double) {
+        guard let selectedVideoAnnotationID else { return }
+        mutate { plan in
+            guard let index = plan.videoAnnotations?.firstIndex(where: {
+                $0.id == selectedVideoAnnotationID
+            }) else { return }
+            plan.videoAnnotations?[index].annotation.style.lineWidth = min(max(value, 0.002), 0.04)
+        }
+    }
+
+    func setSelectedVideoAnnotationIntensity(_ value: Double) {
+        guard let selectedVideoAnnotationID else { return }
+        mutate { plan in
+            guard let index = plan.videoAnnotations?.firstIndex(where: {
+                $0.id == selectedVideoAnnotationID
+            }) else { return }
+            plan.videoAnnotations?[index].annotation.style.intensity = min(max(value, 0.01), 0.12)
+        }
+    }
+
+    func applyVideoAnnotationTextDraft() {
+        let text = videoAnnotationTextDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let selectedVideoAnnotationID, !text.isEmpty else { return }
+        mutate { plan in
+            guard let index = plan.videoAnnotations?.firstIndex(where: {
+                $0.id == selectedVideoAnnotationID
+            }), plan.videoAnnotations?[index].annotation.kind == .text else { return }
+            plan.videoAnnotations?[index].annotation.text = text
+        }
+    }
+
     func setAudioEnabled(_ enabled: Bool) {
         mutate { plan in
             if plan.audio == nil { plan.audio = .init() }
@@ -600,6 +997,7 @@ final class VideoEditorModel: ObservableObject {
 
     func undo() {
         endPresenterInteraction()
+        endVideoAnnotationInteraction()
         guard let previous = undoHistory.popLast() else { return }
         redoHistory.append(plan)
         plan = previous
@@ -610,6 +1008,7 @@ final class VideoEditorModel: ObservableObject {
 
     func redo() {
         endPresenterInteraction()
+        endVideoAnnotationInteraction()
         guard let next = redoHistory.popLast() else { return }
         undoHistory.append(plan)
         plan = next
@@ -620,6 +1019,8 @@ final class VideoEditorModel: ObservableObject {
 
     func resetToAutomaticPlan() {
         endPresenterInteraction()
+        endVideoAnnotationInteraction()
+        cancelVideoAnnotationDraft()
         guard plan != initialPlan else { return }
         undoHistory.append(plan)
         redoHistory.removeAll()
@@ -631,6 +1032,7 @@ final class VideoEditorModel: ObservableObject {
 
     func markSaved() {
         endPresenterInteraction()
+        endVideoAnnotationInteraction()
         savedPlan = plan
         isDirty = false
     }
@@ -648,6 +1050,7 @@ final class VideoEditorModel: ObservableObject {
         _ mutation: (inout AutoEditPlan) -> Void
     ) {
         endPresenterInteraction()
+        endVideoAnnotationInteraction()
         var updated = plan
         mutation(&updated)
         guard updated != plan else { return }
@@ -661,16 +1064,176 @@ final class VideoEditorModel: ObservableObject {
     }
 
     private func normalizeSelection() {
-        if let selectedSegmentID,
-           activeSegments.contains(where: { $0.id == selectedSegmentID }) {
-            return
+        if selectedSegmentID == nil
+            || !activeSegments.contains(where: { $0.id == selectedSegmentID }) {
+            selectedSegmentID = activeSegments.first?.id
         }
-        selectedSegmentID = activeSegments.first?.id
+        if let selectedVideoAnnotationID,
+           !videoAnnotations.contains(where: { $0.id == selectedVideoAnnotationID }) {
+            self.selectedVideoAnnotationID = nil
+        }
     }
 
     private func sourceTime(atOutputTime outputTime: Double) -> Double {
         timeline.position(atOutputTime: outputTime)?.sourceTimeSeconds
             ?? min(max(outputTime.isFinite ? outputTime : 0, 0), sourceDurationSeconds)
+    }
+
+    private func makeVideoAnnotation(
+        id: UUID,
+        start: TracePoint,
+        end: TracePoint
+    ) -> ScreenshotAnnotation? {
+        let deltaX = abs(end.x - start.x)
+        let deltaY = abs(end.y - start.y)
+        let distance = hypot(end.x - start.x, end.y - start.y)
+        let minimumExtent = 0.006
+        let bounds: TraceRect
+        if (selectedVideoAnnotationTool == .text || selectedVideoAnnotationTool == .step),
+           deltaX < minimumExtent, deltaY < minimumExtent {
+            let defaultSize = selectedVideoAnnotationTool == .step ? 0.075 : 0.08
+            let defaultWidth = selectedVideoAnnotationTool == .step ? defaultSize : 0.26
+            bounds = TraceRect(
+                x: min(max(
+                    start.x - (selectedVideoAnnotationTool == .step ? defaultSize / 2 : 0),
+                    0
+                ), 1 - defaultWidth),
+                y: min(max(
+                    start.y - (selectedVideoAnnotationTool == .step ? defaultSize / 2 : 0),
+                    0
+                ), 1 - defaultSize),
+                width: defaultWidth,
+                height: defaultSize
+            )
+        } else {
+            guard deltaX >= minimumExtent || deltaY >= minimumExtent else { return nil }
+            bounds = ScreenshotAnnotationGeometry.bounds(
+                from: start,
+                to: end,
+                minimumExtent: minimumExtent
+            )
+        }
+        if selectedVideoAnnotationTool == .arrow, distance < 0.012 { return nil }
+        let fillColor: TraceColor? = switch selectedVideoAnnotationTool {
+        case .rectangle, .ellipse:
+            TraceColor(
+                red: selectedVideoAnnotationColor.red,
+                green: selectedVideoAnnotationColor.green,
+                blue: selectedVideoAnnotationColor.blue,
+                alpha: 0.10
+            )
+        case .highlight:
+            TraceColor(
+                red: selectedVideoAnnotationColor.red,
+                green: selectedVideoAnnotationColor.green,
+                blue: selectedVideoAnnotationColor.blue,
+                alpha: 0.28
+            )
+        case .step:
+            selectedVideoAnnotationColor
+        default:
+            nil
+        }
+        let annotationText: String? = switch selectedVideoAnnotationTool {
+        case .text:
+            normalizedVideoAnnotationTextDraft
+        case .step:
+            String(nextVideoAnnotationStepNumber)
+        default:
+            nil
+        }
+        return ScreenshotAnnotation(
+            id: id,
+            kind: selectedVideoAnnotationTool,
+            bounds: bounds,
+            start: selectedVideoAnnotationTool == .arrow ? start : nil,
+            end: selectedVideoAnnotationTool == .arrow ? end : nil,
+            text: annotationText,
+            style: ScreenshotAnnotationStyle(
+                lineWidth: selectedVideoAnnotationTool == .highlight ? 0 : 0.008,
+                fontSize: 0.052,
+                color: selectedVideoAnnotationColor,
+                fillColor: fillColor,
+                intensity: selectedVideoAnnotationTool == .pixelate ? 0.055 : 0.035
+            )
+        )
+    }
+
+    private func makeVideoFreehandAnnotation(
+        id: UUID,
+        points: [TracePoint]
+    ) -> ScreenshotAnnotation? {
+        let simplified = simplifyVideoAnnotationPath(points, minimumDistance: 0.0015)
+        guard simplified.count >= 2,
+              let bounds = ScreenshotAnnotationGeometry.bounds(for: simplified),
+              let first = simplified.first,
+              let last = simplified.last,
+              hypot(last.x - first.x, last.y - first.y) >= 0.006
+                || videoAnnotationPathLength(simplified) >= 0.012 else {
+            return nil
+        }
+        return ScreenshotAnnotation(
+            id: id,
+            kind: .freehand,
+            bounds: bounds,
+            points: simplified,
+            style: ScreenshotAnnotationStyle(
+                lineWidth: 0.008,
+                color: selectedVideoAnnotationColor
+            )
+        )
+    }
+
+    private var nextVideoAnnotationStepNumber: Int {
+        videoAnnotations
+            .filter { $0.annotation.kind == .step }
+            .compactMap { $0.annotation.text.flatMap(Int.init) }
+            .max()
+            .map { $0 + 1 }
+            ?? 1
+    }
+
+    private var normalizedVideoAnnotationTextDraft: String {
+        let value = videoAnnotationTextDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? "文字" : value
+    }
+
+    private func appendVideoAnnotationDraftPoint(_ point: TracePoint) {
+        guard let last = videoAnnotationDraftPath.last else {
+            videoAnnotationDraftPath.append(point)
+            return
+        }
+        guard hypot(point.x - last.x, point.y - last.y) >= 0.0008 else { return }
+        videoAnnotationDraftPath.append(point)
+    }
+
+    private func simplifyVideoAnnotationPath(
+        _ points: [TracePoint],
+        minimumDistance: Double
+    ) -> [TracePoint] {
+        guard let first = points.first else { return [] }
+        var result = [first]
+        for point in points.dropFirst() {
+            guard let last = result.last else { continue }
+            if hypot(point.x - last.x, point.y - last.y) >= minimumDistance {
+                result.append(point)
+            }
+        }
+        if let last = points.last, result.last != last { result.append(last) }
+        return result
+    }
+
+    private func videoAnnotationPathLength(_ points: [TracePoint]) -> Double {
+        zip(points, points.dropFirst()).reduce(0) { partial, pair in
+            partial + hypot(pair.1.x - pair.0.x, pair.1.y - pair.0.y)
+        }
+    }
+
+    private func clamped(_ point: TracePoint) -> TracePoint {
+        TracePoint(
+            x: min(max(point.x, 0), 1),
+            y: min(max(point.y, 0), 1)
+        )
     }
 
     private func cachedCaptionCues(

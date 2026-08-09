@@ -4,6 +4,118 @@ import XCTest
 
 @MainActor
 final class VideoEditorModelTests: XCTestCase {
+    func testVideoAnnotationsUseSourceTimeAndSupportDirectManipulation() throws {
+        let timeline = VideoEditTimeline(
+            sourceDurationSeconds: 10,
+            segments: [
+                VideoEditSegment(
+                    sourceStartSeconds: 0,
+                    sourceEndSeconds: 4,
+                    playbackRate: 2
+                ),
+                VideoEditSegment(
+                    sourceStartSeconds: 6,
+                    sourceEndSeconds: 10
+                )
+            ]
+        )
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(timeline: timeline),
+            sourceDurationSeconds: 10,
+            hasCameraTrack: false
+        )
+        model.activateVideoAnnotationTool(.arrow)
+
+        XCTAssertTrue(model.commitVideoAnnotationDraft(
+            start: TracePoint(x: 0.1, y: 0.2),
+            end: TracePoint(x: 0.5, y: 0.6),
+            atOutputTime: 1
+        ))
+        let created = try XCTUnwrap(model.videoAnnotations.first)
+        XCTAssertEqual(created.sourceStartSeconds, 2)
+        XCTAssertEqual(created.sourceEndSeconds, 4)
+        XCTAssertEqual(model.videoAnnotationOutputBands.map(\.range), [
+            VideoEditTimeRange(startSeconds: 1, endSeconds: 2)
+        ])
+        XCTAssertEqual(model.visibleVideoAnnotations(atOutputTime: 1.2).count, 1)
+        XCTAssertTrue(model.visibleVideoAnnotations(atOutputTime: 3).isEmpty)
+
+        model.activateVideoAnnotationSelection()
+        model.beginVideoAnnotationSelectionInteraction(
+            at: TracePoint(x: 0.3, y: 0.4),
+            outputTime: 1.2,
+            hitTolerance: 0.03,
+            handleTolerance: 0.03
+        )
+        model.updateVideoAnnotationSelectionInteraction(
+            to: TracePoint(x: 0.4, y: 0.45)
+        )
+        model.endVideoAnnotationInteraction()
+        let moved = try XCTUnwrap(model.selectedVideoAnnotation)
+        XCTAssertEqual(moved.annotation.bounds.x, 0.2, accuracy: 0.000_001)
+        XCTAssertEqual(moved.annotation.bounds.y, 0.25, accuracy: 0.000_001)
+
+        let movedEnd = try XCTUnwrap(moved.annotation.end)
+        model.beginVideoAnnotationSelectionInteraction(
+            at: movedEnd,
+            outputTime: 1.2,
+            hitTolerance: 0.02,
+            handleTolerance: 0.04
+        )
+        model.updateVideoAnnotationSelectionInteraction(
+            to: TracePoint(x: 0.82, y: 0.74)
+        )
+        model.endVideoAnnotationInteraction()
+        XCTAssertEqual(model.selectedVideoAnnotation?.annotation.end?.x, 0.82)
+        XCTAssertEqual(model.selectedVideoAnnotation?.annotation.end?.y, 0.74)
+
+        model.undo()
+        XCTAssertEqual(model.selectedVideoAnnotation?.annotation.end, moved.annotation.end)
+        model.undo()
+        XCTAssertEqual(model.selectedVideoAnnotation?.annotation.bounds, created.annotation.bounds)
+        model.undo()
+        XCTAssertTrue(model.videoAnnotations.isEmpty)
+    }
+
+    func testVideoAnnotationInspectorChangesAreUndoableAndNormalized() throws {
+        let item = VideoAnnotation(
+            annotation: ScreenshotAnnotation(
+                kind: .text,
+                bounds: TraceRect(x: 0.2, y: 0.2, width: 0.3, height: 0.1),
+                text: "Old"
+            ),
+            sourceStartSeconds: 4.8,
+            sourceEndSeconds: 9
+        )
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(videoAnnotations: [item]),
+            sourceDurationSeconds: 5,
+            hasCameraTrack: false
+        )
+        model.activateVideoAnnotationSelection()
+        model.beginVideoAnnotationSelectionInteraction(
+            at: TracePoint(x: 0.3, y: 0.25),
+            outputTime: 4.85,
+            hitTolerance: 0.02,
+            handleTolerance: 0.01
+        )
+        model.endVideoAnnotationInteraction()
+
+        let normalized = try XCTUnwrap(model.selectedVideoAnnotation)
+        XCTAssertEqual(normalized.sourceEndSeconds, 5)
+        model.setSelectedVideoAnnotationDuration(3)
+        XCTAssertEqual(model.selectedVideoAnnotation?.sourceEndSeconds, 5)
+        model.setSelectedVideoAnnotationFadeDuration(0.4)
+        model.setVideoAnnotationColor(.blue)
+        model.videoAnnotationTextDraft = "Updated"
+        model.applyVideoAnnotationTextDraft()
+
+        XCTAssertEqual(model.selectedVideoAnnotation?.fadeDurationSeconds, 0.4)
+        XCTAssertEqual(model.selectedVideoAnnotation?.annotation.style.color, .blue)
+        XCTAssertEqual(model.selectedVideoAnnotation?.annotation.text, "Updated")
+        XCTAssertTrue(model.isDirty)
+    }
+
     func testTimelineEditingSupportsSplitSpeedRemovalUndoAndRedo() throws {
         let model = VideoEditorModel(
             plan: AutoEditPlan(),

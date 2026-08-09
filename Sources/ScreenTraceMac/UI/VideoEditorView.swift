@@ -142,11 +142,25 @@ struct VideoEditorView: View {
                     .padding(8)
             }
             GeometryReader { proxy in
+                if proxy.size.width > 20, proxy.size.height > 20 {
+                    let contentRect = CGRect(
+                        x: 8,
+                        y: 8,
+                        width: max(proxy.size.width - 16, 1),
+                        height: max(proxy.size.height - 16, 1)
+                    )
+                    VideoAnnotationOverlayView(
+                        model: model,
+                        playback: playback,
+                        contentRect: contentRect
+                    )
+                }
                 if model.hasCameraTrack,
                    model.presenterEnabled,
                    proxy.size.width > 20,
                    proxy.size.height > 20 {
                     presenterOverlay(in: proxy.size)
+                        .allowsHitTesting(!model.isVideoAnnotationEditing)
                 }
             }
         }
@@ -447,6 +461,31 @@ struct VideoEditorView: View {
                                 ? String(format: "交叉叠化 · %.2f 秒", transition.durationSeconds)
                                 : String(format: "淡入黑场 · %.2f 秒", transition.durationSeconds))
                     }
+                    ForEach(model.videoAnnotationOutputBands) { band in
+                        let start = availableWidth * band.range.startSeconds / total
+                        let width = max(
+                            availableWidth
+                                * (band.range.endSeconds - band.range.startSeconds) / total,
+                            5
+                        )
+                        Button {
+                            playback.seek(to: band.range.startSeconds + 0.02)
+                            model.selectVideoAnnotation(band.annotationID)
+                        } label: {
+                            Capsule()
+                                .fill(
+                                    model.selectedVideoAnnotationID == band.annotationID
+                                        ? Color.yellow
+                                        : Color.orange.opacity(0.92)
+                                )
+                                .overlay(Capsule().stroke(.white.opacity(0.55), lineWidth: 0.6))
+                        }
+                        .buttonStyle(.plain)
+                        .frame(width: width, height: 6)
+                        .offset(x: start, y: 49)
+                        .zIndex(5)
+                        .help("视频标注 · \(captionTimeText(band.range.startSeconds))")
+                    }
                     ForEach(
                         Array(model.presenterKeyframeOutputTimes.enumerated()),
                         id: \.offset
@@ -629,6 +668,150 @@ struct VideoEditorView: View {
                         get: { model.clickPulseEnabled },
                         set: { model.setClickPulseEnabled($0) }
                     ))
+                }
+
+                inspectorSection("视频标注", symbol: "pencil.and.outline") {
+                    HStack(spacing: 6) {
+                        Button {
+                            model.activateVideoAnnotationSelection()
+                        } label: {
+                            Label("选择", systemImage: "cursorarrow")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(model.isVideoAnnotationSelectionMode ? .cyan : .secondary)
+                        Button {
+                            if model.isVideoAnnotationEditing {
+                                model.finishVideoAnnotationEditing()
+                            } else {
+                                model.activateVideoAnnotationTool(
+                                    model.selectedVideoAnnotationTool
+                                )
+                            }
+                        } label: {
+                            Label(
+                                model.isVideoAnnotationEditing ? "完成" : "画布编辑",
+                                systemImage: model.isVideoAnnotationEditing
+                                    ? "checkmark.circle.fill"
+                                    : "hand.draw"
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(model.isVideoAnnotationEditing ? .green : .cyan)
+                    }
+
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 3),
+                        spacing: 5
+                    ) {
+                        ForEach(ScreenshotAnnotationKind.allCases, id: \.self) { tool in
+                            annotationToolButton(tool)
+                        }
+                    }
+
+                    HStack(spacing: 7) {
+                        Text("颜色")
+                        Spacer()
+                        ForEach(videoAnnotationColors, id: \.name) { item in
+                            Button {
+                                model.setVideoAnnotationColor(item.color)
+                            } label: {
+                                Circle()
+                                    .fill(item.color.swiftUIColor)
+                                    .frame(width: 17, height: 17)
+                                    .overlay(Circle().stroke(
+                                        model.selectedVideoAnnotationColor == item.color
+                                            ? Color.primary
+                                            : Color.white.opacity(0.30),
+                                        lineWidth: model.selectedVideoAnnotationColor == item.color
+                                            ? 2
+                                            : 1
+                                    ))
+                                    .padding(2)
+                            }
+                            .buttonStyle(.plain)
+                            .help(item.name)
+                        }
+                    }
+
+                    if model.selectedVideoAnnotationTool == .text
+                        || model.selectedVideoAnnotation?.annotation.kind == .text {
+                        HStack(spacing: 6) {
+                            TextField("标注文字", text: $model.videoAnnotationTextDraft)
+                                .textFieldStyle(.roundedBorder)
+                            if model.selectedVideoAnnotation?.annotation.kind == .text {
+                                Button("应用", action: model.applyVideoAnnotationTextDraft)
+                                    .buttonStyle(.borderless)
+                            }
+                        }
+                    }
+
+                    valueSlider(
+                        model.selectedVideoAnnotation == nil ? "默认时长" : "显示时长",
+                        value: Binding(
+                            get: {
+                                model.selectedVideoAnnotation?.sourceDurationSeconds
+                                    ?? model.defaultVideoAnnotationDurationSeconds
+                            },
+                            set: { model.setSelectedVideoAnnotationDuration($0) }
+                        ),
+                        range: 0.05...30
+                    )
+
+                    if let selected = model.selectedVideoAnnotation {
+                        valueSlider(
+                            "淡入淡出",
+                            value: Binding(
+                                get: { selected.fadeDurationSeconds },
+                                set: { model.setSelectedVideoAnnotationFadeDuration($0) }
+                            ),
+                            range: 0...0.8
+                        )
+                        if selected.annotation.kind == .blur
+                            || selected.annotation.kind == .pixelate {
+                            valueSlider(
+                                "效果强度",
+                                value: Binding(
+                                    get: { selected.annotation.style.intensity },
+                                    set: { model.setSelectedVideoAnnotationIntensity($0) }
+                                ),
+                                range: 0.01...0.12
+                            )
+                        } else if selected.annotation.kind != .highlight
+                            && selected.annotation.kind != .step
+                            && selected.annotation.kind != .text {
+                            valueSlider(
+                                "线条粗细",
+                                value: Binding(
+                                    get: { selected.annotation.style.lineWidth },
+                                    set: { model.setSelectedVideoAnnotationLineWidth($0) }
+                                ),
+                                range: 0.002...0.04
+                            )
+                        }
+                        HStack {
+                            Text(String(
+                                format: "源素材 %.2f–%.2f s",
+                                selected.sourceStartSeconds,
+                                selected.sourceEndSeconds
+                            ))
+                            .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("删除") {
+                                model.deleteSelectedVideoAnnotation()
+                            }
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.red)
+                        }
+                    }
+
+                    Text(model.isVideoAnnotationEditing
+                        ? "在预览中拖动绘制；选择工具可移动并拖拽控制点缩放。"
+                        : "标注使用源素材时间，剪切、变速与重排后仍会自动对齐。")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
                 }
 
                 inspectorSection("讲解人像", symbol: "person.crop.circle") {
@@ -955,6 +1138,39 @@ struct VideoEditorView: View {
         }
         .padding(12)
         .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func annotationToolButton(
+        _ tool: ScreenshotAnnotationKind
+    ) -> some View {
+        let selected = model.isVideoAnnotationEditing
+            && !model.isVideoAnnotationSelectionMode
+            && model.selectedVideoAnnotationTool == tool
+        return Button {
+            model.activateVideoAnnotationTool(tool)
+        } label: {
+            Label(tool.editorTitle, systemImage: tool.editorSymbol)
+                .font(.system(size: 8.5, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+                .foregroundStyle(selected ? Color.white : Color.secondary)
+                .background(
+                    selected ? Color.cyan.opacity(0.78) : Color.primary.opacity(0.055),
+                    in: RoundedRectangle(cornerRadius: 7)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(tool.editorTitle)
+    }
+
+    private var videoAnnotationColors: [(name: String, color: TraceColor)] {
+        [
+            ("红色", .red),
+            ("橙色", .orange),
+            ("黄色", .yellow),
+            ("蓝色", .blue),
+            ("白色", .white)
+        ]
     }
 
     private func valueSlider(

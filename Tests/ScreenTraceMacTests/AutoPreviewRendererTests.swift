@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import CoreImage
 import CoreVideo
 import Foundation
 import XCTest
@@ -7,6 +8,68 @@ import XCTest
 @testable import ScreenTraceMac
 
 final class AutoPreviewRendererTests: XCTestCase {
+    func testVideoAnnotationRendererScopesBlurAndPixelateToActiveRegions() throws {
+        let extent = CGRect(x: 0, y: 0, width: 320, height: 180)
+        let checker = try XCTUnwrap(CIFilter(
+            name: "CICheckerboardGenerator",
+            parameters: [
+                "inputColor0": CIColor.white,
+                "inputColor1": CIColor.black,
+                "inputWidth": 3.0,
+                "inputSharpness": 1.0
+            ]
+        )?.outputImage).cropped(to: extent)
+        let renderer = VideoAnnotationRenderer(annotations: [
+            VideoAnnotation(
+                annotation: ScreenshotAnnotation(
+                    kind: .blur,
+                    bounds: TraceRect(x: 0.08, y: 0.2, width: 0.34, height: 0.6),
+                    style: ScreenshotAnnotationStyle(intensity: 0.07)
+                ),
+                sourceStartSeconds: 0.5,
+                sourceEndSeconds: 1.5,
+                fadeDurationSeconds: 0
+            ),
+            VideoAnnotation(
+                annotation: ScreenshotAnnotation(
+                    kind: .pixelate,
+                    bounds: TraceRect(x: 0.58, y: 0.2, width: 0.34, height: 0.6),
+                    style: ScreenshotAnnotationStyle(intensity: 0.09)
+                ),
+                sourceStartSeconds: 0.5,
+                sourceEndSeconds: 1.5,
+                fadeDurationSeconds: 0
+            )
+        ])
+        let context = CIContext(options: [.cacheIntermediates: false])
+        let base = try XCTUnwrap(context.createCGImage(checker, from: extent))
+        let inactive = try XCTUnwrap(context.createCGImage(
+            renderer.apply(to: checker, atSourceTime: 0.2),
+            from: extent
+        ))
+        let active = try XCTUnwrap(context.createCGImage(
+            renderer.apply(to: checker, atSourceTime: 1),
+            from: extent
+        ))
+
+        XCTAssertEqual(changedPixelCount(between: base, and: inactive), 0)
+        XCTAssertGreaterThan(changedPixelCount(
+            between: base,
+            and: active,
+            normalizedRect: TraceRect(x: 0.1, y: 0.25, width: 0.3, height: 0.5)
+        ), 1_000)
+        XCTAssertGreaterThan(changedPixelCount(
+            between: base,
+            and: active,
+            normalizedRect: TraceRect(x: 0.6, y: 0.25, width: 0.3, height: 0.5)
+        ), 1_000)
+        XCTAssertLessThan(changedPixelCount(
+            between: base,
+            and: active,
+            normalizedRect: TraceRect(x: 0.45, y: 0.02, width: 0.1, height: 0.12)
+        ), 5)
+    }
+
     func testCaptionOverlayRendererChangesOnlyActiveFrame() throws {
         let configuration = AutoEditPlan.Captions(
             isEnabled: true,
@@ -106,6 +169,67 @@ final class AutoPreviewRendererTests: XCTestCase {
         XCTAssertTrue((0.72...0.92).contains(cornerColor.redComponent), "\(cornerColor)")
         XCTAssertTrue((0.72...0.91).contains(cornerColor.greenComponent), "\(cornerColor)")
         XCTAssertTrue((0.68...0.90).contains(cornerColor.blueComponent), "\(cornerColor)")
+    }
+
+    @MainActor
+    func testTimeAwareVectorAnnotationIsBurnedOnlyInsideItsSourceRange() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ScreenTraceVideoAnnotationTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inputURL = directory.appendingPathComponent("input.mp4")
+        let outputURL = directory.appendingPathComponent("annotated.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: inputURL,
+            frameCount: 42,
+            framesPerSecond: 24,
+            style: .greenCamera
+        )
+        var plan = AutoEditPlan()
+        plan.camera.mode = "off"
+        plan.cursor.isEnabled = false
+        plan.interaction?.showsClickPulse = false
+        plan.canvas?.isEnabled = false
+        plan.presenterCamera?.isEnabled = false
+        plan.videoAnnotations = [
+            VideoAnnotation(
+                annotation: ScreenshotAnnotation(
+                    kind: .rectangle,
+                    bounds: TraceRect(x: 0.18, y: 0.18, width: 0.64, height: 0.64),
+                    style: ScreenshotAnnotationStyle(lineWidth: 0.024, color: .red)
+                ),
+                sourceStartSeconds: 0.5,
+                sourceEndSeconds: 1.2,
+                fadeDurationSeconds: 0.08
+            )
+        ]
+
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: inputURL,
+            outputURL: outputURL,
+            plan: plan
+        )
+
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: outputURL))
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let before = try await generator.image(
+            at: CMTime(seconds: 0.25, preferredTimescale: 600)
+        ).image
+        let during = try await generator.image(
+            at: CMTime(seconds: 0.8, preferredTimescale: 600)
+        ).image
+        let after = try await generator.image(
+            at: CMTime(seconds: 1.45, preferredTimescale: 600)
+        ).image
+
+        XCTAssertGreaterThan(redAnnotationPixelCount(in: during), 1_000)
+        XCTAssertLessThan(redAnnotationPixelCount(in: before), 25)
+        XCTAssertLessThan(redAnnotationPixelCount(in: after), 25)
     }
 
     @MainActor
@@ -590,6 +714,51 @@ final class AutoPreviewRendererTests: XCTestCase {
                     + abs(firstColor.greenComponent - secondColor.greenComponent)
                     + abs(firstColor.blueComponent - secondColor.blueComponent)
                 if difference > 0.18 {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
+    private func changedPixelCount(
+        between first: CGImage,
+        and second: CGImage,
+        normalizedRect: TraceRect
+    ) -> Int {
+        let firstBitmap = NSBitmapImageRep(cgImage: first)
+        let secondBitmap = NSBitmapImageRep(cgImage: second)
+        let width = min(firstBitmap.pixelsWide, secondBitmap.pixelsWide)
+        let height = min(firstBitmap.pixelsHigh, secondBitmap.pixelsHigh)
+        let minX = max(Int(normalizedRect.x * Double(width)), 0)
+        let maxX = min(Int((normalizedRect.x + normalizedRect.width) * Double(width)), width)
+        let minY = max(Int(normalizedRect.y * Double(height)), 0)
+        let maxY = min(Int((normalizedRect.y + normalizedRect.height) * Double(height)), height)
+        var count = 0
+        for y in minY..<maxY {
+            for x in minX..<maxX {
+                guard let firstColor = firstBitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      let secondColor = secondBitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                else { continue }
+                let difference = abs(firstColor.redComponent - secondColor.redComponent)
+                    + abs(firstColor.greenComponent - secondColor.greenComponent)
+                    + abs(firstColor.blueComponent - secondColor.blueComponent)
+                if difference > 0.18 { count += 1 }
+            }
+        }
+        return count
+    }
+
+    private func redAnnotationPixelCount(in image: CGImage) -> Int {
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        var count = 0
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                else { continue }
+                if color.redComponent > 0.72,
+                   color.greenComponent < 0.42,
+                   color.blueComponent < 0.42 {
                     count += 1
                 }
             }

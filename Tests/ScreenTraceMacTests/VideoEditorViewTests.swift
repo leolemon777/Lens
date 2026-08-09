@@ -8,6 +8,22 @@ import XCTest
 final class VideoEditorViewTests: XCTestCase {
     func testUnifiedEditorRendersPreviewTimelineAndInspectorAtDesktopSize() throws {
         var plan = AutoEditPlan()
+        let annotationID = UUID()
+        plan.videoAnnotations = [
+            VideoAnnotation(
+                annotation: ScreenshotAnnotation(
+                    id: annotationID,
+                    kind: .arrow,
+                    bounds: TraceRect(x: 0.18, y: 0.22, width: 0.48, height: 0.34),
+                    start: TracePoint(x: 0.18, y: 0.56),
+                    end: TracePoint(x: 0.66, y: 0.22),
+                    style: ScreenshotAnnotationStyle(lineWidth: 0.012, color: .red)
+                ),
+                sourceStartSeconds: 0,
+                sourceEndSeconds: 15,
+                fadeDurationSeconds: 0
+            )
+        ]
         plan.presenterCamera?.isEnabled = true
         plan.presenterCamera?.keyframes = [
             AutoEditPlan.PresenterCameraKeyframe(
@@ -50,6 +66,7 @@ final class VideoEditorViewTests: XCTestCase {
             model.setSelectedTransitionKind(.crossDissolve)
             model.setSelectedTransitionDuration(0.55)
         }
+        model.selectVideoAnnotation(annotationID)
         let playback = VideoEditorPlaybackController()
         let root = VideoEditorView(
             model: model,

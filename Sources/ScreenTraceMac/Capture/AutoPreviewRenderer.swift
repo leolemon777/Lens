@@ -59,6 +59,11 @@ final class AutoPreviewRenderer {
                 timeline: plan.timeline
             )
         }()
+        let videoAnnotationRenderer: VideoAnnotationRenderer? = {
+            guard let annotations = plan.videoAnnotations,
+                  !annotations.isEmpty else { return nil }
+            return VideoAnnotationRenderer(annotations: annotations)
+        }()
         let transitionedInputURL: URL? = if let timeline = plan.timeline,
                                            timeline.hasActiveTransitions {
             outputURL.deletingLastPathComponent().appendingPathComponent(
@@ -90,6 +95,7 @@ final class AutoPreviewRenderer {
                 outputURL: outputURL,
                 plan: plan,
                 captionRenderer: captionRenderer,
+                videoAnnotationRenderer: videoAnnotationRenderer,
                 appliesTimeline: transitionedInputURL == nil
             )
         }
@@ -103,6 +109,7 @@ final class AutoPreviewRenderer {
             outputURL: temporaryURL,
             plan: plan,
             captionRenderer: captionRenderer,
+            videoAnnotationRenderer: videoAnnotationRenderer,
             appliesTimeline: transitionedInputURL == nil
         )
         do {
@@ -131,6 +138,7 @@ final class AutoPreviewRenderer {
         outputURL: URL,
         plan: AutoEditPlan,
         captionRenderer: CaptionOverlayRenderer?,
+        videoAnnotationRenderer: VideoAnnotationRenderer?,
         appliesTimeline: Bool
     ) async throws -> URL {
         let asset: AVAsset
@@ -159,7 +167,8 @@ final class AutoPreviewRenderer {
                     plan: plan,
                     cursorImage: cursorImage,
                     clickRingImage: clickRingImage,
-                    captionRenderer: captionRenderer
+                    captionRenderer: captionRenderer,
+                    videoAnnotationRenderer: videoAnnotationRenderer
                 )
                 request.finish(with: result, context: nil)
                 },
@@ -271,11 +280,17 @@ final class AutoPreviewRenderer {
         plan: AutoEditPlan,
         cursorImage: CIImage,
         clickRingImage: CIImage,
-        captionRenderer: CaptionOverlayRenderer?
+        captionRenderer: CaptionOverlayRenderer?,
+        videoAnnotationRenderer: VideoAnnotationRenderer?
     ) -> CIImage {
         let extent = source.extent
         let sourceTime = plan.timeline?.position(atOutputTime: time)?.sourceTimeSeconds
             ?? time
+        let sourceFrame = videoAnnotationRenderer?.apply(
+            to: source,
+            atOutputTime: time,
+            timeline: plan.timeline
+        ) ?? source
         let camera = EffectTimeline.effectiveCameraState(
             at: sourceTime,
             camera: plan.camera
@@ -302,7 +317,7 @@ final class AutoPreviewRenderer {
             height: viewportSize.height
         )
 
-        var frame = source
+        var frame = sourceFrame
             .cropped(to: viewport)
             .transformed(by: CGAffineTransform(
                 translationX: -viewport.minX,

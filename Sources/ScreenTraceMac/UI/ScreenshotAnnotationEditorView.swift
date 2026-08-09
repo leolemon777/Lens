@@ -473,7 +473,7 @@ struct ScreenshotAnnotationEditorView: View {
     }
 }
 
-private extension ScreenshotAnnotationKind {
+extension ScreenshotAnnotationKind {
     var editorTitle: String {
         switch self {
         case .rectangle: "矩形"
@@ -503,7 +503,7 @@ private extension ScreenshotAnnotationKind {
     }
 }
 
-private extension TraceColor {
+extension TraceColor {
     var swiftUIColor: Color {
         Color(
             red: min(max(red, 0), 1),

@@ -500,6 +500,19 @@ final class TraceProjectStoreTests: XCTestCase {
             normalizesLoudness: true,
             targetLoudnessLUFS: -18
         )
+        plan.videoAnnotations = [
+            VideoAnnotation(
+                annotation: ScreenshotAnnotation(
+                    kind: .arrow,
+                    bounds: TraceRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4),
+                    start: TracePoint(x: 0.1, y: 0.2),
+                    end: TracePoint(x: 0.4, y: 0.6)
+                ),
+                sourceStartSeconds: 8,
+                sourceEndSeconds: 14,
+                fadeDurationSeconds: 0.25
+            )
+        ]
         plan.timeline = VideoEditTimeline(
             sourceDurationSeconds: 40,
             segments: [
@@ -534,6 +547,9 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.captions, plan.captions)
         XCTAssertEqual(reloaded.presenterCamera, plan.presenterCamera)
         XCTAssertEqual(reloaded.audio, plan.audio)
+        XCTAssertEqual(reloaded.videoAnnotations?.count, 1)
+        XCTAssertEqual(reloaded.videoAnnotations?.first?.sourceStartSeconds, 8)
+        XCTAssertEqual(reloaded.videoAnnotations?.first?.sourceEndSeconds, 10)
         XCTAssertEqual(
             updated.manifest.assets.filter { $0.role == .editPlan }.count,
             1

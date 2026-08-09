@@ -118,7 +118,14 @@ public struct TraceProjectStore: Sendable {
 
     public func loadAutoEditPlan(from packageURL: URL) throws -> AutoEditPlan {
         let data = try Data(contentsOf: packageURL.appendingPathComponent("edits/edit-plan.json"))
-        return try JSONDecoder().decode(AutoEditPlan.self, from: data)
+        var plan = try JSONDecoder().decode(AutoEditPlan.self, from: data)
+        if let manifest = try? loadManifest(from: packageURL),
+           let duration = manifest.durationSeconds {
+            plan.videoAnnotations = plan.videoAnnotations?.compactMap {
+                $0.normalized(sourceDurationSeconds: duration)
+            }
+        }
+        return plan
     }
 
     public func writeAutoEditPlan(
@@ -136,6 +143,9 @@ public struct TraceProjectStore: Sendable {
             plan.timeline = (plan.timeline ?? VideoEditTimeline(
                 sourceDurationSeconds: duration
             )).normalized(sourceDurationSeconds: duration)
+            plan.videoAnnotations = plan.videoAnnotations?.compactMap {
+                $0.normalized(sourceDurationSeconds: duration)
+            }
         }
 
         let relativePath = "edits/edit-plan.json"
@@ -769,6 +779,9 @@ public struct TraceProjectStore: Sendable {
         plan.timeline = (plan.timeline ?? VideoEditTimeline(
             sourceDurationSeconds: durationSeconds
         )).normalized(sourceDurationSeconds: durationSeconds)
+        plan.videoAnnotations = plan.videoAnnotations?.compactMap {
+            $0.normalized(sourceDurationSeconds: durationSeconds)
+        }
         plan.cursor.keyframes = CursorPathPlanner().plan(events: pointerEvents)
         plan.interaction?.clickPulses = clicks.compactMap { click in
             guard click.phase == .down, let position = click.normalizedLocation else { return nil }

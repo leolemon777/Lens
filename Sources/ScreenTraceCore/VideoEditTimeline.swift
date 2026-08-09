@@ -146,6 +146,18 @@ public struct VideoEditTimelinePosition: Equatable, Sendable {
     }
 }
 
+public struct VideoEditTimelineSourceContribution: Equatable, Sendable {
+    public let segmentID: UUID
+    public let sourceTimeSeconds: Double
+    public let weight: Double
+
+    public init(segmentID: UUID, sourceTimeSeconds: Double, weight: Double) {
+        self.segmentID = segmentID
+        self.sourceTimeSeconds = sourceTimeSeconds
+        self.weight = min(max(weight.isFinite ? weight : 0, 0), 1)
+    }
+}
+
 public struct VideoEditTimeRange: Equatable, Sendable {
     public let startSeconds: Double
     public let endSeconds: Double
@@ -273,6 +285,64 @@ public struct VideoEditTimeline: Codable, Equatable, Sendable {
                 segment.sourceEndSeconds
             )
         )
+    }
+
+    /// Returns every source frame contributing to an output instant. During a
+    /// transition this includes both clips and mirrors the visual transition weights.
+    public func sourceContributions(
+        atOutputTime seconds: Double
+    ) -> [VideoEditTimelineSourceContribution] {
+        let active = activeSegments
+        guard !active.isEmpty else { return [] }
+        let requested = min(max(
+            seconds.isFinite ? seconds : 0,
+            0
+        ), outputDurationSeconds)
+        let layout = resolvedLayout()
+        let containing = layout.layouts.enumerated().filter { index, item in
+            requested >= item.outputStartSeconds
+                && (requested < item.outputEndSeconds || index == layout.layouts.count - 1)
+        }
+        guard !containing.isEmpty else { return [] }
+
+        let transition = layout.transitions.first {
+            requested >= $0.outputStartSeconds && requested < $0.outputEndSeconds
+        }
+        return containing.compactMap { index, item in
+            let segment = active[index]
+            let localOutput = min(
+                max(requested - item.outputStartSeconds, 0),
+                segment.outputDurationSeconds
+            )
+            let sourceTime = min(
+                segment.sourceStartSeconds + localOutput * segment.playbackRate,
+                segment.sourceEndSeconds
+            )
+            let weight: Double
+            if let transition {
+                let progress = transition.progress(atOutputTime: requested)
+                switch transition.kind {
+                case .crossDissolve:
+                    weight = item.segmentID == transition.fromSegmentID
+                        ? 1 - progress
+                        : progress
+                case .dipToBlack:
+                    weight = item.segmentID == transition.fromSegmentID
+                        ? max(1 - progress * 2, 0)
+                        : max(progress * 2 - 1, 0)
+                case .cut:
+                    weight = item.segmentID == transition.toSegmentID ? 1 : 0
+                }
+            } else {
+                weight = containing.count == 1 || containing[0].offset == index ? 1 : 0
+            }
+            guard weight > 0.000_1 else { return nil }
+            return VideoEditTimelineSourceContribution(
+                segmentID: segment.id,
+                sourceTimeSeconds: sourceTime,
+                weight: weight
+            )
+        }
     }
 
     public func outputRanges(

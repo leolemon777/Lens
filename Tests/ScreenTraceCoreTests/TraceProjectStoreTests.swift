@@ -459,6 +459,16 @@ final class TraceProjectStoreTests: XCTestCase {
             state: .ready
         )
         var plan = try store.loadAutoEditPlan(from: saved.packageURL)
+        plan.captions = AutoEditPlan.Captions(
+            isEnabled: true,
+            style: .glass,
+            position: .bottom,
+            customCues: [CaptionSourceCue(
+                sourceStartSeconds: 2,
+                sourceEndSeconds: 3,
+                text: "Edited caption"
+            )]
+        )
         plan.timeline = VideoEditTimeline(
             sourceDurationSeconds: 40,
             segments: [VideoEditSegment(
@@ -476,6 +486,7 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.timeline?.sourceDurationSeconds, 10)
         XCTAssertEqual(reloaded.timeline?.segments.first?.sourceEndSeconds, 10)
         XCTAssertEqual(reloaded.timeline?.segments.first?.playbackRate, 4)
+        XCTAssertEqual(reloaded.captions, plan.captions)
         XCTAssertEqual(
             updated.manifest.assets.filter { $0.role == .editPlan }.count,
             1

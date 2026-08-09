@@ -11,10 +11,12 @@ final class VideoEditorModel: ObservableObject {
     let sourceDurationSeconds: Double
     let hasCameraTrack: Bool
     let hasMicrophoneTrack: Bool
+    let transcript: TranscriptDocument?
     var onTimelineChanged: ((VideoEditTimeline) -> Void)?
 
     private let initialPlan: AutoEditPlan
     private var savedPlan: AutoEditPlan
+    private let automaticCaptionSourceCues: [CaptionSourceCue]
     private var undoHistory: [AutoEditPlan] = []
     private var redoHistory: [AutoEditPlan] = []
 
@@ -22,7 +24,8 @@ final class VideoEditorModel: ObservableObject {
         plan requestedPlan: AutoEditPlan,
         sourceDurationSeconds: Double,
         hasCameraTrack: Bool,
-        hasMicrophoneTrack: Bool = false
+        hasMicrophoneTrack: Bool = false,
+        transcript: TranscriptDocument? = nil
     ) {
         let duration = max(sourceDurationSeconds.isFinite ? sourceDurationSeconds : 0, 0)
         var plan = requestedPlan
@@ -30,12 +33,28 @@ final class VideoEditorModel: ObservableObject {
         plan.timeline = (plan.timeline ?? VideoEditTimeline(
             sourceDurationSeconds: duration
         )).normalized(sourceDurationSeconds: duration)
+        plan.captions?.customCues?.sort {
+            if $0.sourceStartSeconds != $1.sourceStartSeconds {
+                return $0.sourceStartSeconds < $1.sourceStartSeconds
+            }
+            return $0.sourceEndSeconds < $1.sourceEndSeconds
+        }
+        let automaticCaptionSourceCues = transcript.map {
+            CaptionCuePlanner.sourceCues(
+                transcript: $0,
+                configuration: AutoEditPlan.Captions(
+                    maxCharactersPerCue: plan.captions?.maxCharactersPerCue ?? 28
+                )
+            )
+        } ?? []
         self.plan = plan
         initialPlan = plan
         savedPlan = plan
+        self.automaticCaptionSourceCues = automaticCaptionSourceCues
         self.sourceDurationSeconds = duration
         self.hasCameraTrack = hasCameraTrack
         self.hasMicrophoneTrack = hasMicrophoneTrack
+        self.transcript = transcript
         selectedSegmentID = plan.timeline?.activeSegments.first?.id
     }
 
@@ -60,6 +79,11 @@ final class VideoEditorModel: ObservableObject {
     var canvasEnabled: Bool { plan.canvas?.isEnabled != false }
     var presenterEnabled: Bool { plan.presenterCamera?.isEnabled == true }
     var audioEnabled: Bool { plan.audio?.isEnabled != false }
+    var hasTranscript: Bool { transcript?.segments.isEmpty == false }
+    var captionsEnabled: Bool { plan.captions?.isEnabled == true }
+    var captionSourceCues: [CaptionSourceCue] {
+        plan.captions?.customCues ?? automaticCaptionSourceCues
+    }
 
     func selectSegment(_ id: UUID) {
         guard timeline.segments.contains(where: { $0.id == id }) else { return }
@@ -232,6 +256,62 @@ final class VideoEditorModel: ObservableObject {
             if plan.audio == nil { plan.audio = .init() }
             plan.audio?.ducksSystemUnderNarration = enabled
         }
+    }
+
+    func setCaptionsEnabled(_ enabled: Bool) {
+        guard hasTranscript else { return }
+        mutate { plan in
+            if plan.captions == nil { plan.captions = .init() }
+            plan.captions?.isEnabled = enabled
+        }
+    }
+
+    func setCaptionStyle(_ style: AutoEditPlan.Captions.Style) {
+        guard hasTranscript else { return }
+        mutate { plan in
+            if plan.captions == nil { plan.captions = .init() }
+            plan.captions?.style = style
+        }
+    }
+
+    func setCaptionPosition(_ position: AutoEditPlan.Captions.Position) {
+        guard hasTranscript else { return }
+        mutate { plan in
+            if plan.captions == nil { plan.captions = .init() }
+            plan.captions?.position = position
+        }
+    }
+
+    func setCaptionFontScale(_ value: Double) {
+        guard hasTranscript else { return }
+        mutate { plan in
+            if plan.captions == nil { plan.captions = .init() }
+            plan.captions?.fontScale = min(max(value, 0.7), 1.6)
+        }
+    }
+
+    func setCaptionCueText(_ text: String, at index: Int) {
+        guard transcript != nil else { return }
+        let displayedCues = captionSourceCues
+        guard displayedCues.indices.contains(index) else { return }
+        let displayedCue = displayedCues[index]
+        mutate { plan in
+            if plan.captions == nil { plan.captions = .init() }
+            guard var captions = plan.captions else { return }
+            if captions.customCues == nil {
+                captions.customCues = automaticCaptionSourceCues
+            }
+            guard let customIndex = captions.customCues?.firstIndex(of: displayedCue) else {
+                return
+            }
+            captions.customCues?[customIndex].text = text
+            plan.captions = captions
+        }
+    }
+
+    func restoreAutomaticCaptionText() {
+        guard plan.captions?.customCues != nil else { return }
+        mutate { $0.captions?.customCues = nil }
     }
 
     func undo() {

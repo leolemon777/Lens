@@ -70,4 +70,67 @@ final class VideoEditorModelTests: XCTestCase {
             "Restoring the originally opened plan must not masquerade as the newer saved plan"
         )
     }
+
+    func testCaptionControlsMaterializeEditableCopyWithoutChangingTranscript() throws {
+        let transcript = TranscriptDocument(
+            engine: "test",
+            generatedAt: Date(timeIntervalSince1970: 0),
+            localeIdentifier: "zh-Hans",
+            isOnDevice: true,
+            sourceRole: .microphone,
+            segments: [
+                TranscriptSegment(
+                    startSeconds: 0,
+                    endSeconds: 0.5,
+                    text: "你好",
+                    confidence: 1
+                ),
+                TranscriptSegment(
+                    startSeconds: 0.5,
+                    endSeconds: 1,
+                    text: "世界！",
+                    confidence: 1
+                )
+            ]
+        )
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 4,
+            hasCameraTrack: false,
+            transcript: transcript
+        )
+
+        XCTAssertTrue(model.hasTranscript)
+        XCTAssertEqual(model.captionSourceCues.map(\.text), ["你好世界！"])
+        model.setCaptionsEnabled(true)
+        model.setCaptionStyle(.highContrast)
+        model.setCaptionPosition(.top)
+        model.setCaptionFontScale(1.35)
+        model.setCaptionCueText("你好，屏迹！", at: 0)
+
+        XCTAssertTrue(model.captionsEnabled)
+        XCTAssertEqual(model.plan.captions?.style, .highContrast)
+        XCTAssertEqual(model.plan.captions?.position, .top)
+        XCTAssertEqual(model.plan.captions?.fontScale, 1.35)
+        XCTAssertEqual(model.captionSourceCues.first?.text, "你好，屏迹！")
+        XCTAssertEqual(transcript.fullText, "你好 世界！")
+
+        model.undo()
+        XCTAssertNil(model.plan.captions?.customCues)
+        XCTAssertEqual(model.captionSourceCues.first?.text, "你好世界！")
+    }
+
+    func testCaptionToggleRequiresTranscript() {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 3,
+            hasCameraTrack: false
+        )
+
+        model.setCaptionsEnabled(true)
+
+        XCTAssertFalse(model.hasTranscript)
+        XCTAssertFalse(model.captionsEnabled)
+        XCTAssertFalse(model.isDirty)
+    }
 }

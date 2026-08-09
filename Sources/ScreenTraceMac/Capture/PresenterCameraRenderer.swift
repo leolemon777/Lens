@@ -81,25 +81,6 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         cameraReader.add(cameraOutput)
 
         let audioTrack = try await screenAsset.loadTracks(withMediaType: .audio).first
-        let audioOutput: AVAssetReaderTrackOutput?
-        let audioInput: AVAssetWriterInput?
-        if let audioTrack {
-            let output = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
-            guard screenReader.canAdd(output) else {
-                throw PresenterCameraRendererError.readerUnavailable
-            }
-            screenReader.add(output)
-            audioOutput = output
-            let formatDescription = try await audioTrack.load(.formatDescriptions).first
-            audioInput = AVAssetWriterInput(
-                mediaType: .audio,
-                outputSettings: nil,
-                sourceFormatHint: formatDescription
-            )
-        } else {
-            audioOutput = nil
-            audioInput = nil
-        }
 
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try FileManager.default.removeItem(at: outputURL)
@@ -108,7 +89,11 @@ final class PresenterCameraRenderer: @unchecked Sendable {
             at: outputURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
+        let videoOnlyURL = outputURL.deletingLastPathComponent().appendingPathComponent(
+            ".presenter-video-\(UUID().uuidString).mp4"
+        )
+        defer { try? FileManager.default.removeItem(at: videoOnlyURL) }
+        let writer = try AVAssetWriter(outputURL: videoOnlyURL, fileType: .mp4)
         let videoInput = AVAssetWriterInput(
             mediaType: .video,
             outputSettings: [
@@ -135,13 +120,6 @@ final class PresenterCameraRenderer: @unchecked Sendable {
             throw PresenterCameraRendererError.writerUnavailable
         }
         writer.add(videoInput)
-        if let audioInput {
-            guard writer.canAdd(audioInput) else {
-                throw PresenterCameraRendererError.writerUnavailable
-            }
-            audioInput.expectsMediaDataInRealTime = false
-            writer.add(audioInput)
-        }
 
         guard writer.startWriting() else {
             throw PresenterCameraRendererError.mediaWriteFailed(
@@ -170,7 +148,6 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         let cameraDuration = try await cameraAsset.load(.duration).seconds
         var nextCameraSample = cameraOutput.copyNextSampleBuffer()
         var currentCameraBuffer: CVPixelBuffer?
-
         while let screenSample = screenOutput.copyNextSampleBuffer() {
             try Task.checkCancellation()
             let time = CMSampleBufferGetPresentationTimeStamp(screenSample)
@@ -199,7 +176,7 @@ final class PresenterCameraRenderer: @unchecked Sendable {
                 layout: layout,
                 outputExtent: outputExtent
             )
-            try await Self.waitUntilReady(videoInput)
+            try await Self.waitUntilReady(videoInput, writer: writer)
             guard let pool = adaptor.pixelBufferPool else {
                 throw PresenterCameraRendererError.pixelBufferUnavailable
             }
@@ -223,30 +200,12 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         videoInput.markAsFinished()
         if screenReader.status == .failed {
             throw PresenterCameraRendererError.mediaWriteFailed(
-                screenReader.error?.localizedDescription ?? "屏幕视频读取失败"
+                screenReader.error?.localizedDescription ?? "屏幕媒体读取失败"
             )
         }
         if cameraReader.status == .failed {
             throw PresenterCameraRendererError.mediaWriteFailed(
                 cameraReader.error?.localizedDescription ?? "摄像头视频读取失败"
-            )
-        }
-
-        if let audioInput, let audioOutput {
-            while let sample = audioOutput.copyNextSampleBuffer() {
-                try Task.checkCancellation()
-                try await Self.waitUntilReady(audioInput)
-                guard audioInput.append(sample) else {
-                    throw PresenterCameraRendererError.mediaWriteFailed(
-                        writer.error?.localizedDescription ?? "系统声音写入被拒绝"
-                    )
-                }
-            }
-            audioInput.markAsFinished()
-        }
-        if screenReader.status == .failed {
-            throw PresenterCameraRendererError.mediaWriteFailed(
-                screenReader.error?.localizedDescription ?? "屏幕音频读取失败"
             )
         }
         await writer.finishWriting()
@@ -255,6 +214,14 @@ final class PresenterCameraRenderer: @unchecked Sendable {
                 writer.error?.localizedDescription ?? "输出没有完成"
             )
         }
+        if let audioTrack {
+            return try await Self.attachAudio(
+                from: audioTrack,
+                toVideoAt: videoOnlyURL,
+                outputURL: outputURL
+            )
+        }
+        try FileManager.default.moveItem(at: videoOnlyURL, to: outputURL)
         return outputURL
     }
 
@@ -379,9 +346,69 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         return Int(min(max(pixels * 8, 4_000_000), 28_000_000))
     }
 
-    private nonisolated static func waitUntilReady(_ input: AVAssetWriterInput) async throws {
+    private nonisolated static func attachAudio(
+        from audioTrack: AVAssetTrack,
+        toVideoAt videoURL: URL,
+        outputURL: URL
+    ) async throws -> URL {
+        let videoAsset = AVURLAsset(url: videoURL)
+        guard let videoTrack = try await videoAsset.loadTracks(withMediaType: .video).first else {
+            throw PresenterCameraRendererError.missingScreenTrack
+        }
+        let videoRange = try await videoTrack.load(.timeRange)
+        let audioRange = try await audioTrack.load(.timeRange)
+        let composition = AVMutableComposition()
+        guard let outputVideo = composition.addMutableTrack(
+            withMediaType: .video,
+            preferredTrackID: kCMPersistentTrackID_Invalid
+        ) else {
+            throw PresenterCameraRendererError.writerUnavailable
+        }
+        try outputVideo.insertTimeRange(videoRange, of: videoTrack, at: .zero)
+        outputVideo.preferredTransform = try await videoTrack.load(.preferredTransform)
+
+        let audioDuration = CMTimeMinimum(videoRange.duration, audioRange.duration)
+        if CMTimeCompare(audioDuration, .zero) > 0 {
+            guard let outputAudio = composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ) else {
+                throw PresenterCameraRendererError.writerUnavailable
+            }
+            try outputAudio.insertTimeRange(
+                CMTimeRange(start: audioRange.start, duration: audioDuration),
+                of: audioTrack,
+                at: .zero
+            )
+        }
+
+        guard let exporter = AVAssetExportSession(
+            asset: composition,
+            presetName: AVAssetExportPresetPassthrough
+        ) else {
+            throw PresenterCameraRendererError.writerUnavailable
+        }
+        exporter.shouldOptimizeForNetworkUse = true
+        try await exporter.export(to: outputURL, as: .mp4)
+        return outputURL
+    }
+
+    private nonisolated static func waitUntilReady(
+        _ input: AVAssetWriterInput,
+        writer: AVAssetWriter
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(30))
         while !input.isReadyForMoreMediaData {
             try Task.checkCancellation()
+            guard writer.status == .writing else {
+                throw PresenterCameraRendererError.mediaWriteFailed(
+                    writer.error?.localizedDescription ?? "输出写入器已停止"
+                )
+            }
+            guard clock.now < deadline else {
+                throw PresenterCameraRendererError.mediaWriteFailed("输出写入器长时间无响应")
+            }
             try await Task.sleep(for: .milliseconds(2))
         }
     }

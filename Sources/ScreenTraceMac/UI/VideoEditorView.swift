@@ -460,6 +460,106 @@ struct VideoEditorView: View {
                     }
                 }
 
+                inspectorSection("字幕", symbol: "captions.bubble") {
+                    Toggle("烧录字幕", isOn: Binding(
+                        get: { model.captionsEnabled },
+                        set: { model.setCaptionsEnabled($0) }
+                    ))
+                    .disabled(!model.hasTranscript)
+                    if model.hasTranscript {
+                        HStack(spacing: 5) {
+                            Text("样式")
+                            Spacer()
+                            choiceButton(
+                                "玻璃",
+                                selected: (model.plan.captions?.style ?? .glass) == .glass
+                            ) {
+                                model.setCaptionStyle(.glass)
+                            }
+                            choiceButton(
+                                "简洁",
+                                selected: model.plan.captions?.style == .clean
+                            ) {
+                                model.setCaptionStyle(.clean)
+                            }
+                            choiceButton(
+                                "高对比",
+                                selected: model.plan.captions?.style == .highContrast
+                            ) {
+                                model.setCaptionStyle(.highContrast)
+                            }
+                        }
+                        HStack(spacing: 5) {
+                            Text("位置")
+                            Spacer()
+                            ForEach([
+                                ("顶部", AutoEditPlan.Captions.Position.top),
+                                ("居中", AutoEditPlan.Captions.Position.center),
+                                ("底部", AutoEditPlan.Captions.Position.bottom)
+                            ], id: \.0) { item in
+                                choiceButton(
+                                    item.0,
+                                    selected: (model.plan.captions?.position ?? .bottom) == item.1
+                                ) {
+                                    model.setCaptionPosition(item.1)
+                                }
+                            }
+                        }
+                        valueSlider(
+                            "字号",
+                            value: Binding(
+                                get: { model.plan.captions?.fontScale ?? 1 },
+                                set: { model.setCaptionFontScale($0) }
+                            ),
+                            range: 0.75...1.5
+                        )
+                        Text("保存后会按当前剪辑时间线重新对齐并烧录。")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+
+                        DisclosureGroup {
+                            LazyVStack(spacing: 8) {
+                                ForEach(
+                                    Array(model.captionSourceCues.enumerated()),
+                                    id: \.offset
+                                ) { index, cue in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(String(
+                                            format: "%@ – %@",
+                                            captionTimeText(cue.sourceStartSeconds),
+                                            captionTimeText(cue.sourceEndSeconds)
+                                        ))
+                                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        TextField("留空可隐藏这条字幕", text: Binding(
+                                            get: {
+                                                let cues = model.captionSourceCues
+                                                return cues.indices.contains(index)
+                                                    ? cues[index].text
+                                                    : ""
+                                            },
+                                            set: { model.setCaptionCueText($0, at: index) }
+                                        ))
+                                        .textFieldStyle(.roundedBorder)
+                                    }
+                                }
+                            }
+                            .padding(.top, 6)
+                        } label: {
+                            Text("校对文字 · \(model.captionSourceCues.count) 条")
+                                .font(.system(size: 9.5, weight: .semibold))
+                        }
+                        if model.plan.captions?.customCues != nil {
+                            Button("恢复本机转写原文", action: model.restoreAutomaticCaptionText)
+                                .buttonStyle(.borderless)
+                        }
+                    } else {
+                        Text("先回到屏迹库点击「转写」，本机识别后即可编辑和烧录。")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Button("恢复到打开时的方案", action: model.resetToAutomaticPlan)
                     .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
@@ -554,5 +654,11 @@ struct VideoEditorView: View {
         let value = max(seconds.isFinite ? seconds : 0, 0)
         let total = Int(value.rounded(.down))
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    private func captionTimeText(_ seconds: Double) -> String {
+        let value = max(seconds.isFinite ? seconds : 0, 0)
+        let minutes = Int(value / 60)
+        return String(format: "%d:%04.1f", minutes, value - Double(minutes * 60))
     }
 }

@@ -13,7 +13,22 @@ final class VideoEditorViewTests: XCTestCase {
             plan: plan,
             sourceDurationSeconds: 18,
             hasCameraTrack: true,
-            hasMicrophoneTrack: true
+            hasMicrophoneTrack: true,
+            transcript: TranscriptDocument(
+                engine: "test",
+                generatedAt: Date(timeIntervalSince1970: 0),
+                localeIdentifier: "zh-Hans",
+                isOnDevice: true,
+                sourceRole: .microphone,
+                segments: [
+                    TranscriptSegment(
+                        startSeconds: 0.5,
+                        endSeconds: 1.4,
+                        text: "这是一条可编辑的本机字幕。",
+                        confidence: 1
+                    )
+                ]
+            )
         )
         model.split(atOutputTime: 7)
         model.setSelectedPlaybackRate(1.5)

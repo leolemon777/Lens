@@ -24,17 +24,39 @@ final class AutoPreviewRenderer {
         inputURL: URL,
         cameraURL: URL? = nil,
         outputURL: URL,
-        plan: AutoEditPlan
+        plan: AutoEditPlan,
+        transcript: TranscriptDocument? = nil
     ) async throws -> URL {
         lastPresenterCameraError = nil
-        guard let presenter = plan.presenterCamera,
-              presenter.isEnabled,
-              let cameraURL,
-              FileManager.default.fileExists(atPath: cameraURL.path) else {
+        let availableCameraURL = cameraURL.flatMap {
+            FileManager.default.fileExists(atPath: $0.path) ? $0 : nil
+        }
+        let activePresenter = plan.presenterCamera.flatMap { layout in
+            layout.isEnabled && availableCameraURL != nil ? layout : nil
+        }
+        let captionRenderer: CaptionOverlayRenderer? = {
+            guard let configuration = plan.captions,
+                  configuration.isEnabled,
+                  let transcript else { return nil }
+            let cues = CaptionCuePlanner.cues(
+                transcript: transcript,
+                configuration: configuration,
+                timeline: plan.timeline
+            )
+            guard !cues.isEmpty else { return nil }
+            return CaptionOverlayRenderer(
+                cues: cues,
+                configuration: configuration,
+                presenter: activePresenter
+            )
+        }()
+        guard let presenter = activePresenter,
+              let cameraURL = availableCameraURL else {
             return try await renderScreenEffects(
                 inputURL: inputURL,
                 outputURL: outputURL,
-                plan: plan
+                plan: plan,
+                captionRenderer: captionRenderer
             )
         }
 
@@ -45,7 +67,8 @@ final class AutoPreviewRenderer {
         _ = try await renderScreenEffects(
             inputURL: inputURL,
             outputURL: temporaryURL,
-            plan: plan
+            plan: plan,
+            captionRenderer: captionRenderer
         )
         do {
             return try await PresenterCameraRenderer().render(
@@ -68,7 +91,8 @@ final class AutoPreviewRenderer {
     private func renderScreenEffects(
         inputURL: URL,
         outputURL: URL,
-        plan: AutoEditPlan
+        plan: AutoEditPlan,
+        captionRenderer: CaptionOverlayRenderer?
     ) async throws -> URL {
         let asset: AVAsset
         if let timeline = plan.timeline {
@@ -95,7 +119,8 @@ final class AutoPreviewRenderer {
                     time: time,
                     plan: plan,
                     cursorImage: cursorImage,
-                    clickRingImage: clickRingImage
+                    clickRingImage: clickRingImage,
+                    captionRenderer: captionRenderer
                 )
                 request.finish(with: result, context: nil)
                 },
@@ -206,7 +231,8 @@ final class AutoPreviewRenderer {
         time: Double,
         plan: AutoEditPlan,
         cursorImage: CIImage,
-        clickRingImage: CIImage
+        clickRingImage: CIImage,
+        captionRenderer: CaptionOverlayRenderer?
     ) -> CIImage {
         let extent = source.extent
         let sourceTime = plan.timeline?.position(atOutputTime: time)?.sourceTimeSeconds
@@ -323,8 +349,14 @@ final class AutoPreviewRenderer {
             frame = positionedCursor.composited(over: frame)
         }
         frame = frame.cropped(to: CGRect(origin: .zero, size: extent.size))
-        guard let canvas = plan.canvas, canvas.isEnabled else { return frame }
-        return applyCanvas(canvas, to: frame, extent: CGRect(origin: .zero, size: extent.size))
+        if let canvas = plan.canvas, canvas.isEnabled {
+            frame = applyCanvas(
+                canvas,
+                to: frame,
+                extent: CGRect(origin: .zero, size: extent.size)
+            )
+        }
+        return captionRenderer?.apply(to: frame, at: time) ?? frame
     }
 
     nonisolated private static func applyCanvas(

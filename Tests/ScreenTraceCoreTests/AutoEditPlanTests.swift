@@ -30,4 +30,26 @@ final class AutoEditPlanTests: XCTestCase {
 
         XCTAssertNil(decoded.audio)
     }
+
+    func testCaptionPlanClampsValuesAndLegacyPlanDecodesWithoutCaptions() throws {
+        let captions = AutoEditPlan.Captions(
+            isEnabled: true,
+            fontScale: 9,
+            maxCharactersPerCue: 2,
+            verticalMargin: -1
+        )
+        XCTAssertEqual(captions.fontScale, 1.6)
+        XCTAssertEqual(captions.maxCharactersPerCue, 8)
+        XCTAssertEqual(captions.verticalMargin, 0)
+
+        let encoded = try JSONEncoder().encode(AutoEditPlan())
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object.removeValue(forKey: "captions")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+        let decoded = try JSONDecoder().decode(AutoEditPlan.self, from: legacyData)
+
+        XCTAssertNil(decoded.captions)
+    }
 }

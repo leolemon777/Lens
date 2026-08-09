@@ -78,7 +78,7 @@ public struct ClickEvent: Codable, Equatable, Sendable {
 }
 
 public struct AutoEditPlan: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.2"
+    public static let currentSchemaVersion = "0.3"
 
     public struct ClickPulse: Codable, Equatable, Sendable {
         public let time: Double
@@ -290,6 +290,51 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         }
     }
 
+    public struct Captions: Codable, Equatable, Sendable {
+        public enum Style: String, Codable, CaseIterable, Sendable {
+            case glass
+            case clean
+            case highContrast
+        }
+
+        public enum Position: String, Codable, CaseIterable, Sendable {
+            case top
+            case center
+            case bottom
+        }
+
+        public var isEnabled: Bool
+        public var style: Style
+        public var position: Position
+        public var fontScale: Double
+        public var maxCharactersPerCue: Int
+        public var verticalMargin: Double
+        /// Nil keeps following the latest transcript. Once edited, this stores a
+        /// non-destructive source-time caption copy in the edit plan.
+        public var customCues: [CaptionSourceCue]?
+
+        public init(
+            isEnabled: Bool = false,
+            style: Style = .glass,
+            position: Position = .bottom,
+            fontScale: Double = 1,
+            maxCharactersPerCue: Int = 28,
+            verticalMargin: Double = 0.065,
+            customCues: [CaptionSourceCue]? = nil
+        ) {
+            self.isEnabled = isEnabled
+            self.style = style
+            self.position = position
+            self.fontScale = min(max(fontScale.isFinite ? fontScale : 1, 0.7), 1.6)
+            self.maxCharactersPerCue = min(max(maxCharactersPerCue, 8), 64)
+            self.verticalMargin = min(max(
+                verticalMargin.isFinite ? verticalMargin : 0.065,
+                0
+            ), 0.3)
+            self.customCues = customCues
+        }
+    }
+
     public var schemaVersion: String
     public var preset: String
     public var cursor: Cursor
@@ -299,6 +344,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     public var canvas: Canvas?
     public var interaction: Interaction?
     public var timeline: VideoEditTimeline?
+    public var captions: Captions?
 
     public init(
         schemaVersion: String = AutoEditPlan.currentSchemaVersion,
@@ -309,7 +355,8 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         audio: Audio? = Audio(),
         canvas: Canvas? = Canvas(),
         interaction: Interaction? = Interaction(),
-        timeline: VideoEditTimeline? = nil
+        timeline: VideoEditTimeline? = nil,
+        captions: Captions? = Captions()
     ) {
         self.schemaVersion = schemaVersion
         self.preset = preset
@@ -320,5 +367,6 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         self.canvas = canvas
         self.interaction = interaction
         self.timeline = timeline
+        self.captions = captions
     }
 }

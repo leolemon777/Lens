@@ -412,7 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     rawAssetURL: entry.primaryAssetURL,
                     manifest: entry.manifest
                 )
-                _ = try store.attachTranscript(document, to: saved)
+                var updatedTrace = try store.attachTranscript(document, to: saved)
                 traceLibrary.reloadIfVisible()
                 let trimmed = document.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
                 toast.show(
@@ -422,6 +422,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         : "\(document.segments.count) 个时间片段 · 已加入本地搜索",
                     symbol: trimmed.isEmpty ? "text.magnifyingglass" : "captions.bubble.fill"
                 )
+                if !trimmed.isEmpty {
+                    var plan = try store.loadAutoEditPlan(from: entry.packageURL)
+                    let isFirstTranscript = entry.transcriptText?.isEmpty != false
+                    if isFirstTranscript {
+                        if plan.captions == nil { plan.captions = .init() }
+                        plan.captions?.isEnabled = true
+                        updatedTrace = try store.writeAutoEditPlan(
+                            plan,
+                            to: entry.packageURL
+                        )
+                    }
+                    if plan.captions?.isEnabled == true {
+                        await processRecording(updatedTrace)
+                    }
+                }
             } catch is CancellationError {
                 toast.show(
                     title: "转写已取消",
@@ -679,11 +694,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let cameraURL = saved.manifest.assets.first(where: { $0.role == .camera })
                 .map { saved.packageURL.appendingPathComponent($0.relativePath) }
                 .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+            let transcript = plan.captions?.isEnabled == true
+                ? try? store.loadTranscript(from: saved.packageURL)
+                : nil
             _ = try await previewRenderer.render(
                 inputURL: saved.rawAssetURL,
                 cameraURL: cameraURL,
                 outputURL: outputURL,
-                plan: plan
+                plan: plan,
+                transcript: transcript
             )
             let microphoneURL = saved.manifest.assets.first(where: { $0.role == .microphone })
                 .map { saved.packageURL.appendingPathComponent($0.relativePath) }
@@ -728,6 +747,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     var completedEffects = ["自动运镜"]
                     if presenterWasRendered { completedEffects.append("画中画") }
                     if microphoneWasMixed { completedEffects.append("旁白混音") }
+                    if plan.captions?.isEnabled == true,
+                       transcript?.segments.isEmpty == false {
+                        completedEffects.append("字幕")
+                    }
                     var preservedTracks: [String] = []
                     if includesCamera, !presenterWasRendered { preservedTracks.append("摄像头") }
                     if includesMicrophone, !microphoneWasMixed { preservedTracks.append("麦克风") }

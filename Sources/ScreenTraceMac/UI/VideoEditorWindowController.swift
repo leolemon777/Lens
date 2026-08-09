@@ -73,11 +73,13 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
                     atPath: entry.packageURL.appendingPathComponent($0.relativePath).path
                 )
         }
+        let transcript = try? store.loadTranscript(from: entry.packageURL)
         let model = VideoEditorModel(
             plan: plan,
             sourceDurationSeconds: duration,
             hasCameraTrack: hasCamera,
-            hasMicrophoneTrack: hasMicrophone
+            hasMicrophoneTrack: hasMicrophone,
+            transcript: transcript
         )
         let playback = VideoEditorPlaybackController()
         model.onTimelineChanged = { [weak playback] timeline in

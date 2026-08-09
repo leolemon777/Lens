@@ -7,6 +7,33 @@ import XCTest
 @testable import ScreenTraceMac
 
 final class AutoPreviewRendererTests: XCTestCase {
+    func testCaptionOverlayRendererChangesOnlyActiveFrame() throws {
+        let configuration = AutoEditPlan.Captions(
+            isEnabled: true,
+            style: .highContrast,
+            position: .bottom
+        )
+        let renderer = CaptionOverlayRenderer(
+            cues: [CaptionCue(
+                startSeconds: 0.5,
+                endSeconds: 1.2,
+                text: "Caption overlay"
+            )],
+            configuration: configuration,
+            presenter: nil
+        )
+        let extent = CGRect(x: 0, y: 0, width: 640, height: 360)
+        let base = CIImage(color: CIColor(red: 0.1, green: 0.55, blue: 0.2))
+            .cropped(to: extent)
+        let inactive = renderer.apply(to: base, at: 0.2)
+        let active = renderer.apply(to: base, at: 0.8)
+        let context = CIContext(options: [.cacheIntermediates: false])
+        let inactiveImage = try XCTUnwrap(context.createCGImage(inactive, from: extent))
+        let activeImage = try XCTUnwrap(context.createCGImage(active, from: extent))
+
+        XCTAssertGreaterThan(changedPixelCount(between: inactiveImage, and: activeImage), 250)
+    }
+
     @MainActor
     func testSyntheticVideoRendersNaturalCameraAndCursorPreview() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -122,6 +149,74 @@ final class AutoPreviewRendererTests: XCTestCase {
         let videoTracks = try await output.loadTracks(withMediaType: .video)
         XCTAssertEqual(videoTracks.count, 1)
         XCTAssertEqual(duration, 0.875, accuracy: 0.09)
+    }
+
+    @MainActor
+    func testTranscriptIsBurnedIntoPreviewOnlyDuringCaptionCue() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceCaptionRenderTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inputURL = directory.appendingPathComponent("input.mp4")
+        let outputURL = directory.appendingPathComponent("captioned.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: inputURL,
+            frameCount: 42,
+            framesPerSecond: 24,
+            style: .greenCamera
+        )
+        var plan = AutoEditPlan()
+        plan.presenterCamera?.isEnabled = false
+        plan.captions = AutoEditPlan.Captions(
+            isEnabled: true,
+            style: .glass,
+            position: .bottom,
+            fontScale: 1.1
+        )
+        let transcript = TranscriptDocument(
+            engine: "test",
+            generatedAt: Date(timeIntervalSince1970: 0),
+            localeIdentifier: "en-US",
+            isOnDevice: true,
+            sourceRole: .screenVideo,
+            segments: [
+                TranscriptSegment(
+                    startSeconds: 0.5,
+                    endSeconds: 1.2,
+                    text: "Glass captions stay synchronized.",
+                    confidence: 1
+                )
+            ]
+        )
+
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: inputURL,
+            outputURL: outputURL,
+            plan: plan,
+            transcript: transcript
+        )
+
+        let output = AVURLAsset(url: outputURL)
+        let generator = AVAssetImageGenerator(asset: output)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let before = try await generator.image(
+            at: CMTime(seconds: 0.25, preferredTimescale: 600)
+        ).image
+        let during = try await generator.image(
+            at: CMTime(seconds: 0.75, preferredTimescale: 600)
+        ).image
+        let after = try await generator.image(
+            at: CMTime(seconds: 1.45, preferredTimescale: 600)
+        ).image
+        let captionDifference = changedPixelCount(between: before, and: during)
+        let outsideCueDifference = changedPixelCount(between: before, and: after)
+        XCTAssertGreaterThan(
+            captionDifference,
+            outsideCueDifference + 250,
+            "caption=\(captionDifference), outside=\(outsideCueDifference)"
+        )
     }
 
     @MainActor
@@ -335,6 +430,27 @@ final class AutoPreviewRendererTests: XCTestCase {
             interleaved: format.isInterleaved
         )
         try file.write(from: buffer)
+    }
+
+    private func changedPixelCount(between first: CGImage, and second: CGImage) -> Int {
+        let firstBitmap = NSBitmapImageRep(cgImage: first)
+        let secondBitmap = NSBitmapImageRep(cgImage: second)
+        var count = 0
+        for y in stride(from: 0, to: min(firstBitmap.pixelsHigh, secondBitmap.pixelsHigh), by: 2) {
+            for x in stride(from: 0, to: min(firstBitmap.pixelsWide, secondBitmap.pixelsWide), by: 2) {
+                guard let firstColor = firstBitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      let secondColor = secondBitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else {
+                    continue
+                }
+                let difference = abs(firstColor.redComponent - secondColor.redComponent)
+                    + abs(firstColor.greenComponent - secondColor.greenComponent)
+                    + abs(firstColor.blueComponent - secondColor.blueComponent)
+                if difference > 0.18 {
+                    count += 1
+                }
+            }
+        }
+        return count
     }
 }
 

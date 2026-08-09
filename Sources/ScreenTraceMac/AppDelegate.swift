@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let recordingControl = RecordingControlWindowController()
     private let previewRenderer = AutoPreviewRenderer()
     private let toast = ToastWindowController()
+    private let permissionCenter = PermissionCenterWindowController()
 
     private lazy var captureCoordinator = CaptureCoordinator(
         store: store,
@@ -88,11 +89,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
         menu.addItem(menuItem("打开操作中心  (fn + space)", action: #selector(toggleActionCenter)))
-        menu.addItem(menuItem("快速截图  (fn + control)", action: #selector(beginScreenshot)))
+        menu.addItem(menuItem("区域截图  (fn + control)", action: #selector(beginScreenshot)))
+        menu.addItem(menuItem("窗口截图", action: #selector(beginWindowScreenshot)))
+        menu.addItem(menuItem("当前屏幕截图", action: #selector(beginDisplayScreenshot)))
         menu.addItem(menuItem("开始屏幕录制", action: #selector(beginRecording)))
         menu.addItem(.separator())
         menu.addItem(menuItem("打开屏迹目录", action: #selector(openTraceDirectory)))
-        menu.addItem(menuItem("检查屏幕权限", action: #selector(checkScreenPermission)))
+        menu.addItem(menuItem("设置与权限", action: #selector(openSettingsAndPermissions)))
         menu.addItem(.separator())
         menu.addItem(menuItem("退出屏迹", action: #selector(quit), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -124,6 +127,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .screenshot:
             actionCenter.hide()
             captureCoordinator.beginRegionCapture()
+        case .windowScreenshot:
+            actionCenter.hide()
+            captureCoordinator.beginWindowCapture()
+        case .displayScreenshot:
+            actionCenter.hide()
+            captureCoordinator.beginDisplayCapture()
         case .recording:
             actionCenter.hide()
             startRecording()
@@ -159,7 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openTraceDirectory()
         case .openSettings:
             actionCenter.hide()
-            showSettingsPrototype()
+            permissionCenter.show()
         }
     }
 
@@ -172,6 +181,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         captureCoordinator.beginRegionCapture()
     }
 
+    @objc private func beginWindowScreenshot() {
+        actionCenter.hide()
+        captureCoordinator.beginWindowCapture()
+    }
+
+    @objc private func beginDisplayScreenshot() {
+        actionCenter.hide()
+        captureCoordinator.beginDisplayCapture()
+    }
+
     @objc private func beginRecording() {
         actionCenter.hide()
         startRecording()
@@ -182,25 +201,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(store.rootDirectory)
     }
 
-    @objc private func checkScreenPermission() {
-        if ScreenPermission.hasAccess {
-            toast.show(title: "屏幕权限正常", detail: "可以执行截图和录屏", symbol: "checkmark.shield.fill")
-        } else {
-            ScreenPermission.requestOrExplain()
-        }
+    @objc private func openSettingsAndPermissions() {
+        actionCenter.hide()
+        permissionCenter.show()
     }
 
     @objc private func quit() {
         NSApp.terminate(nil)
-    }
-
-    private func showSettingsPrototype() {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "屏迹设置"
-        alert.informativeText = "默认快捷键：\nFn + Control  快速截图\nFn + Space  操作中心\n\n完整原生设置界面将在 M1 继续实现。"
-        alert.addButton(withTitle: "好")
-        alert.runModal()
     }
 
     private func startRecording() {

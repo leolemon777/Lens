@@ -1,11 +1,20 @@
 import AppKit
+import ScreenTraceCore
 
 @MainActor
 final class CaptureOverlayWindow: NSWindow {
-    init(screen: NSScreen, displayID: CGDirectDisplayID, delegate: CaptureOverlayViewDelegate) {
+    init(
+        screen: NSScreen,
+        displayID: CGDirectDisplayID,
+        displayBounds: CGRect,
+        mode: CaptureOverlayMode,
+        delegate: CaptureOverlayViewDelegate
+    ) {
         let view = CaptureOverlayView(
             frame: CGRect(origin: .zero, size: screen.frame.size),
-            displayID: displayID
+            displayID: displayID,
+            displayBounds: displayBounds,
+            mode: mode
         )
         view.delegate = delegate
 

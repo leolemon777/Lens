@@ -2,6 +2,8 @@ import SwiftUI
 
 enum ActionCenterAction: String, CaseIterable, Identifiable {
     case screenshot
+    case windowScreenshot
+    case displayScreenshot
     case recording
     case ocr
     case scrollingCapture
@@ -14,6 +16,8 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .screenshot: "截图"
+        case .windowScreenshot: "窗口截图"
+        case .displayScreenshot: "屏幕截图"
         case .recording: "录屏"
         case .ocr: "OCR"
         case .scrollingCapture: "长截图"
@@ -25,7 +29,9 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .screenshot: "区域或窗口"
+        case .screenshot: "区域 · 窗口 · 屏幕"
+        case .windowScreenshot: "选择一个窗口"
+        case .displayScreenshot: "当前显示器"
         case .recording: "自然运镜"
         case .ocr: "识别文字"
         case .scrollingCapture: "滚动捕获"
@@ -38,6 +44,8 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .screenshot: "viewfinder"
+        case .windowScreenshot: "macwindow"
+        case .displayScreenshot: "display"
         case .recording: "record.circle"
         case .ocr: "text.viewfinder"
         case .scrollingCapture: "rectangle.and.arrow.up.right.and.arrow.down.left"
@@ -50,7 +58,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
     var tint: Color {
         switch self {
         case .recording: .red
-        case .screenshot: .cyan
+        case .screenshot, .windowScreenshot, .displayScreenshot: .cyan
         case .ocr: .indigo
         case .scrollingCapture: .orange
         case .pin: .yellow
@@ -102,7 +110,7 @@ struct ActionCenterView: View {
 
     private var primaryActions: some View {
         HStack(spacing: 10) {
-            actionTile(.screenshot, shortcut: "1")
+            screenshotMenu
             actionTile(.recording, shortcut: "2")
             actionTile(.ocr, shortcut: "3")
             actionTile(.scrollingCapture, shortcut: "4")
@@ -111,33 +119,64 @@ struct ActionCenterView: View {
         .padding(.vertical, 14)
     }
 
+    private var screenshotMenu: some View {
+        Menu {
+            Button {
+                onAction(.screenshot)
+            } label: {
+                Label("区域截图", systemImage: "viewfinder")
+            }
+            Button {
+                onAction(.windowScreenshot)
+            } label: {
+                Label("窗口截图", systemImage: "macwindow")
+            }
+            Button {
+                onAction(.displayScreenshot)
+            } label: {
+                Label("当前屏幕", systemImage: "display")
+            }
+        } label: {
+            actionTileLabel(.screenshot)
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(TraceActionButtonStyle(tint: .cyan))
+        .keyboardShortcut("1", modifiers: [])
+        .help("选择截图模式")
+    }
+
     private func actionTile(_ action: ActionCenterAction, shortcut: KeyEquivalent) -> some View {
         Button {
             onAction(action)
         } label: {
-            VStack(spacing: 7) {
-                ZStack {
-                    Circle()
-                        .fill(action.tint.opacity(0.13))
-                        .frame(width: 38, height: 38)
-                    Image(systemName: action.symbol)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(action.tint)
-                }
-                Text(action.title)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(action.subtitle)
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            actionTileLabel(action)
         }
         .buttonStyle(TraceActionButtonStyle(tint: action.tint))
         .keyboardShortcut(shortcut, modifiers: [])
         .help(action.title)
+    }
+
+    private func actionTileLabel(_ action: ActionCenterAction) -> some View {
+        VStack(spacing: 7) {
+            ZStack {
+                Circle()
+                    .fill(action.tint.opacity(0.13))
+                    .frame(width: 38, height: 38)
+                Image(systemName: action.symbol)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(action.tint)
+            }
+            Text(action.title)
+                .font(.system(size: 13, weight: .semibold))
+            Text(action.subtitle)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     @ViewBuilder

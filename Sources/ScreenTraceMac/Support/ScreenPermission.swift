@@ -6,9 +6,21 @@ enum ScreenPermission {
         CGPreflightScreenCaptureAccess()
     }
 
+    static func requestAccess() -> Bool {
+        CGRequestScreenCaptureAccess()
+    }
+
+    @MainActor
+    static func openSystemSettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+        ) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     @MainActor
     static func requestOrExplain() {
-        if CGRequestScreenCaptureAccess() {
+        if requestAccess() {
             return
         }
 
@@ -17,9 +29,8 @@ enum ScreenPermission {
         alert.informativeText = "屏迹只会在你主动截图或录屏时读取屏幕。请在系统设置中允许屏迹，然后重新打开应用。"
         alert.addButton(withTitle: "打开系统设置")
         alert.addButton(withTitle: "稍后")
-        if alert.runModal() == .alertFirstButtonReturn,
-           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-            NSWorkspace.shared.open(url)
+        if alert.runModal() == .alertFirstButtonReturn {
+            openSystemSettings()
         }
     }
 }

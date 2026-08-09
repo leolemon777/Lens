@@ -7,6 +7,7 @@ enum CameraTrackRecordingError: LocalizedError {
     case outputUnavailable
     case startTimedOut
     case stopTimedOut
+    case stoppedUnexpectedly
     case emptyTrack
     case missingVideoTrack
 
@@ -17,6 +18,7 @@ enum CameraTrackRecordingError: LocalizedError {
         case .outputUnavailable: "无法创建摄像头原始轨道。"
         case .startTimedOut: "摄像头启动超时。"
         case .stopTimedOut: "摄像头轨道完成超时。"
+        case .stoppedUnexpectedly: "摄像头在录制结束前意外停止。"
         case .emptyTrack: "摄像头轨道没有写入有效数据。"
         case .missingVideoTrack: "摄像头文件不包含视频轨道。"
         }
@@ -30,6 +32,7 @@ final class CameraTrackRecorder: NSObject {
     private var outputURL: URL?
     private var startContinuation: CheckedContinuation<Void, Error>?
     private var stopContinuation: CheckedContinuation<Void, Error>?
+    private var recordingFailure: Error?
     private var startGeneration = 0
     private var stopGeneration = 0
 
@@ -37,6 +40,7 @@ final class CameraTrackRecorder: NSObject {
 
     func start(outputURL: URL) async throws {
         await cancel()
+        recordingFailure = nil
         guard let device = AVCaptureDevice.default(for: .video) else {
             throw CameraTrackRecordingError.cameraUnavailable
         }
@@ -121,11 +125,15 @@ final class CameraTrackRecorder: NSObject {
             } catch {
                 finalizationError = error
             }
+        } else if recordingFailure == nil {
+            finalizationError = CameraTrackRecordingError.stoppedUnexpectedly
         }
         await setSession(session, running: false)
+        let effectiveFailure = finalizationError ?? recordingFailure
         clearState()
-        if let finalizationError {
-            throw finalizationError
+        recordingFailure = nil
+        if let effectiveFailure {
+            throw effectiveFailure
         }
         try await Self.validateVideoTrack(at: outputURL)
     }
@@ -148,6 +156,7 @@ final class CameraTrackRecorder: NSObject {
             continuation.resume(throwing: CancellationError())
         }
         clearState()
+        recordingFailure = nil
     }
 
     static func validateVideoTrack(at url: URL) async throws {
@@ -229,6 +238,9 @@ extension CameraTrackRecorder: AVCaptureFileOutputRecordingDelegate {
                 } else {
                     continuation.resume()
                 }
+            } else if startContinuation == nil {
+                recordingFailure = effectiveError
+                    ?? CameraTrackRecordingError.stoppedUnexpectedly
             }
         }
     }

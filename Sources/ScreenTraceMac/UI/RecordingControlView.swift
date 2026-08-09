@@ -11,6 +11,8 @@ final class RecordingControlModel: ObservableObject {
     @Published var capturesMicrophone = false
     @Published var capturesCamera = false
     @Published var isTransitioning = false
+    @Published var systemAudioLevel: Double = 0
+    @Published var microphoneAudioLevel: Double = 0
 
     func reset(
         sourceTitle: String = "屏幕录制",
@@ -27,6 +29,13 @@ final class RecordingControlModel: ObservableObject {
         self.capturesMicrophone = capturesMicrophone
         self.capturesCamera = capturesCamera
         isTransitioning = false
+        systemAudioLevel = 0
+        microphoneAudioLevel = 0
+    }
+
+    func updateAudioLevels(system: Double, microphone: Double) {
+        systemAudioLevel = min(max(system, 0), 1)
+        microphoneAudioLevel = min(max(microphone, 0), 1)
     }
 
     func setPaused(_ paused: Bool, at date: Date = Date()) {
@@ -69,18 +78,24 @@ struct RecordingControlView: View {
 
             Divider().frame(height: 20)
 
-            Image(systemName: "speaker.wave.2.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(model.capturesSystemAudio ? .green : .secondary)
-                .opacity(model.capturesSystemAudio ? 1 : 0.35)
-                .frame(width: 30)
-                .help(model.capturesSystemAudio ? "正在录制系统声音" : "系统声音已关闭")
+            HStack(spacing: 4) {
+                Image(systemName: "speaker.wave.2.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                AudioLevelBars(level: model.capturesSystemAudio ? model.systemAudioLevel : 0)
+            }
+            .foregroundStyle(model.capturesSystemAudio ? .green : .secondary)
+            .opacity(model.capturesSystemAudio ? 1 : 0.35)
+            .frame(width: 44)
+            .help(model.capturesSystemAudio ? "正在录制系统声音" : "系统声音已关闭")
 
             if model.capturesMicrophone {
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 12, weight: .semibold))
+                HStack(spacing: 4) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                    AudioLevelBars(level: model.microphoneAudioLevel)
+                }
                     .foregroundStyle(.green)
-                    .frame(width: 24)
+                    .frame(width: 38)
                     .help("麦克风正在单独分轨录制")
             }
 
@@ -129,5 +144,22 @@ struct RecordingControlView: View {
     private static func format(_ interval: TimeInterval) -> String {
         let seconds = max(0, Int(interval))
         return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+private struct AudioLevelBars: View {
+    let level: Double
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 1.5) {
+            ForEach(0..<3, id: \.self) { index in
+                let threshold = Double(index + 1) / 3
+                RoundedRectangle(cornerRadius: 1.2, style: .continuous)
+                    .frame(width: 2.5, height: CGFloat(4 + index * 3))
+                    .opacity(level >= threshold ? 0.95 : 0.2)
+            }
+        }
+        .frame(height: 10, alignment: .bottom)
+        .animation(.easeOut(duration: 0.08), value: level)
     }
 }

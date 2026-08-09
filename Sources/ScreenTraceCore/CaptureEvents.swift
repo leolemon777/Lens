@@ -253,11 +253,43 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         }
     }
 
+    public struct Audio: Codable, Equatable, Sendable {
+        public var isEnabled: Bool
+        public var systemVolume: Double
+        public var microphoneVolume: Double
+        public var ducksSystemUnderNarration: Bool
+        public var duckedSystemVolume: Double
+        public var narrationThresholdDecibels: Double
+        public var duckAttackSeconds: Double
+        public var duckReleaseSeconds: Double
+
+        public init(
+            isEnabled: Bool = true,
+            systemVolume: Double = 1,
+            microphoneVolume: Double = 1,
+            ducksSystemUnderNarration: Bool = true,
+            duckedSystemVolume: Double = 0.32,
+            narrationThresholdDecibels: Double = -42,
+            duckAttackSeconds: Double = 0.12,
+            duckReleaseSeconds: Double = 0.36
+        ) {
+            self.isEnabled = isEnabled
+            self.systemVolume = min(max(systemVolume, 0), 2)
+            self.microphoneVolume = min(max(microphoneVolume, 0), 2)
+            self.ducksSystemUnderNarration = ducksSystemUnderNarration
+            self.duckedSystemVolume = min(max(duckedSystemVolume, 0), 1)
+            self.narrationThresholdDecibels = min(max(narrationThresholdDecibels, -80), 0)
+            self.duckAttackSeconds = min(max(duckAttackSeconds, 0), 2)
+            self.duckReleaseSeconds = min(max(duckReleaseSeconds, 0), 3)
+        }
+    }
+
     public let schemaVersion: String
     public var preset: String
     public var cursor: Cursor
     public var camera: Camera
     public var presenterCamera: PresenterCamera?
+    public var audio: Audio?
     public var canvas: Canvas?
     public var interaction: Interaction?
 
@@ -267,6 +299,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         cursor: Cursor = Cursor(smoothing: 0.72, scale: 1.15, hidesWhenIdle: true),
         camera: Camera = Camera(mode: "event-driven", zoomIntensity: 0.42, followPointer: true),
         presenterCamera: PresenterCamera? = PresenterCamera(),
+        audio: Audio? = Audio(),
         canvas: Canvas? = Canvas(),
         interaction: Interaction? = Interaction()
     ) {
@@ -275,6 +308,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         self.cursor = cursor
         self.camera = camera
         self.presenterCamera = presenterCamera
+        self.audio = audio
         self.canvas = canvas
         self.interaction = interaction
     }

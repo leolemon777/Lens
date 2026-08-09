@@ -5,12 +5,14 @@ import SwiftUI
 final class RecordingControlWindowController {
     private let model = RecordingControlModel()
     private let panel: RecordingPanel
+    private var levelTimer: Timer?
+    private var levelProvider: (() -> (system: Double, microphone: Double))?
     var onStop: (() -> Void)?
     var onPauseToggle: (() -> Void)?
 
     init() {
         panel = RecordingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 430, height: 98),
+            contentRect: NSRect(x: 0, y: 0, width: 470, height: 98),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -22,7 +24,8 @@ final class RecordingControlWindowController {
         sourceTitle: String,
         capturesSystemAudio: Bool,
         capturesMicrophone: Bool,
-        capturesCamera: Bool
+        capturesCamera: Bool,
+        levelProvider: @escaping () -> (system: Double, microphone: Double)
     ) {
         model.reset(
             sourceTitle: sourceTitle,
@@ -30,16 +33,21 @@ final class RecordingControlWindowController {
             capturesMicrophone: capturesMicrophone,
             capturesCamera: capturesCamera
         )
+        self.levelProvider = levelProvider
+        startLevelUpdates()
         showExisting()
     }
 
     func showExisting() {
+        startLevelUpdates()
         positionPanel()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
     }
 
     func hide() {
+        levelTimer?.invalidate()
+        levelTimer = nil
         panel.orderOut(nil)
     }
 
@@ -76,6 +84,21 @@ final class RecordingControlWindowController {
             x: screen.visibleFrame.midX - panel.frame.width / 2,
             y: screen.visibleFrame.minY + 26
         ))
+    }
+
+    private func startLevelUpdates() {
+        guard levelTimer == nil, levelProvider != nil else { return }
+        let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let levels = self.levelProvider?() else { return }
+                self.model.updateAudioLevels(
+                    system: levels.system,
+                    microphone: levels.microphone
+                )
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        levelTimer = timer
     }
 
     private func stop() {

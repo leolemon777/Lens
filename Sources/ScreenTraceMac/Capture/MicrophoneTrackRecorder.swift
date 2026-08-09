@@ -4,6 +4,7 @@ import Foundation
 enum MicrophoneTrackRecordingError: LocalizedError {
     case inputUnavailable
     case emptyTrack
+    case stoppedUnexpectedly
     case writeFailed(String)
 
     var errorDescription: String? {
@@ -12,6 +13,8 @@ enum MicrophoneTrackRecordingError: LocalizedError {
             "当前没有可用的麦克风输入。"
         case .emptyTrack:
             "麦克风轨道没有写入有效数据。"
+        case .stoppedUnexpectedly:
+            "麦克风输入在录制结束前意外停止。"
         case let .writeFailed(message):
             "麦克风轨道写入失败：\(message)"
         }
@@ -20,11 +23,16 @@ enum MicrophoneTrackRecordingError: LocalizedError {
 
 @MainActor
 final class MicrophoneTrackRecorder {
+    private let levelMeter: AudioLevelMeter
     private var engine: AVAudioEngine?
     private var writer: MicrophoneFileWriter?
     private var outputURL: URL?
 
     var isRecording: Bool { engine?.isRunning == true }
+
+    init(levelMeter: AudioLevelMeter = AudioLevelMeter()) {
+        self.levelMeter = levelMeter
+    }
 
     func start(outputURL: URL) throws {
         stopWithoutValidation()
@@ -43,8 +51,10 @@ final class MicrophoneTrackRecorder {
             interleaved: format.isInterleaved
         )
         let writer = MicrophoneFileWriter(file: file)
+        let levelMeter = levelMeter
         input.installTap(onBus: 0, bufferSize: 4_096, format: format) { buffer, _ in
             writer.write(buffer)
+            levelMeter.update(buffer: buffer)
         }
         engine.prepare()
         do {
@@ -61,6 +71,7 @@ final class MicrophoneTrackRecorder {
 
     func stop() throws {
         guard let engine, let writer, let outputURL else { return }
+        let stoppedUnexpectedly = !engine.isRunning
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         engine.reset()
@@ -70,6 +81,9 @@ final class MicrophoneTrackRecorder {
 
         if let failure = writer.failure {
             throw MicrophoneTrackRecordingError.writeFailed(failure.localizedDescription)
+        }
+        if stoppedUnexpectedly {
+            throw MicrophoneTrackRecordingError.stoppedUnexpectedly
         }
         let size = try FileManager.default.attributesOfItem(atPath: outputURL.path)[.size]
             as? NSNumber

@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let pointerRecorder = PointerEventRecorder()
     private let recordingControl = RecordingControlWindowController()
     private let previewRenderer = AutoPreviewRenderer()
+    private let audioMixdownRenderer = AudioMixdownRenderer()
     private let toast = ToastWindowController()
     private let permissionCenter = PermissionCenterWindowController()
     private lazy var annotationEditor = ScreenshotAnnotationEditorWindowController(store: store)
@@ -376,7 +377,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     sourceTitle: source.mode.presentationTitle,
                     capturesSystemAudio: options.capturesSystemAudio,
                     capturesMicrophone: options.capturesMicrophone,
-                    capturesCamera: options.capturesCamera
+                    capturesCamera: options.capturesCamera,
+                    levelProvider: { [weak self] in
+                        self?.recordingService.audioLevels ?? (0, 0)
+                    }
                 )
             } catch {
                 recordingControl.hide()
@@ -508,6 +512,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 outputURL: outputURL,
                 plan: plan
             )
+            let microphoneURL = saved.manifest.assets.first(where: { $0.role == .microphone })
+                .map { saved.packageURL.appendingPathComponent($0.relativePath) }
+                .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+            var audioMixError: Error?
+            var microphoneWasMixed = false
+            if let microphoneURL, let audioPlan = plan.audio, audioPlan.isEnabled {
+                let mixedURL = saved.packageURL.appendingPathComponent(
+                    "previews/.auto-mixed-\(UUID().uuidString).mp4"
+                )
+                defer { try? FileManager.default.removeItem(at: mixedURL) }
+                do {
+                    _ = try await audioMixdownRenderer.render(
+                        inputURL: outputURL,
+                        microphoneURL: microphoneURL,
+                        outputURL: mixedURL,
+                        plan: audioPlan
+                    )
+                    _ = try FileManager.default.replaceItemAt(
+                        outputURL,
+                        withItemAt: mixedURL
+                    )
+                    microphoneWasMixed = true
+                } catch {
+                    audioMixError = error
+                }
+            }
             _ = try store.completeProcessing(
                 packageURL: saved.packageURL,
                 renderedVideoURL: outputURL
@@ -517,16 +547,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let presenterWasRendered = plan.presenterCamera?.isEnabled == true
                 && cameraURL != nil
                 && previewRenderer.lastPresenterCameraError == nil
+            let includesMicrophone = saved.manifest.assets.contains { $0.role == .microphone }
             toast.show(
                 title: "自然模式预览已就绪",
                 detail: {
-                    if presenterWasRendered {
-                        return "摄像头画中画已自动合成，原始轨仍完整保留"
+                    var completedEffects = ["自动运镜"]
+                    if presenterWasRendered { completedEffects.append("画中画") }
+                    if microphoneWasMixed { completedEffects.append("旁白混音") }
+                    var preservedTracks: [String] = []
+                    if includesCamera, !presenterWasRendered { preservedTracks.append("摄像头") }
+                    if includesMicrophone, !microphoneWasMixed { preservedTracks.append("麦克风") }
+                    if !preservedTracks.isEmpty {
+                        let reason = audioMixError == nil ? "未叠加" : "混音未完成"
+                        return "\(completedEffects.joined(separator: "、"))已完成；\(preservedTracks.joined(separator: "、"))原始轨已保留（\(reason)）"
                     }
-                    if includesCamera {
-                        return "屏幕预览已完成；摄像头原始轨仍已保留"
-                    }
-                    return "原始视频和自动效果均已保留"
+                    return "\(completedEffects.joined(separator: "、"))已完成，全部原始轨仍完整保留"
                 }(),
                 symbol: "sparkles"
             )

@@ -43,7 +43,10 @@ struct ScreenRecordingOptions: Sendable {
 final class ScreenRecordingService: NSObject {
     private let store: TraceProjectStore
     private let pointerRecorder: PointerEventRecorder
-    private let microphoneRecorder = MicrophoneTrackRecorder()
+    private let systemAudioMeter = AudioLevelMeter()
+    private let microphoneMeter = AudioLevelMeter()
+    private lazy var systemAudioMonitor = SystemAudioLevelMonitor(meter: systemAudioMeter)
+    private lazy var microphoneRecorder = MicrophoneTrackRecorder(levelMeter: microphoneMeter)
     private let cameraRecorder = CameraTrackRecorder()
     private let segmentAssembler = RecordingSegmentAssembler()
     private var stream: SCStream?
@@ -63,6 +66,9 @@ final class ScreenRecordingService: NSObject {
     private var recordingOutputFinished = false
     private var stopFailure: Error?
     private var stopGeneration = 0
+    private var unexpectedCaptureFailure: Error?
+    private var streamStoppedUnexpectedly = false
+    private var outputFinishedUnexpectedly = false
     private(set) var lastMicrophoneError: Error?
     private(set) var lastCameraError: Error?
     private(set) var isPaused = false
@@ -73,6 +79,9 @@ final class ScreenRecordingService: NSObject {
     }
 
     var isRecording: Bool { session != nil }
+    var audioLevels: (system: Double, microphone: Double) {
+        (systemAudioMeter.level, microphoneMeter.level)
+    }
 
     func start(
         source: RecordingCaptureSource,
@@ -84,6 +93,8 @@ final class ScreenRecordingService: NSObject {
         defer { isTransitioning = false }
         lastMicrophoneError = nil
         lastCameraError = nil
+        systemAudioMeter.reset()
+        microphoneMeter.reset()
 
         let content = try await shareableContent()
         let prepared = try prepare(source: source, content: content)
@@ -315,6 +326,8 @@ final class ScreenRecordingService: NSObject {
                 in: session
             )
             accumulatedActiveDuration += duration
+            systemAudioMeter.reset()
+            microphoneMeter.reset()
             clearActiveSegment()
         } catch {
             await pointerRecorder.stop()
@@ -330,17 +343,21 @@ final class ScreenRecordingService: NSObject {
     private func stopCapture(_ stream: SCStream) async throws {
         stopGeneration += 1
         let generation = stopGeneration
-        stopCaptureCompleted = false
-        recordingOutputFinished = false
-        stopFailure = nil
+        stopCaptureCompleted = streamStoppedUnexpectedly
+        recordingOutputFinished = outputFinishedUnexpectedly
+        stopFailure = unexpectedCaptureFailure
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             stopContinuation = continuation
-            stream.stopCapture { [weak self] error in
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.stopCaptureCompleted = true
-                    if let error { self.stopFailure = error }
-                    self.finishStopIfPossible()
+            if stopCaptureCompleted {
+                finishStopIfPossible()
+            } else {
+                stream.stopCapture { [weak self] error in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        self.stopCaptureCompleted = true
+                        if let error { self.stopFailure = error }
+                        self.finishStopIfPossible()
+                    }
                 }
             }
             Task { @MainActor [weak self] in
@@ -393,6 +410,13 @@ final class ScreenRecordingService: NSObject {
             configuration: configuration,
             delegate: self
         )
+        if options.capturesSystemAudio {
+            try stream.addStreamOutput(
+                systemAudioMonitor,
+                type: .audio,
+                sampleHandlerQueue: SystemAudioLevelMonitor.queue
+            )
+        }
         let outputConfiguration = SCRecordingOutputConfiguration()
         outputConfiguration.outputURL = outputURL
         outputConfiguration.videoCodecType = .h264
@@ -538,6 +562,9 @@ final class ScreenRecordingService: NSObject {
         recordingOutputFinished = false
         stopFailure = nil
         stopContinuation = nil
+        unexpectedCaptureFailure = nil
+        streamStoppedUnexpectedly = false
+        outputFinishedUnexpectedly = false
     }
 
     private func clearSession() {
@@ -549,6 +576,8 @@ final class ScreenRecordingService: NSObject {
         accumulatedActiveDuration = 0
         nextSegmentIndex = 1
         isPaused = false
+        systemAudioMeter.reset()
+        microphoneMeter.reset()
     }
 
     private func removeEmptyOptionalTracks(
@@ -732,6 +761,11 @@ extension ScreenRecordingService: SCRecordingOutputDelegate {
     nonisolated func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) {
         Task { @MainActor in
             guard self.recordingOutput === recordingOutput else { return }
+            if stopContinuation == nil {
+                outputFinishedUnexpectedly = true
+                unexpectedCaptureFailure = ScreenRecordingError.recordingDidNotFinalize
+                return
+            }
             recordingOutputFinished = true
             finishStopIfPossible()
         }
@@ -743,6 +777,11 @@ extension ScreenRecordingService: SCRecordingOutputDelegate {
     ) {
         Task { @MainActor in
             guard self.recordingOutput === recordingOutput else { return }
+            if stopContinuation == nil {
+                outputFinishedUnexpectedly = true
+                unexpectedCaptureFailure = error
+                return
+            }
             stopFailure = error
             recordingOutputFinished = true
             finishStopIfPossible()
@@ -754,6 +793,11 @@ extension ScreenRecordingService: SCStreamDelegate {
     nonisolated func stream(_ stream: SCStream, didStopWithError error: any Error) {
         Task { @MainActor in
             guard self.stream === stream else { return }
+            if stopContinuation == nil {
+                streamStoppedUnexpectedly = true
+                unexpectedCaptureFailure = error
+                return
+            }
             stopFailure = error
             stopCaptureCompleted = true
             recordingOutputFinished = true

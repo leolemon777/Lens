@@ -36,6 +36,7 @@ struct ScreenRecordingOptions: Sendable {
 final class ScreenRecordingService: NSObject {
     private let store: TraceProjectStore
     private let pointerRecorder: PointerEventRecorder
+    private let microphoneRecorder = MicrophoneTrackRecorder()
     private var stream: SCStream?
     private var recordingOutput: SCRecordingOutput?
     private var session: RecordingTraceSession?
@@ -45,6 +46,7 @@ final class ScreenRecordingService: NSObject {
     private var stopCaptureCompleted = false
     private var recordingOutputFinished = false
     private var stopFailure: Error?
+    private(set) var lastMicrophoneError: Error?
 
     init(store: TraceProjectStore, pointerRecorder: PointerEventRecorder) {
         self.store = store
@@ -58,6 +60,7 @@ final class ScreenRecordingService: NSObject {
         options: ScreenRecordingOptions = ScreenRecordingOptions()
     ) async throws -> RecordingTraceSession {
         guard stream == nil else { throw ScreenRecordingError.alreadyRecording }
+        lastMicrophoneError = nil
 
         let content = try await shareableContent()
         let prepared = try prepare(source: source, content: content)
@@ -68,7 +71,8 @@ final class ScreenRecordingService: NSObject {
                 recordingSource: source,
                 actualCaptureBounds: prepared.captureBounds,
                 actualSourceRect: prepared.sourceRect
-            )
+            ),
+            includesMicrophone: options.capturesMicrophone
         )
 
         do {
@@ -86,7 +90,8 @@ final class ScreenRecordingService: NSObject {
             configuration.excludesCurrentProcessAudio = true
             configuration.sampleRate = 48_000
             configuration.channelCount = 2
-            configuration.captureMicrophone = options.capturesMicrophone
+            // Narration is recorded into a physically separate local track below.
+            configuration.captureMicrophone = false
             configuration.captureResolution = .best
             configuration.preservesAspectRatio = true
             if let sourceRect = prepared.sourceRect {
@@ -113,6 +118,10 @@ final class ScreenRecordingService: NSObject {
             )
             try stream.addRecordingOutput(recordingOutput)
 
+            if let microphoneURL = session.microphoneURL {
+                try microphoneRecorder.start(outputURL: microphoneURL)
+            }
+
             try pointerRecorder.start(
                 session: session,
                 captureBounds: prepared.captureBounds,
@@ -126,6 +135,8 @@ final class ScreenRecordingService: NSObject {
             startedAtUptime = ProcessInfo.processInfo.systemUptime
             return session
         } catch {
+            microphoneRecorder.cancel()
+            removeEmptyMicrophoneAsset(from: session)
             await pointerRecorder.stop()
             try? store.markRecordingInterrupted(session)
             throw error
@@ -135,6 +146,13 @@ final class ScreenRecordingService: NSObject {
     func stop() async throws -> SavedTrace {
         guard let stream, let session else { throw ScreenRecordingError.notRecording }
         let duration = max(0, ProcessInfo.processInfo.systemUptime - (startedAtUptime ?? 0))
+
+        do {
+            try microphoneRecorder.stop()
+        } catch {
+            lastMicrophoneError = error
+            removeEmptyMicrophoneAsset(from: session)
+        }
 
         stopCaptureCompleted = false
         recordingOutputFinished = false
@@ -197,6 +215,14 @@ final class ScreenRecordingService: NSObject {
         recordingOutputFinished = false
         stopFailure = nil
         stopContinuation = nil
+    }
+
+    private func removeEmptyMicrophoneAsset(from session: RecordingTraceSession) {
+        guard let microphoneURL = session.microphoneURL else { return }
+        let size = (try? FileManager.default.attributesOfItem(atPath: microphoneURL.path)[.size]
+            as? NSNumber)?.int64Value ?? 0
+        guard size == 0 else { return }
+        try? store.removeAsset(role: .microphone, from: session.packageURL)
     }
 
     private func shareableContent() async throws -> SCShareableContent {

@@ -20,7 +20,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         case .screenshot: "截图"
         case .windowScreenshot: "窗口截图"
         case .displayScreenshot: "屏幕截图"
-        case .recording: "屏幕录制"
+        case .recording: "录屏"
         case .regionRecording: "区域录制"
         case .windowRecording: "窗口录制"
         case .ocr: "OCR"
@@ -36,7 +36,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         case .screenshot: "区域 · 窗口 · 屏幕"
         case .windowScreenshot: "选择一个窗口"
         case .displayScreenshot: "当前显示器"
-        case .recording: "当前显示器"
+        case .recording: "区域 · 窗口 · 屏幕"
         case .regionRecording: "选择一个区域"
         case .windowRecording: "选择一个窗口"
         case .ocr: "识别文字"
@@ -170,6 +170,13 @@ struct ActionCenterView: View {
                 onAction(.recording)
             } label: {
                 Label("录制当前屏幕", systemImage: "display")
+            }
+            Divider()
+            Toggle(isOn: $model.capturesSystemAudio) {
+                Label("录制系统声音", systemImage: "speaker.wave.2")
+            }
+            Toggle(isOn: $model.capturesMicrophone) {
+                Label("单独录制麦克风", systemImage: "mic")
             }
         } label: {
             actionTileLabel(.recording)

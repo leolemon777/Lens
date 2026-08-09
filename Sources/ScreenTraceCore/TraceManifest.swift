@@ -151,6 +151,7 @@ public struct RecordingTraceSession: Equatable, Sendable {
     public let pointerEventsURL: URL
     public let clickEventsURL: URL
     public let editPlanURL: URL
+    public let microphoneURL: URL?
     public let manifest: TraceManifest
 
     public init(
@@ -159,6 +160,7 @@ public struct RecordingTraceSession: Equatable, Sendable {
         pointerEventsURL: URL,
         clickEventsURL: URL,
         editPlanURL: URL,
+        microphoneURL: URL? = nil,
         manifest: TraceManifest
     ) {
         self.packageURL = packageURL
@@ -166,6 +168,7 @@ public struct RecordingTraceSession: Equatable, Sendable {
         self.pointerEventsURL = pointerEventsURL
         self.clickEventsURL = clickEventsURL
         self.editPlanURL = editPlanURL
+        self.microphoneURL = microphoneURL
         self.manifest = manifest
     }
 }

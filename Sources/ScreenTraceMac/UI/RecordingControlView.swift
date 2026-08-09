@@ -7,13 +7,21 @@ final class RecordingControlModel: ObservableObject {
     @Published var pausedAt: Date?
     @Published var accumulatedPause: TimeInterval = 0
     @Published var sourceTitle = "屏幕录制"
+    @Published var capturesSystemAudio = true
+    @Published var capturesMicrophone = false
 
-    func reset(sourceTitle: String = "屏幕录制") {
+    func reset(
+        sourceTitle: String = "屏幕录制",
+        capturesSystemAudio: Bool = true,
+        capturesMicrophone: Bool = false
+    ) {
         isPaused = false
         startedAt = Date()
         pausedAt = nil
         accumulatedPause = 0
         self.sourceTitle = sourceTitle
+        self.capturesSystemAudio = capturesSystemAudio
+        self.capturesMicrophone = capturesMicrophone
     }
 
     func togglePause() {
@@ -56,9 +64,18 @@ struct RecordingControlView: View {
 
             Image(systemName: "speaker.wave.2.fill")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.green)
+                .foregroundStyle(model.capturesSystemAudio ? .green : .secondary)
+                .opacity(model.capturesSystemAudio ? 1 : 0.35)
                 .frame(width: 30)
-                .help("正在录制系统声音")
+                .help(model.capturesSystemAudio ? "正在录制系统声音" : "系统声音已关闭")
+
+            if model.capturesMicrophone {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.green)
+                    .frame(width: 24)
+                    .help("麦克风正在单独分轨录制")
+            }
 
             Button {
                 model.togglePause()

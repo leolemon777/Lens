@@ -264,6 +264,7 @@ public struct TraceProjectStore: Sendable {
         width: Int,
         height: Int,
         captureSource: TraceCaptureMetadata? = nil,
+        includesMicrophone: Bool = false,
         createdAt: Date = Date(),
         id: UUID = UUID()
     ) throws -> RecordingTraceSession {
@@ -285,6 +286,9 @@ public struct TraceProjectStore: Sendable {
         let pointerURL = eventsDirectory.appendingPathComponent("pointer.jsonl")
         let clicksURL = eventsDirectory.appendingPathComponent("clicks.jsonl")
         let editPlanURL = editsDirectory.appendingPathComponent("edit-plan.json")
+        let microphoneURL = includesMicrophone
+            ? rawDirectory.appendingPathComponent("microphone.caf")
+            : nil
 
         do {
             for directory in [rawDirectory, eventsDirectory, analysisDirectory, editsDirectory, previewsDirectory] {
@@ -303,6 +307,17 @@ public struct TraceProjectStore: Sendable {
             case .display: "屏幕录制"
             case nil: "录屏"
             }
+            var assets = [
+                TraceAsset(role: .screenVideo, relativePath: "raw/screen.mp4"),
+                TraceAsset(role: .pointerEvents, relativePath: "events/pointer.jsonl"),
+                TraceAsset(role: .clickEvents, relativePath: "events/clicks.jsonl"),
+                TraceAsset(role: .editPlan, relativePath: "edits/edit-plan.json")
+            ]
+            if includesMicrophone {
+                assets.append(
+                    TraceAsset(role: .microphone, relativePath: "raw/microphone.caf")
+                )
+            }
             let manifest = TraceManifest(
                 id: id,
                 kind: .recording,
@@ -311,12 +326,7 @@ public struct TraceProjectStore: Sendable {
                 state: .capturing,
                 dimensions: TraceDimensions(width: width, height: height),
                 captureSource: captureSource,
-                assets: [
-                    TraceAsset(role: .screenVideo, relativePath: "raw/screen.mp4"),
-                    TraceAsset(role: .pointerEvents, relativePath: "events/pointer.jsonl"),
-                    TraceAsset(role: .clickEvents, relativePath: "events/clicks.jsonl"),
-                    TraceAsset(role: .editPlan, relativePath: "edits/edit-plan.json")
-                ]
+                assets: assets
             )
             try writeManifest(manifest, to: packageURL)
             return RecordingTraceSession(
@@ -325,6 +335,7 @@ public struct TraceProjectStore: Sendable {
                 pointerEventsURL: pointerURL,
                 clickEventsURL: clicksURL,
                 editPlanURL: editPlanURL,
+                microphoneURL: microphoneURL,
                 manifest: manifest
             )
         } catch {
@@ -345,7 +356,8 @@ public struct TraceProjectStore: Sendable {
         guard (attributes[.size] as? NSNumber)?.int64Value ?? 0 > 0 else {
             throw TraceProjectStoreError.emptyRawRecording
         }
-        var manifest = session.manifest
+        // Preserve assets that may have been added or removed while capture was active.
+        var manifest = (try? loadManifest(from: session.packageURL)) ?? session.manifest
         manifest.state = state
         manifest.durationSeconds = max(0, durationSeconds)
         try writeManifest(manifest, to: session.packageURL)
@@ -357,9 +369,18 @@ public struct TraceProjectStore: Sendable {
     }
 
     public func markRecordingInterrupted(_ session: RecordingTraceSession) throws {
-        var manifest = session.manifest
+        var manifest = (try? loadManifest(from: session.packageURL)) ?? session.manifest
         manifest.state = .interrupted
         try writeManifest(manifest, to: session.packageURL)
+    }
+
+    public func removeAsset(
+        role: TraceAsset.Role,
+        from packageURL: URL
+    ) throws {
+        var manifest = try loadManifest(from: packageURL)
+        manifest.assets.removeAll { $0.role == role }
+        try writeManifest(manifest, to: packageURL)
     }
 
     public func writeAutoEditPlan(

@@ -215,6 +215,33 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertTrue(manifest.title.hasPrefix("Sketch 窗口录屏"))
     }
 
+    func testRecordingCanReserveAndRemovePhysicalMicrophoneAsset() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+
+        let session = try store.beginRecording(
+            width: 1_280,
+            height: 720,
+            includesMicrophone: true
+        )
+        let microphoneURL = try XCTUnwrap(session.microphoneURL)
+        XCTAssertEqual(microphoneURL.lastPathComponent, "microphone.caf")
+        XCTAssertTrue(session.manifest.assets.contains {
+            $0.role == .microphone && $0.relativePath == "raw/microphone.caf"
+        })
+
+        try Data([1, 2, 3]).write(to: microphoneURL)
+        try store.removeAsset(role: .microphone, from: session.packageURL)
+        try Data([9, 8, 7]).write(to: session.videoURL)
+        let finalized = try store.finalizeRecording(session, durationSeconds: 2)
+        XCTAssertFalse(finalized.manifest.assets.contains {
+            $0.role == .microphone
+        })
+        XCTAssertEqual(try Data(contentsOf: microphoneURL), Data([1, 2, 3]))
+    }
+
     func testLegacyPointOneManifestDecodesWithoutCaptureMetadata() throws {
         let json = """
         {

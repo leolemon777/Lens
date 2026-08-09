@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import ScreenTraceCore
 
 @MainActor
@@ -328,16 +329,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             recordingControl.showExisting()
             return
         }
+        let audioSummary: String
+        switch (model.capturesSystemAudio, model.capturesMicrophone) {
+        case (true, true): audioSummary = "系统声音 + 麦克风分轨"
+        case (true, false): audioSummary = "系统声音"
+        case (false, true): audioSummary = "麦克风分轨"
+        case (false, false): audioSummary = "无音频"
+        }
         toast.show(
             title: "正在准备\(source.mode.presentationTitle)",
-            detail: "60 FPS · 系统声音 · 事件分轨",
+            detail: "60 FPS · \(audioSummary) · 事件分轨",
             symbol: "record.circle"
         )
         Task { @MainActor [weak self] in
             guard let self else { return }
+            if model.capturesMicrophone, !(await microphoneAccessGranted()) {
+                toast.show(
+                    title: "麦克风尚未授权",
+                    detail: "已打开权限中心；关闭麦克风后仍可继续录屏",
+                    symbol: "mic.slash.fill"
+                )
+                permissionCenter.show()
+                return
+            }
+            let options = ScreenRecordingOptions(
+                framesPerSecond: 60,
+                capturesSystemAudio: model.capturesSystemAudio,
+                capturesMicrophone: model.capturesMicrophone
+            )
             do {
-                _ = try await recordingService.start(source: source)
-                recordingControl.begin(sourceTitle: source.mode.presentationTitle)
+                _ = try await recordingService.start(source: source, options: options)
+                recordingControl.begin(
+                    sourceTitle: source.mode.presentationTitle,
+                    capturesSystemAudio: options.capturesSystemAudio,
+                    capturesMicrophone: options.capturesMicrophone
+                )
             } catch {
                 recordingControl.hide()
                 showRecordingError(error)
@@ -353,9 +379,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let saved = try await recordingService.stop()
                 let seconds = saved.manifest.durationSeconds ?? 0
+                let microphoneDetail = recordingService.lastMicrophoneError == nil
+                    ? "正在后台生成自然模式"
+                    : "麦克风轨道异常，屏幕与系统声仍已保留"
                 toast.show(
                     title: "录屏已安全保存",
-                    detail: String(format: "%.1f 秒 · 正在后台生成自然模式", seconds),
+                    detail: String(format: "%.1f 秒 · %@", seconds, microphoneDetail),
                     symbol: "checkmark.circle.fill"
                 )
                 traceLibrary.reloadIfVisible()
@@ -374,6 +403,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
         return number.uint32Value
+    }
+
+    private func microphoneAccessGranted() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            true
+        case .notDetermined:
+            await AVCaptureDevice.requestAccess(for: .audio)
+        case .denied, .restricted:
+            false
+        @unknown default:
+            false
+        }
     }
 
     private func showRecordingError(_ error: Error) {

@@ -78,7 +78,7 @@ public struct ClickEvent: Codable, Equatable, Sendable {
 }
 
 public struct AutoEditPlan: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.5"
+    public static let currentSchemaVersion = "0.6"
 
     public struct ClickPulse: Codable, Equatable, Sendable {
         public let time: Double
@@ -351,6 +351,10 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         public var isEnabled: Bool
         public var systemVolume: Double
         public var microphoneVolume: Double
+        public var reducesMicrophoneNoise: Bool
+        public var noiseReductionAmount: Double
+        public var normalizesLoudness: Bool
+        public var targetLoudnessLUFS: Double
         public var ducksSystemUnderNarration: Bool
         public var duckedSystemVolume: Double
         public var narrationThresholdDecibels: Double
@@ -361,6 +365,10 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             isEnabled: Bool = true,
             systemVolume: Double = 1,
             microphoneVolume: Double = 1,
+            reducesMicrophoneNoise: Bool = true,
+            noiseReductionAmount: Double = 0.55,
+            normalizesLoudness: Bool = true,
+            targetLoudnessLUFS: Double = -16,
             ducksSystemUnderNarration: Bool = true,
             duckedSystemVolume: Double = 0.32,
             narrationThresholdDecibels: Double = -42,
@@ -370,11 +378,89 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             self.isEnabled = isEnabled
             self.systemVolume = min(max(systemVolume, 0), 2)
             self.microphoneVolume = min(max(microphoneVolume, 0), 2)
+            self.reducesMicrophoneNoise = reducesMicrophoneNoise
+            self.noiseReductionAmount = min(max(
+                noiseReductionAmount.isFinite ? noiseReductionAmount : 0.55,
+                0
+            ), 1)
+            self.normalizesLoudness = normalizesLoudness
+            self.targetLoudnessLUFS = min(max(
+                targetLoudnessLUFS.isFinite ? targetLoudnessLUFS : -16,
+                -24
+            ), -10)
             self.ducksSystemUnderNarration = ducksSystemUnderNarration
             self.duckedSystemVolume = min(max(duckedSystemVolume, 0), 1)
             self.narrationThresholdDecibels = min(max(narrationThresholdDecibels, -80), 0)
             self.duckAttackSeconds = min(max(duckAttackSeconds, 0), 2)
             self.duckReleaseSeconds = min(max(duckReleaseSeconds, 0), 3)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case isEnabled
+            case systemVolume
+            case microphoneVolume
+            case reducesMicrophoneNoise
+            case noiseReductionAmount
+            case normalizesLoudness
+            case targetLoudnessLUFS
+            case ducksSystemUnderNarration
+            case duckedSystemVolume
+            case narrationThresholdDecibels
+            case duckAttackSeconds
+            case duckReleaseSeconds
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                isEnabled: try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true,
+                systemVolume: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .systemVolume
+                ) ?? 1,
+                microphoneVolume: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .microphoneVolume
+                ) ?? 1,
+                // Missing values identify a pre-0.6 project. Preserve its sound
+                // instead of silently applying a newly introduced processor.
+                reducesMicrophoneNoise: try container.decodeIfPresent(
+                    Bool.self,
+                    forKey: .reducesMicrophoneNoise
+                ) ?? false,
+                noiseReductionAmount: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .noiseReductionAmount
+                ) ?? 0.55,
+                normalizesLoudness: try container.decodeIfPresent(
+                    Bool.self,
+                    forKey: .normalizesLoudness
+                ) ?? false,
+                targetLoudnessLUFS: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .targetLoudnessLUFS
+                ) ?? -16,
+                ducksSystemUnderNarration: try container.decodeIfPresent(
+                    Bool.self,
+                    forKey: .ducksSystemUnderNarration
+                ) ?? true,
+                duckedSystemVolume: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .duckedSystemVolume
+                ) ?? 0.32,
+                narrationThresholdDecibels: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .narrationThresholdDecibels
+                ) ?? -42,
+                duckAttackSeconds: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .duckAttackSeconds
+                ) ?? 0.12,
+                duckReleaseSeconds: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .duckReleaseSeconds
+                ) ?? 0.36
+            )
         }
     }
 

@@ -896,19 +896,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
             var audioMixError: Error?
             var microphoneWasMixed = false
+            var voiceProcessingFellBack = false
             if let microphoneURL, let audioPlan = plan.audio, audioPlan.isEnabled {
                 let mixedURL = saved.packageURL.appendingPathComponent(
                     "previews/.auto-mixed-\(UUID().uuidString).mp4"
                 )
                 defer { try? FileManager.default.removeItem(at: mixedURL) }
                 do {
-                    _ = try await audioMixdownRenderer.render(
+                    let mixReport = try await audioMixdownRenderer.renderWithReport(
                         inputURL: outputURL,
                         microphoneURL: microphoneURL,
                         outputURL: mixedURL,
                         plan: audioPlan,
                         timeline: plan.timeline
                     )
+                    voiceProcessingFellBack = mixReport
+                        .voiceProcessingErrorDescription != nil
                     _ = try FileManager.default.replaceItemAt(
                         outputURL,
                         withItemAt: mixedURL
@@ -933,7 +936,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 detail: {
                     var completedEffects = ["自动运镜"]
                     if presenterWasRendered { completedEffects.append("画中画") }
-                    if microphoneWasMixed { completedEffects.append("旁白混音") }
+                    if microphoneWasMixed {
+                        completedEffects.append(
+                            voiceProcessingFellBack
+                                ? "旁白混音（原声回退）"
+                                : "旁白降噪与混音"
+                        )
+                    }
                     if plan.captions?.isEnabled == true,
                        transcript?.segments.isEmpty == false {
                         completedEffects.append("字幕")

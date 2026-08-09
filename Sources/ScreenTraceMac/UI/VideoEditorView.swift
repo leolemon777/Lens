@@ -791,10 +791,43 @@ struct VideoEditorView: View {
                             ),
                             range: 0...1.5
                         )
+                        Toggle("降低环境噪声", isOn: Binding(
+                            get: { model.microphoneNoiseReductionEnabled },
+                            set: { model.setMicrophoneNoiseReductionEnabled($0) }
+                        ))
+                        if model.microphoneNoiseReductionEnabled {
+                            valueSlider(
+                                "降噪强度",
+                                value: Binding(
+                                    get: { model.plan.audio?.noiseReductionAmount ?? 0.55 },
+                                    set: { model.setNoiseReductionAmount($0) }
+                                ),
+                                range: 0...1
+                            )
+                        }
+                        Toggle("统一人声与系统响度", isOn: Binding(
+                            get: { model.loudnessNormalizationEnabled },
+                            set: { model.setLoudnessNormalizationEnabled($0) }
+                        ))
+                        if model.loudnessNormalizationEnabled {
+                            Picker("人声目标响度", selection: Binding(
+                                get: { model.plan.audio?.targetLoudnessLUFS ?? -16 },
+                                set: { model.setTargetLoudnessLUFS($0) }
+                            )) {
+                                Text("响亮 · −14 LUFS").tag(-14.0)
+                                Text("标准 · −16 LUFS").tag(-16.0)
+                                Text("舒缓 · −18 LUFS").tag(-18.0)
+                                Text("保守 · −20 LUFS").tag(-20.0)
+                            }
+                            .pickerStyle(.menu)
+                        }
                         Toggle("讲话时自动压低系统声", isOn: Binding(
                             get: { model.plan.audio?.ducksSystemUnderNarration != false },
                             set: { model.setDuckingEnabled($0) }
                         ))
+                        Text("降噪与响度处理仅作用于生成的预览，原始麦克风轨保持不变。")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
                     }
                 }
 

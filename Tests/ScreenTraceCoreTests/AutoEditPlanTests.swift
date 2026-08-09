@@ -7,6 +7,8 @@ final class AutoEditPlanTests: XCTestCase {
         let audio = AutoEditPlan.Audio(
             systemVolume: -1,
             microphoneVolume: 3,
+            noiseReductionAmount: 8,
+            targetLoudnessLUFS: -40,
             duckedSystemVolume: 2,
             narrationThresholdDecibels: -100,
             duckAttackSeconds: -1,
@@ -15,6 +17,8 @@ final class AutoEditPlanTests: XCTestCase {
 
         XCTAssertEqual(audio.systemVolume, 0)
         XCTAssertEqual(audio.microphoneVolume, 2)
+        XCTAssertEqual(audio.noiseReductionAmount, 1)
+        XCTAssertEqual(audio.targetLoudnessLUFS, -24)
         XCTAssertEqual(audio.duckedSystemVolume, 1)
         XCTAssertEqual(audio.narrationThresholdDecibels, -80)
         XCTAssertEqual(audio.duckAttackSeconds, 0)
@@ -29,6 +33,28 @@ final class AutoEditPlanTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AutoEditPlan.self, from: legacyData)
 
         XCTAssertNil(decoded.audio)
+    }
+
+    func testLegacyAudioPlanDoesNotSilentlyEnableNewVoiceProcessing() throws {
+        let data = Data(#"""
+        {
+          "isEnabled": true,
+          "systemVolume": 0.8,
+          "microphoneVolume": 1.1,
+          "ducksSystemUnderNarration": true,
+          "duckedSystemVolume": 0.3,
+          "narrationThresholdDecibels": -40,
+          "duckAttackSeconds": 0.1,
+          "duckReleaseSeconds": 0.4
+        }
+        """#.utf8)
+
+        let decoded = try JSONDecoder().decode(AutoEditPlan.Audio.self, from: data)
+
+        XCTAssertFalse(decoded.reducesMicrophoneNoise)
+        XCTAssertFalse(decoded.normalizesLoudness)
+        XCTAssertEqual(decoded.noiseReductionAmount, 0.55)
+        XCTAssertEqual(decoded.targetLoudnessLUFS, -16)
     }
 
     func testCaptionPlanClampsValuesAndLegacyPlanDecodesWithoutCaptions() throws {

@@ -117,6 +117,12 @@ final class VideoEditorModel: ObservableObject {
             .sorted()
     }
     var audioEnabled: Bool { plan.audio?.isEnabled != false }
+    var microphoneNoiseReductionEnabled: Bool {
+        plan.audio?.reducesMicrophoneNoise == true
+    }
+    var loudnessNormalizationEnabled: Bool {
+        plan.audio?.normalizesLoudness == true
+    }
     var hasTranscript: Bool { transcript?.segments.isEmpty == false }
     var captionsEnabled: Bool { plan.captions?.isEnabled == true }
     var captionSourceCues: [CaptionSourceCue] {
@@ -498,6 +504,34 @@ final class VideoEditorModel: ObservableObject {
         mutate { plan in
             if plan.audio == nil { plan.audio = .init() }
             plan.audio?.microphoneVolume = min(max(value, 0), 2)
+        }
+    }
+
+    func setMicrophoneNoiseReductionEnabled(_ enabled: Bool) {
+        mutate { plan in
+            if plan.audio == nil { plan.audio = .init() }
+            plan.audio?.reducesMicrophoneNoise = enabled
+        }
+    }
+
+    func setNoiseReductionAmount(_ value: Double) {
+        mutate { plan in
+            if plan.audio == nil { plan.audio = .init() }
+            plan.audio?.noiseReductionAmount = min(max(value, 0), 1)
+        }
+    }
+
+    func setLoudnessNormalizationEnabled(_ enabled: Bool) {
+        mutate { plan in
+            if plan.audio == nil { plan.audio = .init() }
+            plan.audio?.normalizesLoudness = enabled
+        }
+    }
+
+    func setTargetLoudnessLUFS(_ value: Double) {
+        mutate { plan in
+            if plan.audio == nil { plan.audio = .init() }
+            plan.audio?.targetLoudnessLUFS = min(max(value, -24), -10)
         }
     }
 

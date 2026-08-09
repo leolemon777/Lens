@@ -78,6 +78,7 @@ final class AudioMixdownRendererTests: XCTestCase {
         try makeTone(at: microphoneURL, frameCount: 60_000) { frame in
             (12_000..<48_000).contains(frame) ? 0.18 : 0
         }
+        let originalMicrophoneBytes = try Data(contentsOf: microphoneURL)
         try await mux(videoURL: videoURL, audioURL: systemURL, outputURL: inputURL)
         let plan = AutoEditPlan.Audio(
             systemVolume: 0.9,
@@ -87,7 +88,8 @@ final class AudioMixdownRendererTests: XCTestCase {
             narrationThresholdDecibels: -36
         )
 
-        _ = try await AudioMixdownRenderer().render(
+        let renderer = AudioMixdownRenderer()
+        let report = try await renderer.renderWithReport(
             inputURL: inputURL,
             microphoneURL: microphoneURL,
             outputURL: outputURL,
@@ -106,6 +108,14 @@ final class AudioMixdownRendererTests: XCTestCase {
                 as? NSNumber)?.int64Value ?? 0,
             2_000
         )
+        XCTAssertNil(report.voiceProcessingErrorDescription)
+        let voiceResult = try XCTUnwrap(report.voiceProcessingResult)
+        XCTAssertEqual(
+            voiceResult.after.integratedLoudnessLUFS,
+            plan.targetLoudnessLUFS,
+            accuracy: 0.6
+        )
+        XCTAssertEqual(try Data(contentsOf: microphoneURL), originalMicrophoneBytes)
     }
 
     @MainActor

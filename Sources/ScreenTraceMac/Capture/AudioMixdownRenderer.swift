@@ -26,8 +26,15 @@ enum AudioMixdownRendererError: LocalizedError {
     }
 }
 
+struct AudioMixdownRenderReport: Sendable {
+    let outputURL: URL
+    let voiceProcessingResult: VoiceAudioProcessingResult?
+    let voiceProcessingErrorDescription: String?
+}
+
 final class AudioMixdownRenderer: @unchecked Sendable {
     private let analyzer = NarrationActivityAnalyzer()
+    private let voiceProcessor = VoiceAudioProcessor()
 
     func render(
         inputURL: URL,
@@ -36,7 +43,49 @@ final class AudioMixdownRenderer: @unchecked Sendable {
         plan: AutoEditPlan.Audio,
         timeline: VideoEditTimeline? = nil
     ) async throws -> URL {
+        try await renderWithReport(
+            inputURL: inputURL,
+            microphoneURL: microphoneURL,
+            outputURL: outputURL,
+            plan: plan,
+            timeline: timeline
+        ).outputURL
+    }
+
+    func renderWithReport(
+        inputURL: URL,
+        microphoneURL: URL,
+        outputURL: URL,
+        plan: AutoEditPlan.Audio,
+        timeline: VideoEditTimeline? = nil
+    ) async throws -> AudioMixdownRenderReport {
+        var voiceProcessingErrorDescription: String?
+        var voiceProcessingResult: VoiceAudioProcessingResult?
         let inputAsset = AVURLAsset(url: inputURL)
+        let conditionedMicrophoneURL = outputURL.deletingLastPathComponent()
+            .appendingPathComponent(
+                ".conditioned-microphone-\(UUID().uuidString).caf"
+            )
+        let microphoneProcessingIsEnabled = plan.reducesMicrophoneNoise
+            || plan.normalizesLoudness
+        let mixMicrophoneURL: URL
+        if microphoneProcessingIsEnabled {
+            do {
+                let result = try await voiceProcessor.process(
+                    inputURL: microphoneURL,
+                    outputURL: conditionedMicrophoneURL,
+                    plan: plan
+                )
+                voiceProcessingResult = result
+                mixMicrophoneURL = result.outputURL
+            } catch {
+                voiceProcessingErrorDescription = error.localizedDescription
+                mixMicrophoneURL = microphoneURL
+            }
+        } else {
+            mixMicrophoneURL = microphoneURL
+        }
+        defer { try? FileManager.default.removeItem(at: conditionedMicrophoneURL) }
         let transitionedMicrophoneURL: URL? = if timeline?.hasActiveTransitions == true {
             outputURL.deletingLastPathComponent().appendingPathComponent(
                 ".microphone-transitions-\(UUID().uuidString).m4a"
@@ -47,7 +96,7 @@ final class AudioMixdownRenderer: @unchecked Sendable {
         let microphoneAsset: AVAsset
         if let timeline, let transitionedMicrophoneURL {
             _ = try await VideoTimelineCompositionBuilder().export(
-                inputURL: microphoneURL,
+                inputURL: mixMicrophoneURL,
                 timeline: timeline,
                 outputURL: transitionedMicrophoneURL,
                 includesVideo: false,
@@ -57,14 +106,14 @@ final class AudioMixdownRenderer: @unchecked Sendable {
             microphoneAsset = AVURLAsset(url: transitionedMicrophoneURL)
         } else if let timeline {
             microphoneAsset = try await VideoTimelineCompositionBuilder().build(
-                inputURL: microphoneURL,
+                inputURL: mixMicrophoneURL,
                 timeline: timeline,
                 includesVideo: false,
                 includesAudio: true,
                 requiresAudio: true
             )
         } else {
-            microphoneAsset = AVURLAsset(url: microphoneURL)
+            microphoneAsset = AVURLAsset(url: mixMicrophoneURL)
         }
         defer {
             if let transitionedMicrophoneURL {
@@ -121,12 +170,34 @@ final class AudioMixdownRenderer: @unchecked Sendable {
                 )
             }
             let systemParameters = AVMutableAudioMixInputParameters(track: outputSystemAudio)
-            let baseVolume = Float(plan.systemVolume)
-            let duckedVolume = Float(plan.systemVolume * plan.duckedSystemVolume)
+            let systemNormalizationGain: Double
+            if plan.normalizesLoudness,
+               let metrics = try? await voiceProcessor.analyze(url: inputURL) {
+                let gainDecibels = VoiceAudioProcessor.recommendedGainDecibels(
+                    measuredLoudnessLUFS: metrics.integratedLoudnessLUFS,
+                    targetLoudnessLUFS: plan.targetLoudnessLUFS - 6,
+                    peakAmplitude: metrics.peakAmplitude,
+                    maximumBoostDecibels: 6,
+                    maximumCutDecibels: 12
+                )
+                systemNormalizationGain = VoiceAudioProcessor.linearGain(
+                    decibels: gainDecibels
+                )
+            } else {
+                systemNormalizationGain = 1
+            }
+            let normalizedSystemVolume = min(
+                max(plan.systemVolume * systemNormalizationGain, 0),
+                2
+            )
+            let baseVolume = Float(normalizedSystemVolume)
+            let duckedVolume = Float(
+                normalizedSystemVolume * plan.duckedSystemVolume
+            )
             systemParameters.setVolume(baseVolume, at: .zero)
             if plan.ducksSystemUnderNarration {
                 let sourceActivity = try analyzer.analyze(
-                    url: microphoneURL,
+                    url: mixMicrophoneURL,
                     thresholdDecibels: plan.narrationThresholdDecibels
                 )
                 let activity: [NarrationActivityRange]
@@ -181,7 +252,11 @@ final class AudioMixdownRenderer: @unchecked Sendable {
             withIntermediateDirectories: true
         )
         try await exporter.export(to: outputURL, as: .mp4)
-        return outputURL
+        return AudioMixdownRenderReport(
+            outputURL: outputURL,
+            voiceProcessingResult: voiceProcessingResult,
+            voiceProcessingErrorDescription: voiceProcessingErrorDescription
+        )
     }
 
     static func duckingEnvelopes(

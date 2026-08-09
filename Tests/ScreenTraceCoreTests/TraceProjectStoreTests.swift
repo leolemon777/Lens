@@ -492,6 +492,14 @@ final class TraceProjectStoreTests: XCTestCase {
                 )
             ]
         )
+        plan.audio = AutoEditPlan.Audio(
+            systemVolume: 0.82,
+            microphoneVolume: 1.12,
+            reducesMicrophoneNoise: true,
+            noiseReductionAmount: 0.74,
+            normalizesLoudness: true,
+            targetLoudnessLUFS: -18
+        )
         plan.timeline = VideoEditTimeline(
             sourceDurationSeconds: 40,
             segments: [
@@ -525,6 +533,7 @@ final class TraceProjectStoreTests: XCTestCase {
         )
         XCTAssertEqual(reloaded.captions, plan.captions)
         XCTAssertEqual(reloaded.presenterCamera, plan.presenterCamera)
+        XCTAssertEqual(reloaded.audio, plan.audio)
         XCTAssertEqual(
             updated.manifest.assets.filter { $0.role == .editPlan }.count,
             1

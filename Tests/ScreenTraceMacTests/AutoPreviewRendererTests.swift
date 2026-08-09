@@ -294,6 +294,76 @@ final class AutoPreviewRendererTests: XCTestCase {
     }
 
     @MainActor
+    func testPresenterSourceTimeKeyframesMoveInExportedVideo() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTracePresenterMotionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let screenURL = directory.appendingPathComponent("screen.mp4")
+        let cameraURL = directory.appendingPathComponent("camera.mp4")
+        let outputURL = directory.appendingPathComponent("moving-presenter.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: screenURL,
+            frameCount: 36,
+            framesPerSecond: 24
+        )
+        try await SyntheticVideoFactory.makeVideo(
+            at: cameraURL,
+            frameCount: 36,
+            framesPerSecond: 24,
+            style: .greenCamera
+        )
+        var plan = AutoEditPlan()
+        plan.presenterCamera = AutoEditPlan.PresenterCamera(
+            isEnabled: true,
+            shape: .roundedRectangle,
+            size: 0.18,
+            shadowOpacity: 0,
+            automaticallyAvoidsContent: false,
+            keyframes: [
+                AutoEditPlan.PresenterCameraKeyframe(
+                    sourceTimeSeconds: 0,
+                    center: TracePoint(x: 0.2, y: 0.2),
+                    size: 0.18,
+                    easing: "linear"
+                ),
+                AutoEditPlan.PresenterCameraKeyframe(
+                    sourceTimeSeconds: 0.8,
+                    center: TracePoint(x: 0.8, y: 0.8),
+                    size: 0.18,
+                    easing: "linear"
+                )
+            ]
+        )
+
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: screenURL,
+            cameraURL: cameraURL,
+            outputURL: outputURL,
+            plan: plan
+        )
+
+        let asset = AVURLAsset(url: outputURL)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let early = try await generator.image(
+            at: CMTime(seconds: 0.04, preferredTimescale: 600)
+        ).image
+        let late = try await generator.image(
+            at: CMTime(seconds: 1.05, preferredTimescale: 600)
+        ).image
+        let earlyCenter = try greenCentroid(in: early)
+        let lateCenter = try greenCentroid(in: late)
+
+        XCTAssertLessThan(earlyCenter.x, CGFloat(early.width) * 0.4)
+        XCTAssertLessThan(earlyCenter.y, CGFloat(early.height) * 0.4)
+        XCTAssertGreaterThan(lateCenter.x, CGFloat(late.width) * 0.6)
+        XCTAssertGreaterThan(lateCenter.y, CGFloat(late.height) * 0.6)
+    }
+
+    @MainActor
     func testPresenterCameraPreviewPreservesScreenAudioTrack() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTracePresenterAudioTests-\(UUID().uuidString)", isDirectory: true)
@@ -451,6 +521,34 @@ final class AutoPreviewRendererTests: XCTestCase {
             }
         }
         return count
+    }
+
+    private func greenCentroid(in image: CGImage) throws -> CGPoint {
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        var totalX = 0.0
+        var totalY = 0.0
+        var count = 0.0
+        for y in stride(from: 0, to: bitmap.pixelsHigh, by: 2) {
+            for x in stride(from: 0, to: bitmap.pixelsWide, by: 2) {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      color.greenComponent > 0.82,
+                      color.greenComponent - max(
+                          color.redComponent,
+                          color.blueComponent
+                      ) > 0.48 else { continue }
+                totalX += Double(x)
+                totalY += Double(y)
+                count += 1
+            }
+        }
+        guard count > 40 else {
+            throw NSError(
+                domain: "ScreenTraceTests",
+                code: 9,
+                userInfo: [NSLocalizedDescriptionKey: "Presenter pixels were not found"]
+            )
+        }
+        return CGPoint(x: totalX / count, y: totalY / count)
     }
 }
 

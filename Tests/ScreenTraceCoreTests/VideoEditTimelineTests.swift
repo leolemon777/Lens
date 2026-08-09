@@ -64,4 +64,42 @@ final class VideoEditTimelineTests: XCTestCase {
         )
         XCTAssertEqual(decoded, timeline)
     }
+
+    func testSourceKeyframeMapsToEveryRepeatedOutputOccurrence() {
+        let timeline = VideoEditTimeline(
+            sourceDurationSeconds: 8,
+            segments: [
+                VideoEditSegment(
+                    sourceStartSeconds: 2,
+                    sourceEndSeconds: 4,
+                    playbackRate: 2
+                ),
+                VideoEditSegment(
+                    sourceStartSeconds: 0,
+                    sourceEndSeconds: 1
+                ),
+                VideoEditSegment(
+                    sourceStartSeconds: 2,
+                    sourceEndSeconds: 4
+                )
+            ]
+        )
+
+        XCTAssertEqual(timeline.outputTimes(forSourceTime: 3), [0.5, 3])
+        XCTAssertTrue(timeline.outputTimes(forSourceTime: 6).isEmpty)
+        XCTAssertTrue(timeline.outputTimes(forSourceTime: .infinity).isEmpty)
+    }
+
+    func testSourceKeyframeAtCutBoundaryDoesNotCreateDuplicateMarker() {
+        let timeline = VideoEditTimeline(
+            sourceDurationSeconds: 6,
+            segments: [
+                VideoEditSegment(sourceStartSeconds: 0, sourceEndSeconds: 3),
+                VideoEditSegment(sourceStartSeconds: 3, sourceEndSeconds: 6)
+            ]
+        )
+
+        XCTAssertEqual(timeline.outputTimes(forSourceTime: 3), [3])
+        XCTAssertEqual(timeline.outputTimes(forSourceTime: 6), [6])
+    }
 }

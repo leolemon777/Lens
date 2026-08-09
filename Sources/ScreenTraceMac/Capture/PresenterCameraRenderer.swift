@@ -32,7 +32,10 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         cameraURL: URL,
         outputURL: URL,
         layout: AutoEditPlan.PresenterCamera,
-        timeline: VideoEditTimeline? = nil
+        timeline: VideoEditTimeline? = nil,
+        cameraKeyframes: [AutoEditPlan.CameraKeyframe] = [],
+        captions: AutoEditPlan.Captions? = nil,
+        captionCues: [CaptionCue]? = nil
     ) async throws -> URL {
         let screenAsset = AVURLAsset(url: screenURL)
         let cameraAsset: AVAsset
@@ -170,11 +173,27 @@ final class PresenterCameraRenderer: @unchecked Sendable {
                         .transformed(by: cameraTransform)
                 )
             }()
+            let outputTime = max(time.seconds.isFinite ? time.seconds : 0, 0)
+            let sourceTime = timeline?.position(atOutputTime: outputTime)?.sourceTimeSeconds
+                ?? outputTime
+            let captionAmount = captionCues.map {
+                CaptionCuePlanner.avoidanceAmount(at: outputTime, in: $0)
+            } ?? (captions == nil ? 0 : 1)
+            let activeCaptions = captionAmount > 0.001 ? captions : nil
+            let frameState = PresenterCameraPlacementPlanner.state(
+                atSourceTime: sourceTime,
+                layout: layout,
+                cameraKeyframes: cameraKeyframes,
+                captions: activeCaptions,
+                captionAvoidanceAmount: captionAmount,
+                canvasAspectRatio: outputExtent.width / max(outputExtent.height, 1)
+            )
             let composed = Self.compose(
                 screen: screenImage,
                 camera: cameraImage,
                 layout: layout,
-                outputExtent: outputExtent
+                outputExtent: outputExtent,
+                frameState: frameState
             )
             try await Self.waitUntilReady(videoInput, writer: writer)
             guard let pool = adaptor.pixelBufferPool else {
@@ -229,7 +248,8 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         screen: CIImage,
         camera: CIImage?,
         layout: AutoEditPlan.PresenterCamera,
-        outputExtent: CGRect
+        outputExtent: CGRect,
+        frameState: PresenterCameraFrameState? = nil
     ) -> CIImage {
         let screen = screen.cropped(to: outputExtent)
         guard layout.isEnabled, var camera else { return screen }
@@ -241,23 +261,27 @@ final class PresenterCameraRenderer: @unchecked Sendable {
                 .transformed(by: CGAffineTransform(translationX: width, y: 0))
         }
 
-        let width = outputExtent.width * min(max(layout.size, 0.08), 0.45)
-        let height: CGFloat = switch layout.shape {
-        case .circle: width
-        case .roundedRectangle: width * 9 / 16
-        }
-        let marginX = outputExtent.width * min(max(layout.margin, 0), 0.20)
-        let marginY = outputExtent.height * min(max(layout.margin, 0), 0.20)
-        let origin: CGPoint = switch layout.anchor {
-        case .topLeading:
-            CGPoint(x: marginX, y: outputExtent.height - marginY - height)
-        case .topTrailing:
-            CGPoint(x: outputExtent.width - marginX - width, y: outputExtent.height - marginY - height)
-        case .bottomLeading:
-            CGPoint(x: marginX, y: marginY)
-        case .bottomTrailing:
-            CGPoint(x: outputExtent.width - marginX - width, y: marginY)
-        }
+        let state = frameState ?? PresenterCameraPlacementPlanner.state(
+            atSourceTime: 0,
+            layout: layout,
+            canvasAspectRatio: outputExtent.width / max(outputExtent.height, 1)
+        )
+        let heightRatio: CGFloat = layout.shape == .circle ? 1 : 9 / 16
+        let safeMargin = min(max(layout.margin, 0), 0.20)
+        let requestedWidth = outputExtent.width * min(max(state.size, 0.001), 0.45)
+        let maximumWidthByHeight = outputExtent.height * (1 - safeMargin * 2)
+            / heightRatio
+        let width = min(requestedWidth, maximumWidthByHeight)
+        let height = width * heightRatio
+        let requestedCenter = CGPoint(
+            x: outputExtent.minX + CGFloat(state.center.x) * outputExtent.width,
+            y: outputExtent.minY + CGFloat(1 - state.center.y) * outputExtent.height
+        )
+        let center = CGPoint(
+            x: min(max(requestedCenter.x, outputExtent.minX + width / 2), outputExtent.maxX - width / 2),
+            y: min(max(requestedCenter.y, outputExtent.minY + height / 2), outputExtent.maxY - height / 2)
+        )
+        let origin = CGPoint(x: center.x - width / 2, y: center.y - height / 2)
         let target = CGRect(origin: origin, size: CGSize(width: width, height: height)).integral
         let fillScale = max(
             target.width / max(camera.extent.width, 1),

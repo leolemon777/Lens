@@ -1,4 +1,5 @@
 import AppKit
+@preconcurrency import AVFoundation
 import ScreenTraceCore
 import SwiftUI
 
@@ -61,12 +62,12 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
             ?? AutoEditPlan(
                 timeline: VideoEditTimeline(sourceDurationSeconds: duration)
             )
-        let hasCamera = entry.manifest.assets.contains {
-            $0.role == .camera
-                && FileManager.default.fileExists(
-                    atPath: entry.packageURL.appendingPathComponent($0.relativePath).path
-                )
-        }
+        let cameraURL = entry.manifest.assets
+            .lazy
+            .filter { $0.role == .camera }
+            .map { entry.packageURL.appendingPathComponent($0.relativePath) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+        let hasCamera = cameraURL != nil
         let hasMicrophone = entry.manifest.assets.contains {
             $0.role == .microphone
                 && FileManager.default.fileExists(
@@ -98,6 +99,9 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
             onClose: { [weak self] in self?.requestClose() }
         ))
         playback.load(sourceURL: entry.primaryAssetURL, timeline: model.timeline)
+        if let cameraURL {
+            loadPresenterThumbnail(from: cameraURL, into: model)
+        }
         window.center()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
@@ -146,6 +150,32 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
     private func requestClose() {
         guard canDiscardUnsavedChanges() else { return }
         hide()
+    }
+
+    private func loadPresenterThumbnail(from cameraURL: URL, into model: VideoEditorModel) {
+        Task { @MainActor [weak self, weak model] in
+            guard let self, let model else { return }
+            let asset = AVURLAsset(url: cameraURL)
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 640, height: 640)
+            do {
+                let duration = try await asset.load(.duration).seconds
+                let safeDuration = duration.isFinite ? max(duration, 0) : 0
+                let requestedTime = min(safeDuration * 0.08, 0.35)
+                let frame = try await generator.image(at: CMTime(
+                    seconds: requestedTime,
+                    preferredTimescale: 600
+                )).image
+                guard self.model === model else { return }
+                model.setPresenterThumbnail(NSImage(
+                    cgImage: frame,
+                    size: NSSize(width: frame.width, height: frame.height)
+                ))
+            } catch {
+                // The live editor remains usable with its native placeholder.
+            }
+        }
     }
 
     private func canDiscardUnsavedChanges() -> Bool {

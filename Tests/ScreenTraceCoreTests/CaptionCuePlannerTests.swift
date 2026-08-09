@@ -108,6 +108,45 @@ final class CaptionCuePlannerTests: XCTestCase {
         XCTAssertEqual(transcript.fullText, "automatic words")
     }
 
+    func testCaptionAvoidanceLeadsInAndReleasesSmoothly() {
+        let cues = [CaptionCue(startSeconds: 1, endSeconds: 2, text: "Hello")]
+
+        XCTAssertEqual(
+            CaptionCuePlanner.avoidanceAmount(
+                at: 0.7,
+                in: cues,
+                transitionDuration: 0.2
+            ),
+            0
+        )
+        XCTAssertEqual(
+            CaptionCuePlanner.avoidanceAmount(
+                at: 0.9,
+                in: cues,
+                transitionDuration: 0.2
+            ),
+            0.5,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            CaptionCuePlanner.avoidanceAmount(
+                at: 1.4,
+                in: cues,
+                transitionDuration: 0.2
+            ),
+            1
+        )
+        XCTAssertEqual(
+            CaptionCuePlanner.avoidanceAmount(
+                at: 2.1,
+                in: cues,
+                transitionDuration: 0.2
+            ),
+            0.5,
+            accuracy: 0.0001
+        )
+    }
+
     private func document(
         locale: String,
         segments: [TranscriptSegment]

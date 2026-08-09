@@ -9,6 +9,19 @@ final class VideoEditorViewTests: XCTestCase {
     func testUnifiedEditorRendersPreviewTimelineAndInspectorAtDesktopSize() throws {
         var plan = AutoEditPlan()
         plan.presenterCamera?.isEnabled = true
+        plan.presenterCamera?.keyframes = [
+            AutoEditPlan.PresenterCameraKeyframe(
+                sourceTimeSeconds: 0,
+                center: TracePoint(x: 0.78, y: 0.76),
+                size: 0.19
+            ),
+            AutoEditPlan.PresenterCameraKeyframe(
+                sourceTimeSeconds: 10,
+                center: TracePoint(x: 0.22, y: 0.24),
+                size: 0.23,
+                easing: "ease-out"
+            )
+        ]
         let model = VideoEditorModel(
             plan: plan,
             sourceDurationSeconds: 18,
@@ -51,6 +64,11 @@ final class VideoEditorViewTests: XCTestCase {
         }
         hostingView.cacheDisplay(in: hostingView.bounds, to: representation)
         let png = representation.representation(using: .png, properties: [:])
+        if let snapshotPath = ProcessInfo.processInfo.environment[
+            "SCREENTRACE_VIDEO_EDITOR_SNAPSHOT"
+        ], let png {
+            try png.write(to: URL(fileURLWithPath: snapshotPath), options: .atomic)
+        }
 
         XCTAssertGreaterThanOrEqual(representation.pixelsWide, 1_260)
         XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 780)

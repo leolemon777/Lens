@@ -25,16 +25,22 @@ final class CaptionOverlayRenderer: @unchecked Sendable {
     private let cues: [CaptionCue]
     private let configuration: AutoEditPlan.Captions
     private let presenter: AutoEditPlan.PresenterCamera?
+    private let cameraKeyframes: [AutoEditPlan.CameraKeyframe]
+    private let timeline: VideoEditTimeline?
     private let cache = NSCache<NSString, RenderedCaption>()
 
     init(
         cues: [CaptionCue],
         configuration: AutoEditPlan.Captions,
-        presenter: AutoEditPlan.PresenterCamera?
+        presenter: AutoEditPlan.PresenterCamera?,
+        cameraKeyframes: [AutoEditPlan.CameraKeyframe] = [],
+        timeline: VideoEditTimeline? = nil
     ) {
         self.cues = cues
         self.configuration = configuration
         self.presenter = presenter
+        self.cameraKeyframes = cameraKeyframes
+        self.timeline = timeline
         cache.countLimit = 180
         cache.totalCostLimit = 96 * 1_024 * 1_024
     }
@@ -46,7 +52,7 @@ final class CaptionOverlayRenderer: @unchecked Sendable {
         let extent = requestedFrame.extent
         guard extent.width > 1, extent.height > 1 else { return requestedFrame }
         let frame = requestedFrame.cropped(to: extent)
-        let placement = placement(in: extent)
+        let placement = placement(in: extent, at: time)
         guard let rendered = renderedCaption(
             text: cue.text,
             outputSize: extent.size,
@@ -111,37 +117,54 @@ final class CaptionOverlayRenderer: @unchecked Sendable {
             .cropped(to: extent)
     }
 
-    private func placement(in extent: CGRect) -> Placement {
+    private func placement(in extent: CGRect, at outputTime: Double) -> Placement {
         let defaultPlacement = Placement(
             centerX: extent.midX,
             maximumWidth: extent.width * 0.76
         )
         guard let presenter, presenter.isEnabled else { return defaultPlacement }
-        let sharesEdge: Bool = switch (configuration.position, presenter.anchor) {
-        case (.bottom, .bottomLeading), (.bottom, .bottomTrailing),
-             (.top, .topLeading), (.top, .topTrailing):
-            true
-        default:
-            false
+        let sourceTime = timeline?.position(atOutputTime: outputTime)?.sourceTimeSeconds
+            ?? outputTime
+        let aspectRatio = Double(extent.width / max(extent.height, 1))
+        let state = PresenterCameraPlacementPlanner.state(
+            atSourceTime: sourceTime,
+            layout: presenter,
+            cameraKeyframes: cameraKeyframes,
+            captions: configuration,
+            captionAvoidanceAmount: CaptionCuePlanner.avoidanceAmount(
+                at: outputTime,
+                in: cues
+            ),
+            canvasAspectRatio: aspectRatio
+        )
+        let normalizedHeight = state.size * aspectRatio
+            * (presenter.shape == .circle ? 1 : 9.0 / 16.0)
+        let cameraTop = state.center.y - normalizedHeight / 2
+        let cameraBottom = state.center.y + normalizedHeight / 2
+        let captionBand: ClosedRange<Double> = switch configuration.position {
+        case .top: 0.025...0.245
+        case .center: 0.39...0.61
+        case .bottom: 0.755...0.975
         }
-        guard sharesEdge else { return defaultPlacement }
+        guard cameraBottom >= captionBand.lowerBound,
+              cameraTop <= captionBand.upperBound else { return defaultPlacement }
 
         let outerGap = extent.width * 0.025
-        let cameraWidth = extent.width * presenter.size
-        let cameraMargin = extent.width * presenter.margin
-        let available: CGRect = switch presenter.anchor {
-        case .topLeading, .bottomLeading:
+        let cameraWidth = extent.width * state.size
+        let cameraLeft = extent.minX + extent.width * state.center.x - cameraWidth / 2
+        let cameraRight = cameraLeft + cameraWidth
+        let available: CGRect = if state.center.x <= 0.5 {
             CGRect(
-                x: extent.minX + cameraMargin + cameraWidth + outerGap,
+                x: max(cameraRight + outerGap, extent.minX + outerGap),
                 y: extent.minY,
-                width: extent.width - cameraMargin - cameraWidth - outerGap * 2,
+                width: max(extent.maxX - outerGap - cameraRight - outerGap, 0),
                 height: extent.height
             )
-        case .topTrailing, .bottomTrailing:
+        } else {
             CGRect(
                 x: extent.minX + outerGap,
                 y: extent.minY,
-                width: extent.width - cameraMargin - cameraWidth - outerGap * 2,
+                width: max(cameraLeft - outerGap - extent.minX - outerGap, 0),
                 height: extent.height
             )
         }

@@ -11,6 +11,32 @@ public struct CameraFrameState: Equatable, Sendable {
 }
 
 public enum EffectTimeline {
+    public static func effectiveCameraKeyframes(
+        for camera: AutoEditPlan.Camera
+    ) -> [AutoEditPlan.CameraKeyframe] {
+        guard camera.mode != "off" else { return [] }
+        let intensityMultiplier = min(max(camera.zoomIntensity, 0), 1) / 0.42
+        return camera.keyframes.map { keyframe in
+            AutoEditPlan.CameraKeyframe(
+                time: keyframe.time,
+                scale: min(max(
+                    1 + (keyframe.scale - 1) * intensityMultiplier,
+                    1
+                ), 3),
+                center: keyframe.center,
+                easing: keyframe.easing,
+                reason: keyframe.reason
+            )
+        }
+    }
+
+    public static func effectiveCameraState(
+        at time: Double,
+        camera: AutoEditPlan.Camera
+    ) -> CameraFrameState {
+        cameraState(at: time, keyframes: effectiveCameraKeyframes(for: camera))
+    }
+
     public static func cameraState(
         at time: Double,
         keyframes: [AutoEditPlan.CameraKeyframe]

@@ -34,20 +34,29 @@ final class AutoPreviewRenderer {
         let activePresenter = plan.presenterCamera.flatMap { layout in
             layout.isEnabled && availableCameraURL != nil ? layout : nil
         }
-        let captionRenderer: CaptionOverlayRenderer? = {
+        let presenterAvoidanceKeyframes = EffectTimeline.effectiveCameraKeyframes(
+            for: plan.camera
+        )
+        let captionCues: [CaptionCue] = {
             guard let configuration = plan.captions,
                   configuration.isEnabled,
-                  let transcript else { return nil }
-            let cues = CaptionCuePlanner.cues(
+                  let transcript else { return [] }
+            return CaptionCuePlanner.cues(
                 transcript: transcript,
                 configuration: configuration,
                 timeline: plan.timeline
             )
-            guard !cues.isEmpty else { return nil }
+        }()
+        let captionRenderer: CaptionOverlayRenderer? = {
+            guard let configuration = plan.captions,
+                  configuration.isEnabled,
+                  !captionCues.isEmpty else { return nil }
             return CaptionOverlayRenderer(
-                cues: cues,
+                cues: captionCues,
                 configuration: configuration,
-                presenter: activePresenter
+                presenter: activePresenter,
+                cameraKeyframes: presenterAvoidanceKeyframes,
+                timeline: plan.timeline
             )
         }()
         guard let presenter = activePresenter,
@@ -76,7 +85,10 @@ final class AutoPreviewRenderer {
                 cameraURL: cameraURL,
                 outputURL: outputURL,
                 layout: presenter,
-                timeline: plan.timeline
+                timeline: plan.timeline,
+                cameraKeyframes: presenterAvoidanceKeyframes,
+                captions: captionRenderer == nil ? nil : plan.captions,
+                captionCues: captionCues
             )
         } catch {
             lastPresenterCameraError = error
@@ -237,17 +249,9 @@ final class AutoPreviewRenderer {
         let extent = source.extent
         let sourceTime = plan.timeline?.position(atOutputTime: time)?.sourceTimeSeconds
             ?? time
-        let plannedCamera = EffectTimeline.cameraState(
+        let camera = EffectTimeline.effectiveCameraState(
             at: sourceTime,
-            keyframes: plan.camera.mode == "off" ? [] : plan.camera.keyframes
-        )
-        let intensityMultiplier = min(max(plan.camera.zoomIntensity, 0), 1) / 0.42
-        let camera = CameraFrameState(
-            scale: min(max(
-                1 + (plannedCamera.scale - 1) * intensityMultiplier,
-                1
-            ), 3),
-            center: plannedCamera.center
+            camera: plan.camera
         )
         let scale = max(camera.scale, 1)
         let viewportSize = CGSize(

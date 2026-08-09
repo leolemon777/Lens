@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import ScreenTraceCore
 
@@ -7,6 +8,7 @@ final class VideoEditorModel: ObservableObject {
     @Published private(set) var selectedSegmentID: UUID?
     @Published private(set) var isDirty = false
     @Published private(set) var isProcessing = false
+    @Published private(set) var presenterThumbnail: NSImage?
 
     let sourceDurationSeconds: Double
     let hasCameraTrack: Bool
@@ -19,6 +21,12 @@ final class VideoEditorModel: ObservableObject {
     private let automaticCaptionSourceCues: [CaptionSourceCue]
     private var undoHistory: [AutoEditPlan] = []
     private var redoHistory: [AutoEditPlan] = []
+    private var presenterInteractionStartPlan: AutoEditPlan?
+    private var captionPlacementCache: (
+        configuration: AutoEditPlan.Captions,
+        timeline: VideoEditTimeline,
+        cues: [CaptionCue]
+    )?
 
     init(
         plan requestedPlan: AutoEditPlan,
@@ -78,6 +86,15 @@ final class VideoEditorModel: ObservableObject {
     var clickPulseEnabled: Bool { plan.interaction?.showsClickPulse != false }
     var canvasEnabled: Bool { plan.canvas?.isEnabled != false }
     var presenterEnabled: Bool { plan.presenterCamera?.isEnabled == true }
+    var presenterAvoidanceEnabled: Bool {
+        plan.presenterCamera?.automaticallyAvoidsContent != false
+    }
+    var presenterKeyframeCount: Int { plan.presenterCamera?.keyframes.count ?? 0 }
+    var presenterKeyframeOutputTimes: [Double] {
+        (plan.presenterCamera?.keyframes ?? [])
+            .flatMap { timeline.outputTimes(forSourceTime: $0.sourceTimeSeconds) }
+            .sorted()
+    }
     var audioEnabled: Bool { plan.audio?.isEnabled != false }
     var hasTranscript: Bool { transcript?.segments.isEmpty == false }
     var captionsEnabled: Bool { plan.captions?.isEnabled == true }
@@ -213,6 +230,7 @@ final class VideoEditorModel: ObservableObject {
         mutate { plan in
             if plan.presenterCamera == nil { plan.presenterCamera = .init() }
             plan.presenterCamera?.anchor = anchor
+            plan.presenterCamera?.position = nil
         }
     }
 
@@ -228,6 +246,191 @@ final class VideoEditorModel: ObservableObject {
             if plan.presenterCamera == nil { plan.presenterCamera = .init() }
             plan.presenterCamera?.isMirrored = mirrored
         }
+    }
+
+    func setPresenterAvoidanceEnabled(_ enabled: Bool) {
+        mutate { plan in
+            if plan.presenterCamera == nil { plan.presenterCamera = .init() }
+            plan.presenterCamera?.automaticallyAvoidsContent = enabled
+        }
+    }
+
+    func setPresenterThumbnail(_ image: NSImage?) {
+        presenterThumbnail = image
+    }
+
+    func presenterState(
+        atOutputTime outputTime: Double,
+        canvasAspectRatio: Double = 16.0 / 9.0
+    ) -> PresenterCameraFrameState {
+        var layout = plan.presenterCamera ?? .init()
+        if presenterInteractionStartPlan != nil {
+            layout.automaticallyAvoidsContent = false
+        }
+        let captionContext: (AutoEditPlan.Captions, Double)? = {
+            guard let transcript,
+                  let captions = plan.captions,
+                  captions.isEnabled else { return nil }
+            let cues = cachedCaptionCues(
+                transcript: transcript,
+                configuration: captions
+            )
+            let amount = CaptionCuePlanner.avoidanceAmount(at: outputTime, in: cues)
+            return amount > 0.001 ? (captions, amount) : nil
+        }()
+        return PresenterCameraPlacementPlanner.state(
+            atSourceTime: sourceTime(atOutputTime: outputTime),
+            layout: layout,
+            cameraKeyframes: EffectTimeline.effectiveCameraKeyframes(for: plan.camera),
+            captions: captionContext?.0,
+            captionAvoidanceAmount: captionContext?.1 ?? 0,
+            canvasAspectRatio: canvasAspectRatio
+        )
+    }
+
+    func hasPresenterKeyframe(nearOutputTime outputTime: Double) -> Bool {
+        guard let layout = plan.presenterCamera else { return false }
+        return nearestPresenterKeyframeIndex(
+            in: layout,
+            sourceTime: sourceTime(atOutputTime: outputTime)
+        ) != nil
+    }
+
+    func upsertPresenterKeyframe(atOutputTime outputTime: Double) {
+        guard hasCameraTrack else { return }
+        let sourceTime = sourceTime(atOutputTime: outputTime)
+        let state = presenterState(atOutputTime: outputTime)
+        mutate { plan in
+            if plan.presenterCamera == nil { plan.presenterCamera = .init(isEnabled: true) }
+            guard var presenter = plan.presenterCamera else { return }
+            let existingIndex = nearestPresenterKeyframeIndex(
+                in: presenter,
+                sourceTime: sourceTime
+            )
+            let storedTime = existingIndex.map {
+                presenter.keyframes[$0].sourceTimeSeconds
+            } ?? sourceTime
+            let easing = existingIndex.map {
+                presenter.keyframes[$0].easing
+            } ?? "spring-gentle"
+            let keyframe = AutoEditPlan.PresenterCameraKeyframe(
+                sourceTimeSeconds: storedTime,
+                center: state.center,
+                size: state.size,
+                easing: easing
+            )
+            if let existingIndex {
+                presenter.keyframes[existingIndex] = keyframe
+            } else {
+                presenter.keyframes.append(keyframe)
+            }
+            presenter.keyframes.sort { $0.sourceTimeSeconds < $1.sourceTimeSeconds }
+            plan.presenterCamera = presenter
+        }
+    }
+
+    func removePresenterKeyframe(nearOutputTime outputTime: Double) {
+        let sourceTime = sourceTime(atOutputTime: outputTime)
+        guard let presenter = plan.presenterCamera,
+              let index = nearestPresenterKeyframeIndex(
+                  in: presenter,
+                  sourceTime: sourceTime
+              ) else { return }
+        mutate { plan in
+            plan.presenterCamera?.keyframes.remove(at: index)
+        }
+    }
+
+    func presenterKeyframeEasing(nearOutputTime outputTime: Double) -> String? {
+        guard let presenter = plan.presenterCamera,
+              let index = nearestPresenterKeyframeIndex(
+                  in: presenter,
+                  sourceTime: sourceTime(atOutputTime: outputTime)
+              ) else { return nil }
+        return presenter.keyframes[index].easing
+    }
+
+    func setPresenterKeyframeEasing(_ easing: String, atOutputTime outputTime: Double) {
+        let sourceTime = sourceTime(atOutputTime: outputTime)
+        guard let presenter = plan.presenterCamera,
+              let index = nearestPresenterKeyframeIndex(
+                  in: presenter,
+                  sourceTime: sourceTime
+              ) else { return }
+        mutate { plan in
+            guard let current = plan.presenterCamera?.keyframes[index] else { return }
+            plan.presenterCamera?.keyframes[index] = AutoEditPlan.PresenterCameraKeyframe(
+                sourceTimeSeconds: current.sourceTimeSeconds,
+                center: current.center,
+                size: current.size,
+                easing: easing
+            )
+        }
+    }
+
+    func previousPresenterKeyframeOutputTime(before outputTime: Double) -> Double? {
+        presenterKeyframeOutputTimes.last {
+            $0 < outputTime - 0.05
+        }
+    }
+
+    func nextPresenterKeyframeOutputTime(after outputTime: Double) -> Double? {
+        presenterKeyframeOutputTimes.first {
+            $0 > outputTime + 0.05
+        }
+    }
+
+    func beginPresenterInteraction() {
+        guard hasCameraTrack,
+              presenterEnabled,
+              presenterInteractionStartPlan == nil else { return }
+        presenterInteractionStartPlan = plan
+    }
+
+    func updatePresenterInteraction(
+        center: TracePoint,
+        size: Double,
+        atOutputTime outputTime: Double
+    ) {
+        guard hasCameraTrack, presenterEnabled else { return }
+        if presenterInteractionStartPlan == nil { beginPresenterInteraction() }
+        let sourceTime = sourceTime(atOutputTime: outputTime)
+        let normalized = AutoEditPlan.PresenterCameraKeyframe(
+            sourceTimeSeconds: sourceTime,
+            center: center,
+            size: size
+        )
+        var updated = plan
+        guard var presenter = updated.presenterCamera else { return }
+        if let index = nearestPresenterKeyframeIndex(
+            in: presenter,
+            sourceTime: sourceTime
+        ) {
+            let existing = presenter.keyframes[index]
+            presenter.keyframes[index] = AutoEditPlan.PresenterCameraKeyframe(
+                sourceTimeSeconds: existing.sourceTimeSeconds,
+                center: normalized.center,
+                size: normalized.size,
+                easing: existing.easing
+            )
+        } else {
+            presenter.position = normalized.center
+            presenter.size = normalized.size
+        }
+        updated.presenterCamera = presenter
+        guard updated != plan else { return }
+        plan = updated
+        isDirty = plan != savedPlan
+    }
+
+    func endPresenterInteraction() {
+        guard let start = presenterInteractionStartPlan else { return }
+        presenterInteractionStartPlan = nil
+        guard start != plan else { return }
+        undoHistory.append(start)
+        if undoHistory.count > 80 { undoHistory.removeFirst() }
+        redoHistory.removeAll()
+        isDirty = plan != savedPlan
     }
 
     func setAudioEnabled(_ enabled: Bool) {
@@ -315,6 +518,7 @@ final class VideoEditorModel: ObservableObject {
     }
 
     func undo() {
+        endPresenterInteraction()
         guard let previous = undoHistory.popLast() else { return }
         redoHistory.append(plan)
         plan = previous
@@ -324,6 +528,7 @@ final class VideoEditorModel: ObservableObject {
     }
 
     func redo() {
+        endPresenterInteraction()
         guard let next = redoHistory.popLast() else { return }
         undoHistory.append(plan)
         plan = next
@@ -333,6 +538,7 @@ final class VideoEditorModel: ObservableObject {
     }
 
     func resetToAutomaticPlan() {
+        endPresenterInteraction()
         guard plan != initialPlan else { return }
         undoHistory.append(plan)
         redoHistory.removeAll()
@@ -343,6 +549,7 @@ final class VideoEditorModel: ObservableObject {
     }
 
     func markSaved() {
+        endPresenterInteraction()
         savedPlan = plan
         isDirty = false
     }
@@ -359,6 +566,7 @@ final class VideoEditorModel: ObservableObject {
         timelineChanged: Bool = false,
         _ mutation: (inout AutoEditPlan) -> Void
     ) {
+        endPresenterInteraction()
         var updated = plan
         mutation(&updated)
         guard updated != plan else { return }
@@ -377,5 +585,43 @@ final class VideoEditorModel: ObservableObject {
             return
         }
         selectedSegmentID = activeSegments.first?.id
+    }
+
+    private func sourceTime(atOutputTime outputTime: Double) -> Double {
+        timeline.position(atOutputTime: outputTime)?.sourceTimeSeconds
+            ?? min(max(outputTime.isFinite ? outputTime : 0, 0), sourceDurationSeconds)
+    }
+
+    private func cachedCaptionCues(
+        transcript: TranscriptDocument,
+        configuration: AutoEditPlan.Captions
+    ) -> [CaptionCue] {
+        let timeline = timeline
+        if let cache = captionPlacementCache,
+           cache.configuration == configuration,
+           cache.timeline == timeline {
+            return cache.cues
+        }
+        let cues = CaptionCuePlanner.cues(
+            transcript: transcript,
+            configuration: configuration,
+            timeline: timeline
+        )
+        captionPlacementCache = (configuration, timeline, cues)
+        return cues
+    }
+
+    private func nearestPresenterKeyframeIndex(
+        in presenter: AutoEditPlan.PresenterCamera,
+        sourceTime: Double,
+        tolerance: Double = 0.05
+    ) -> Int? {
+        presenter.keyframes.enumerated()
+            .filter { abs($0.element.sourceTimeSeconds - sourceTime) <= tolerance }
+            .min { lhs, rhs in
+                abs(lhs.element.sourceTimeSeconds - sourceTime)
+                    < abs(rhs.element.sourceTimeSeconds - sourceTime)
+            }?
+            .offset
     }
 }

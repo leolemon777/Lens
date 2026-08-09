@@ -10,6 +10,9 @@ struct VideoEditorView: View {
     let onSave: () -> Void
     let onClose: () -> Void
 
+    @State private var presenterDragStart: PresenterCameraFrameState?
+    @State private var presenterResizeStart: PresenterCameraFrameState?
+
     private let playbackTimer = Timer.publish(
         every: 0.1,
         on: .main,
@@ -138,14 +141,177 @@ struct VideoEditorView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .padding(8)
             }
+            GeometryReader { proxy in
+                if model.hasCameraTrack,
+                   model.presenterEnabled,
+                   proxy.size.width > 20,
+                   proxy.size.height > 20 {
+                    presenterOverlay(in: proxy.size)
+                }
+            }
         }
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .stroke(.white.opacity(0.10), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.22), radius: 22, y: 12)
-        .aspectRatio(16 / 9, contentMode: .fit)
+        .aspectRatio(playback.videoAspectRatio, contentMode: .fit)
         .frame(maxHeight: 460)
+    }
+
+    private func presenterOverlay(in canvasSize: CGSize) -> some View {
+        let inset: CGFloat = 8
+        let contentSize = CGSize(
+            width: max(canvasSize.width - inset * 2, 1),
+            height: max(canvasSize.height - inset * 2, 1)
+        )
+        let aspectRatio = Double(contentSize.width / max(contentSize.height, 1))
+        let state = model.presenterState(
+            atOutputTime: playback.currentTimeSeconds,
+            canvasAspectRatio: aspectRatio
+        )
+        let layout = model.plan.presenterCamera ?? .init()
+        let width = contentSize.width * state.size
+        let height = layout.shape == .circle ? width : width * 9 / 16
+        let clipShape = PresenterCameraClipShape(
+            kind: layout.shape,
+            cornerRadius: layout.cornerRadius
+        )
+        let center = CGPoint(
+            x: inset + contentSize.width * state.center.x,
+            y: inset + contentSize.height * state.center.y
+        )
+
+        return ZStack {
+            presenterThumbnail(layout: layout)
+                .frame(width: width, height: height)
+                .clipShape(clipShape)
+                .overlay(clipShape.stroke(.cyan.opacity(0.94), lineWidth: 2))
+                .overlay(clipShape.stroke(.white.opacity(0.42), lineWidth: 0.6).padding(3))
+                .contentShape(clipShape)
+                .shadow(color: .black.opacity(0.34), radius: 14, y: 7)
+                .gesture(presenterDragGesture(
+                    current: state,
+                    contentSize: contentSize
+                ))
+
+            Circle()
+                .fill(.ultraThinMaterial)
+                .frame(width: 23, height: 23)
+                .overlay(Circle().stroke(.white.opacity(0.62), lineWidth: 1))
+                .overlay(
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
+                )
+                .shadow(color: .black.opacity(0.32), radius: 5, y: 2)
+                .offset(x: width / 2 - 3, y: height / 2 - 3)
+                .highPriorityGesture(presenterResizeGesture(
+                    current: state,
+                    layout: layout,
+                    contentSize: contentSize
+                ))
+
+            HStack(spacing: 4) {
+                Image(systemName: model.hasPresenterKeyframe(
+                    nearOutputTime: playback.currentTimeSeconds
+                ) ? "diamond.fill" : "hand.draw")
+                Text(model.hasPresenterKeyframe(nearOutputTime: playback.currentTimeSeconds)
+                    ? "关键帧"
+                    : "拖动定位")
+            }
+            .font(.system(size: 8.5, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .background(.ultraThinMaterial, in: Capsule())
+            .offset(y: -height / 2 - 15)
+            .allowsHitTesting(false)
+        }
+        .frame(width: width, height: height)
+        .position(center)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("讲解人像，可拖动并缩放")
+    }
+
+    @ViewBuilder
+    private func presenterThumbnail(
+        layout: AutoEditPlan.PresenterCamera
+    ) -> some View {
+        if let thumbnail = model.presenterThumbnail {
+            Image(nsImage: thumbnail)
+                .resizable()
+                .scaledToFill()
+                .scaleEffect(x: layout.isMirrored ? -1 : 1, y: 1)
+        } else {
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                LinearGradient(
+                    colors: [.cyan.opacity(0.28), .indigo.opacity(0.24)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                Image(systemName: "person.crop.circle.fill")
+                    .font(.system(size: 34, weight: .light))
+                    .foregroundStyle(.white.opacity(0.86))
+            }
+        }
+    }
+
+    private func presenterDragGesture(
+        current: PresenterCameraFrameState,
+        contentSize: CGSize
+    ) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if presenterDragStart == nil {
+                    playback.pause()
+                    presenterDragStart = current
+                    model.beginPresenterInteraction()
+                }
+                guard let start = presenterDragStart else { return }
+                model.updatePresenterInteraction(
+                    center: TracePoint(
+                        x: start.center.x + value.translation.width / contentSize.width,
+                        y: start.center.y + value.translation.height / contentSize.height
+                    ),
+                    size: start.size,
+                    atOutputTime: playback.currentTimeSeconds
+                )
+            }
+            .onEnded { _ in
+                model.endPresenterInteraction()
+                presenterDragStart = nil
+            }
+    }
+
+    private func presenterResizeGesture(
+        current: PresenterCameraFrameState,
+        layout: AutoEditPlan.PresenterCamera,
+        contentSize: CGSize
+    ) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                if presenterResizeStart == nil {
+                    playback.pause()
+                    presenterResizeStart = current
+                    model.beginPresenterInteraction()
+                }
+                guard let start = presenterResizeStart else { return }
+                let heightRatio = layout.shape == .circle ? 1.0 : 9.0 / 16.0
+                let horizontalDelta = value.translation.width / contentSize.width
+                let verticalDelta = value.translation.height
+                    / max(contentSize.width * heightRatio, 1)
+                model.updatePresenterInteraction(
+                    center: start.center,
+                    size: start.size + (horizontalDelta + verticalDelta) / 2,
+                    atOutputTime: playback.currentTimeSeconds
+                )
+            }
+            .onEnded { _ in
+                model.endPresenterInteraction()
+                presenterResizeStart = nil
+            }
     }
 
     private var transport: some View {
@@ -256,6 +422,28 @@ struct VideoEditorView: View {
                                 )
                             )
                         }
+                    }
+                    ForEach(
+                        Array(model.presenterKeyframeOutputTimes.enumerated()),
+                        id: \.offset
+                    ) { _, keyframeTime in
+                        let progress = min(max(keyframeTime / total, 0), 1)
+                        let markerCenter = min(max(
+                            availableWidth * progress,
+                            7
+                        ), max(availableWidth - 7, 7))
+                        Button {
+                            playback.seek(to: keyframeTime)
+                        } label: {
+                            Image(systemName: "diamond.fill")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(.yellow)
+                                .shadow(color: .black.opacity(0.45), radius: 2)
+                                .frame(width: 14, height: 58)
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: markerCenter - 7)
+                        .help("讲解人像关键帧 · \(captionTimeText(keyframeTime))")
                     }
                     Rectangle()
                         .fill(.white)
@@ -406,7 +594,8 @@ struct VideoEditorView: View {
                             ], id: \.0) { item in
                                 choiceButton(
                                     item.0,
-                                    selected: model.plan.presenterCamera?.anchor == item.1
+                                    selected: model.plan.presenterCamera?.position == nil
+                                        && model.plan.presenterCamera?.anchor == item.1
                                 ) {
                                     model.setPresenterAnchor(item.1)
                                 }
@@ -424,6 +613,84 @@ struct VideoEditorView: View {
                             get: { model.plan.presenterCamera?.isMirrored != false },
                             set: { model.setPresenterMirrored($0) }
                         ))
+                        Toggle("自动避让字幕与点击焦点", isOn: Binding(
+                            get: { model.presenterAvoidanceEnabled },
+                            set: { model.setPresenterAvoidanceEnabled($0) }
+                        ))
+                        Text("可直接在画布拖动人像，右下角控制点调整大小。")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 7) {
+                            let hasKeyframe = model.hasPresenterKeyframe(
+                                nearOutputTime: playback.currentTimeSeconds
+                            )
+                            Button {
+                                if let time = model.previousPresenterKeyframeOutputTime(
+                                    before: playback.currentTimeSeconds
+                                ) {
+                                    playback.seek(to: time)
+                                }
+                            } label: {
+                                Image(systemName: "backward.end.fill")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(model.previousPresenterKeyframeOutputTime(
+                                before: playback.currentTimeSeconds
+                            ) == nil)
+                            Button {
+                                if let time = model.nextPresenterKeyframeOutputTime(
+                                    after: playback.currentTimeSeconds
+                                ) {
+                                    playback.seek(to: time)
+                                }
+                            } label: {
+                                Image(systemName: "forward.end.fill")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(model.nextPresenterKeyframeOutputTime(
+                                after: playback.currentTimeSeconds
+                            ) == nil)
+                            Button(hasKeyframe ? "更新当前关键帧" : "添加当前关键帧") {
+                                model.upsertPresenterKeyframe(
+                                    atOutputTime: playback.currentTimeSeconds
+                                )
+                            }
+                            .buttonStyle(.bordered)
+                            if hasKeyframe {
+                                Button("删除") {
+                                    model.removePresenterKeyframe(
+                                        nearOutputTime: playback.currentTimeSeconds
+                                    )
+                                }
+                                .buttonStyle(.borderless)
+                                .foregroundStyle(.red)
+                            }
+                            Spacer()
+                            Text("\(model.presenterKeyframeCount) 帧")
+                                .font(.system(size: 8.5, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        .disabled(!model.presenterEnabled)
+                        if let easing = model.presenterKeyframeEasing(
+                            nearOutputTime: playback.currentTimeSeconds
+                        ) {
+                            Picker("关键帧过渡", selection: Binding(
+                                get: { easing },
+                                set: {
+                                    model.setPresenterKeyframeEasing(
+                                        $0,
+                                        atOutputTime: playback.currentTimeSeconds
+                                    )
+                                }
+                            )) {
+                                Text("柔和弹性").tag("spring-gentle")
+                                Text("平滑").tag("spring-smooth")
+                                Text("线性").tag("linear")
+                                Text("渐入").tag("ease-in")
+                                Text("渐出").tag("ease-out")
+                            }
+                            .pickerStyle(.menu)
+                        }
                     } else {
                         Text("这条录屏没有摄像头原始轨。")
                             .font(.system(size: 9.5, weight: .medium))
@@ -660,5 +927,20 @@ struct VideoEditorView: View {
         let value = max(seconds.isFinite ? seconds : 0, 0)
         let minutes = Int(value / 60)
         return String(format: "%d:%04.1f", minutes, value - Double(minutes * 60))
+    }
+}
+
+private struct PresenterCameraClipShape: Shape {
+    let kind: AutoEditPlan.PresenterCamera.Shape
+    let cornerRadius: Double
+
+    func path(in rect: CGRect) -> Path {
+        switch kind {
+        case .circle:
+            Path(ellipseIn: rect)
+        case .roundedRectangle:
+            Path(roundedRect: rect, cornerRadius: min(rect.width, rect.height)
+                * min(max(cornerRadius, 0), 0.5))
+        }
     }
 }

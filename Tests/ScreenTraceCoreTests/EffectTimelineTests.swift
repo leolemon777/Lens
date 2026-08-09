@@ -45,6 +45,29 @@ final class EffectTimelineTests: XCTestCase {
         XCTAssertEqual(EffectTimeline.lastCursorActivity(at: 1.5, keyframes: keyframes), 1)
     }
 
+    func testEffectiveCameraStateAppliesIntensityAndOffMode() {
+        let keyframes = [frame(time: 0, scale: 1.42)]
+        let camera = AutoEditPlan.Camera(
+            mode: "event-driven",
+            zoomIntensity: 0.84,
+            followPointer: true,
+            keyframes: keyframes
+        )
+
+        XCTAssertEqual(
+            EffectTimeline.effectiveCameraState(at: 0, camera: camera).scale,
+            1.84,
+            accuracy: 0.0001
+        )
+        var disabled = camera
+        disabled.mode = "off"
+        XCTAssertEqual(
+            EffectTimeline.effectiveCameraState(at: 0, camera: disabled).scale,
+            1,
+            accuracy: 0.0001
+        )
+    }
+
     private func frame(time: Double, scale: Double) -> AutoEditPlan.CameraKeyframe {
         AutoEditPlan.CameraKeyframe(
             time: time,

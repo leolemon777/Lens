@@ -76,6 +76,39 @@ final class PresenterCameraRendererTests: XCTestCase {
         XCTAssertGreaterThan(corner.blueComponent, 0.85)
     }
 
+    func testExplicitFrameStatePlacesPresenterAtCanvasCenter() throws {
+        let extent = CGRect(x: 0, y: 0, width: 400, height: 200)
+        let screen = CIImage(color: CIColor(red: 0.9, green: 0.9, blue: 0.9))
+            .cropped(to: extent)
+        let camera = CIImage(color: CIColor(red: 0.05, green: 0.9, blue: 0.1))
+            .cropped(to: CGRect(x: 0, y: 0, width: 160, height: 90))
+        let layout = AutoEditPlan.PresenterCamera(
+            isEnabled: true,
+            shape: .roundedRectangle,
+            size: 0.2,
+            shadowOpacity: 0,
+            automaticallyAvoidsContent: false
+        )
+        let result = PresenterCameraRenderer.compose(
+            screen: screen,
+            camera: camera,
+            layout: layout,
+            outputExtent: extent,
+            frameState: PresenterCameraFrameState(
+                center: TracePoint(x: 0.5, y: 0.5),
+                size: 0.2
+            )
+        )
+        let bitmap = try render(result, extent: extent)
+        let center = try color(bitmap, x: 200, y: 100)
+        let formerAnchor = try color(bitmap, x: 350, y: 170)
+
+        XCTAssertGreaterThan(center.greenComponent, 0.8)
+        XCTAssertLessThan(center.redComponent, 0.2)
+        XCTAssertGreaterThan(formerAnchor.redComponent, 0.8)
+        XCTAssertGreaterThan(formerAnchor.blueComponent, 0.8)
+    }
+
     private func render(_ image: CIImage, extent: CGRect) throws -> NSBitmapImageRep {
         let context = CIContext()
         let cgImage = try XCTUnwrap(context.createCGImage(image, from: extent))

@@ -78,7 +78,7 @@ public struct ClickEvent: Codable, Equatable, Sendable {
 }
 
 public struct AutoEditPlan: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.3"
+    public static let currentSchemaVersion = "0.4"
 
     public struct ClickPulse: Codable, Equatable, Sendable {
         public let time: Double
@@ -215,6 +215,33 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         }
     }
 
+    public struct PresenterCameraKeyframe: Codable, Equatable, Sendable {
+        public let sourceTimeSeconds: Double
+        /// Output-normalized center using a top-left origin.
+        public let center: TracePoint
+        /// Width as a fraction of the output canvas.
+        public let size: Double
+        public let easing: String
+
+        public init(
+            sourceTimeSeconds: Double,
+            center: TracePoint,
+            size: Double,
+            easing: String = "spring-gentle"
+        ) {
+            self.sourceTimeSeconds = max(
+                sourceTimeSeconds.isFinite ? sourceTimeSeconds : 0,
+                0
+            )
+            self.center = TracePoint(
+                x: min(max(center.x.isFinite ? center.x : 0.5, 0), 1),
+                y: min(max(center.y.isFinite ? center.y : 0.5, 0), 1)
+            )
+            self.size = min(max(size.isFinite ? size : 0.19, 0.08), 0.45)
+            self.easing = easing.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
     public struct PresenterCamera: Codable, Equatable, Sendable {
         public enum Shape: String, Codable, Sendable {
             case circle
@@ -237,6 +264,12 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         public var cornerRadius: Double
         public var isMirrored: Bool
         public var shadowOpacity: Double
+        /// Nil follows `anchor`; otherwise this is the output-normalized center
+        /// using the same top-left origin as pointer and camera focus events.
+        public var position: TracePoint?
+        public var automaticallyAvoidsContent: Bool
+        /// Source-time edits survive cuts, reordering and playback-rate changes.
+        public var keyframes: [PresenterCameraKeyframe]
 
         public init(
             isEnabled: Bool = false,
@@ -246,7 +279,10 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             margin: Double = 0.035,
             cornerRadius: Double = 0.08,
             isMirrored: Bool = true,
-            shadowOpacity: Double = 0.30
+            shadowOpacity: Double = 0.30,
+            position: TracePoint? = nil,
+            automaticallyAvoidsContent: Bool = true,
+            keyframes: [PresenterCameraKeyframe] = []
         ) {
             self.isEnabled = isEnabled
             self.shape = shape
@@ -256,6 +292,58 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             self.cornerRadius = min(max(cornerRadius, 0), 0.5)
             self.isMirrored = isMirrored
             self.shadowOpacity = min(max(shadowOpacity, 0), 1)
+            self.position = position.map {
+                TracePoint(
+                    x: min(max($0.x.isFinite ? $0.x : 0.5, 0), 1),
+                    y: min(max($0.y.isFinite ? $0.y : 0.5, 0), 1)
+                )
+            }
+            self.automaticallyAvoidsContent = automaticallyAvoidsContent
+            self.keyframes = keyframes.sorted {
+                $0.sourceTimeSeconds < $1.sourceTimeSeconds
+            }
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case isEnabled
+            case shape
+            case anchor
+            case size
+            case margin
+            case cornerRadius
+            case isMirrored
+            case shadowOpacity
+            case position
+            case automaticallyAvoidsContent
+            case keyframes
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                isEnabled: try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false,
+                shape: try container.decodeIfPresent(Shape.self, forKey: .shape) ?? .circle,
+                anchor: try container.decodeIfPresent(Anchor.self, forKey: .anchor)
+                    ?? .bottomTrailing,
+                size: try container.decodeIfPresent(Double.self, forKey: .size) ?? 0.19,
+                margin: try container.decodeIfPresent(Double.self, forKey: .margin) ?? 0.035,
+                cornerRadius: try container.decodeIfPresent(Double.self, forKey: .cornerRadius)
+                    ?? 0.08,
+                isMirrored: try container.decodeIfPresent(Bool.self, forKey: .isMirrored) ?? true,
+                shadowOpacity: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .shadowOpacity
+                ) ?? 0.30,
+                position: try container.decodeIfPresent(TracePoint.self, forKey: .position),
+                automaticallyAvoidsContent: try container.decodeIfPresent(
+                    Bool.self,
+                    forKey: .automaticallyAvoidsContent
+                ) ?? true,
+                keyframes: try container.decodeIfPresent(
+                    [PresenterCameraKeyframe].self,
+                    forKey: .keyframes
+                ) ?? []
+            )
         }
     }
 

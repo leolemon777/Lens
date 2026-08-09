@@ -8,6 +8,7 @@ final class VideoEditorPlaybackController: ObservableObject {
 
     @Published private(set) var currentTimeSeconds = 0.0
     @Published private(set) var durationSeconds = 0.0
+    @Published private(set) var videoAspectRatio = 16.0 / 9.0
     @Published private(set) var isPlaying = false
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
@@ -26,6 +27,7 @@ final class VideoEditorPlaybackController: ObservableObject {
         isPlaying = false
         isLoading = true
         errorMessage = nil
+        videoAspectRatio = 16.0 / 9.0
 
         loadTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -38,8 +40,15 @@ final class VideoEditorPlaybackController: ObservableObject {
                     requiresVideo: true
                 )
                 let duration = try await composition.load(.duration).seconds
+                let aspectRatio = await VideoEditorMediaInspector.aspectRatio(
+                    for: sourceURL
+                )
                 guard self.generation == generation else { return }
                 durationSeconds = max(duration.isFinite ? duration : 0, 0)
+                videoAspectRatio = min(max(
+                    aspectRatio.isFinite ? aspectRatio : 16.0 / 9.0,
+                    0.25
+                ), 4)
                 player.replaceCurrentItem(with: AVPlayerItem(asset: composition))
                 seek(to: min(preservedTime, durationSeconds))
                 isLoading = false
@@ -49,6 +58,7 @@ final class VideoEditorPlaybackController: ObservableObject {
                 guard self.generation == generation else { return }
                 player.replaceCurrentItem(with: nil)
                 durationSeconds = 0
+                videoAspectRatio = 16.0 / 9.0
                 currentTimeSeconds = 0
                 isLoading = false
                 errorMessage = error.localizedDescription
@@ -74,6 +84,12 @@ final class VideoEditorPlaybackController: ObservableObject {
             player.play()
             isPlaying = true
         }
+    }
+
+    func pause() {
+        player.pause()
+        isPlaying = false
+        refreshTime()
     }
 
     func seek(to seconds: Double) {
@@ -102,5 +118,20 @@ final class VideoEditorPlaybackController: ObservableObject {
         player.pause()
         isPlaying = false
         isLoading = false
+    }
+}
+
+private enum VideoEditorMediaInspector {
+    nonisolated static func aspectRatio(for sourceURL: URL) async -> Double {
+        let asset = AVURLAsset(url: sourceURL)
+        guard let videoTrack = try? await asset.loadTracks(withMediaType: .video).first,
+              let naturalSize = try? await videoTrack.load(.naturalSize),
+              let transform = try? await videoTrack.load(.preferredTransform) else {
+            return 16.0 / 9.0
+        }
+        let oriented = CGRect(origin: .zero, size: naturalSize)
+            .applying(transform)
+            .standardized
+        return Double(abs(oriented.width) / max(abs(oriented.height), 1))
     }
 }

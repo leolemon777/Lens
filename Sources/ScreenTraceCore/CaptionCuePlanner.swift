@@ -144,6 +144,42 @@ public enum CaptionCuePlanner {
         return seconds >= cue.startSeconds && seconds < cue.endSeconds ? cue : nil
     }
 
+    /// Seek-safe lead-in and release used by overlays that need to move before
+    /// a caption appears and settle after it disappears.
+    public static func avoidanceAmount(
+        at seconds: Double,
+        in cues: [CaptionCue],
+        transitionDuration: Double = 0.22
+    ) -> Double {
+        guard seconds.isFinite, !cues.isEmpty else { return 0 }
+        let duration = max(transitionDuration.isFinite ? transitionDuration : 0.22, 0.01)
+        var lower = 0
+        var upper = cues.count
+        while lower < upper {
+            let middle = (lower + upper) / 2
+            if cues[middle].startSeconds <= seconds {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+
+        func amount(for cue: CaptionCue) -> Double {
+            let lead = min(max(
+                (seconds - (cue.startSeconds - duration)) / duration,
+                0
+            ), 1)
+            let release = min(max(
+                ((cue.endSeconds + duration) - seconds) / duration,
+                0
+            ), 1)
+            return min(lead, release)
+        }
+        let previousAmount = lower > 0 ? amount(for: cues[lower - 1]) : 0
+        let upcomingAmount = lower < cues.count ? amount(for: cues[lower]) : 0
+        return max(previousAmount, upcomingAmount)
+    }
+
     private static func mapToOutputTimeline(
         _ sourceItems: [TimedText],
         timeline: VideoEditTimeline?

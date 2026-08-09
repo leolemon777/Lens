@@ -479,6 +479,19 @@ final class TraceProjectStoreTests: XCTestCase {
                 text: "Edited caption"
             )]
         )
+        plan.presenterCamera = AutoEditPlan.PresenterCamera(
+            isEnabled: true,
+            position: TracePoint(x: 0.28, y: 0.24),
+            automaticallyAvoidsContent: false,
+            keyframes: [
+                AutoEditPlan.PresenterCameraKeyframe(
+                    sourceTimeSeconds: 3,
+                    center: TracePoint(x: 0.72, y: 0.26),
+                    size: 0.24,
+                    easing: "ease-out"
+                )
+            ]
+        )
         plan.timeline = VideoEditTimeline(
             sourceDurationSeconds: 40,
             segments: [VideoEditSegment(
@@ -497,6 +510,7 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.timeline?.segments.first?.sourceEndSeconds, 10)
         XCTAssertEqual(reloaded.timeline?.segments.first?.playbackRate, 4)
         XCTAssertEqual(reloaded.captions, plan.captions)
+        XCTAssertEqual(reloaded.presenterCamera, plan.presenterCamera)
         XCTAssertEqual(
             updated.manifest.assets.filter { $0.role == .editPlan }.count,
             1

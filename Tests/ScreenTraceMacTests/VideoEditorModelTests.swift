@@ -133,4 +133,150 @@ final class VideoEditorModelTests: XCTestCase {
         XCTAssertFalse(model.captionsEnabled)
         XCTAssertFalse(model.isDirty)
     }
+
+    func testPresenterDragAndResizeCommitAsOneUndoableInteraction() throws {
+        var plan = AutoEditPlan()
+        plan.presenterCamera = .init(
+            isEnabled: true,
+            automaticallyAvoidsContent: false
+        )
+        let model = VideoEditorModel(
+            plan: plan,
+            sourceDurationSeconds: 5,
+            hasCameraTrack: true
+        )
+
+        model.beginPresenterInteraction()
+        model.updatePresenterInteraction(
+            center: TracePoint(x: 0.6, y: 0.4),
+            size: 0.26,
+            atOutputTime: 1
+        )
+        model.updatePresenterInteraction(
+            center: TracePoint(x: 0.72, y: 0.32),
+            size: 0.31,
+            atOutputTime: 1
+        )
+        model.endPresenterInteraction()
+
+        XCTAssertEqual(try XCTUnwrap(model.plan.presenterCamera?.position).x, 0.72)
+        XCTAssertEqual(model.plan.presenterCamera?.size, 0.31)
+        XCTAssertTrue(model.canUndo)
+
+        model.undo()
+
+        XCTAssertNil(model.plan.presenterCamera?.position)
+        XCTAssertEqual(model.plan.presenterCamera?.size, 0.19)
+        XCTAssertFalse(model.canUndo, "A continuous gesture should create only one undo entry")
+        XCTAssertTrue(model.canRedo)
+    }
+
+    func testPresenterKeyframesUseSourceTimeAcrossCutsAndPlaybackRates() throws {
+        let firstID = UUID()
+        let secondID = UUID()
+        let timeline = VideoEditTimeline(
+            sourceDurationSeconds: 10,
+            segments: [
+                VideoEditSegment(
+                    id: firstID,
+                    sourceStartSeconds: 0,
+                    sourceEndSeconds: 4,
+                    playbackRate: 2
+                ),
+                VideoEditSegment(
+                    id: secondID,
+                    sourceStartSeconds: 6,
+                    sourceEndSeconds: 10,
+                    playbackRate: 1
+                )
+            ]
+        )
+        var plan = AutoEditPlan(timeline: timeline)
+        plan.presenterCamera = .init(
+            isEnabled: true,
+            position: TracePoint(x: 0.25, y: 0.25),
+            automaticallyAvoidsContent: false
+        )
+        let model = VideoEditorModel(
+            plan: plan,
+            sourceDurationSeconds: 10,
+            hasCameraTrack: true
+        )
+
+        model.upsertPresenterKeyframe(atOutputTime: 1)
+        model.upsertPresenterKeyframe(atOutputTime: 3)
+
+        let keyframes = try XCTUnwrap(model.plan.presenterCamera?.keyframes)
+        XCTAssertEqual(keyframes.map(\.sourceTimeSeconds), [2, 7])
+        XCTAssertEqual(model.presenterKeyframeOutputTimes, [1, 3])
+        XCTAssertEqual(model.previousPresenterKeyframeOutputTime(before: 3), 1)
+        XCTAssertEqual(model.nextPresenterKeyframeOutputTime(after: 1), 3)
+        XCTAssertTrue(model.hasPresenterKeyframe(nearOutputTime: 3))
+        model.setPresenterKeyframeEasing("ease-out", atOutputTime: 3)
+        XCTAssertEqual(model.presenterKeyframeEasing(nearOutputTime: 3), "ease-out")
+        model.upsertPresenterKeyframe(atOutputTime: 3)
+        XCTAssertEqual(
+            model.presenterKeyframeEasing(nearOutputTime: 3),
+            "ease-out",
+            "Updating a keyframe should preserve its selected transition"
+        )
+
+        model.beginPresenterInteraction()
+        model.updatePresenterInteraction(
+            center: TracePoint(x: 0.75, y: 0.28),
+            size: 0.27,
+            atOutputTime: 3
+        )
+        model.endPresenterInteraction()
+
+        let updated = try XCTUnwrap(
+            model.plan.presenterCamera?.keyframes.first(where: {
+                $0.sourceTimeSeconds == 7
+            })
+        )
+        XCTAssertEqual(updated.center.x, 0.75)
+        XCTAssertEqual(updated.center.y, 0.28)
+        XCTAssertEqual(updated.size, 0.27)
+        XCTAssertEqual(model.plan.presenterCamera?.position?.x, 0.25)
+
+        model.removePresenterKeyframe(nearOutputTime: 3)
+        XCTAssertEqual(model.presenterKeyframeCount, 1)
+    }
+
+    func testDirectManipulationTemporarilySuspendsAutomaticAvoidance() {
+        var plan = AutoEditPlan()
+        plan.camera.keyframes = [
+            AutoEditPlan.CameraKeyframe(
+                time: 0,
+                scale: 1.42,
+                center: TracePoint(x: 0.92, y: 0.92),
+                easing: "linear",
+                reason: .clickFocus
+            )
+        ]
+        plan.presenterCamera = .init(
+            isEnabled: true,
+            shape: .roundedRectangle,
+            anchor: .bottomTrailing,
+            size: 0.2
+        )
+        let model = VideoEditorModel(
+            plan: plan,
+            sourceDurationSeconds: 3,
+            hasCameraTrack: true
+        )
+
+        XCTAssertLessThan(model.presenterState(atOutputTime: 0).center.x, 0.5)
+        model.beginPresenterInteraction()
+        model.updatePresenterInteraction(
+            center: TracePoint(x: 0.8, y: 0.2),
+            size: 0.2,
+            atOutputTime: 0
+        )
+
+        XCTAssertGreaterThan(model.presenterState(atOutputTime: 0).center.x, 0.5)
+        model.endPresenterInteraction()
+        XCTAssertLessThan(model.presenterState(atOutputTime: 0).center.x, 0.5)
+        XCTAssertEqual(model.plan.presenterCamera?.position?.x, 0.8)
+    }
 }

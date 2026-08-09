@@ -169,6 +169,25 @@ public struct VideoEditTimeline: Codable, Equatable, Sendable {
         return ranges
     }
 
+    /// A source-time keyframe may appear more than once when clips are repeated
+    /// or reordered, so callers receive every matching output position.
+    public func outputTimes(forSourceTime seconds: Double) -> [Double] {
+        guard seconds.isFinite else { return [] }
+        let active = activeSegments
+        var outputCursor = 0.0
+        var results: [Double] = []
+        for (index, segment) in active.enumerated() {
+            let includesEnd = index == active.count - 1 && seconds == segment.sourceEndSeconds
+            if seconds >= segment.sourceStartSeconds,
+               seconds < segment.sourceEndSeconds || includesEnd {
+                results.append(outputCursor
+                    + (seconds - segment.sourceStartSeconds) / segment.playbackRate)
+            }
+            outputCursor += segment.outputDurationSeconds
+        }
+        return results
+    }
+
     @discardableResult
     public mutating func split(segmentID: UUID, atSourceTime sourceTime: Double) -> UUID? {
         guard let index = segments.firstIndex(where: { $0.id == segmentID }) else { return nil }

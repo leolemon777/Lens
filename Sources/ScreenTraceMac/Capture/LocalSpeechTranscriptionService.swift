@@ -1,3 +1,4 @@
+@preconcurrency import AVFoundation
 import Foundation
 import ScreenTraceCore
 @preconcurrency import Speech
@@ -37,6 +38,7 @@ struct LocalSpeechSegment: Equatable, Sendable {
 
 @MainActor
 final class LocalSpeechTranscriptionService {
+    private let chunkExporter = TranscriptionAudioChunkExporter()
     private var activeTask: SFSpeechRecognitionTask?
     private var activeGate: SpeechRecognitionContinuationGate?
     private var activeToken: UUID?
@@ -56,7 +58,8 @@ final class LocalSpeechTranscriptionService {
     func transcribe(
         audioURL: URL,
         localeIdentifier: String,
-        sourceRole: TraceAsset.Role
+        sourceRole: TraceAsset.Role,
+        progress: ((Int, Int) -> Void)? = nil
     ) async throws -> TranscriptDocument {
         guard FileManager.default.fileExists(atPath: audioURL.path) else {
             throw LocalSpeechTranscriptionError.missingSource
@@ -80,14 +83,8 @@ final class LocalSpeechTranscriptionService {
         }
 
         cancel()
-        let request = SFSpeechURLRecognitionRequest(url: audioURL)
-        request.shouldReportPartialResults = false
-        request.requiresOnDeviceRecognition = true
-        request.taskHint = .dictation
         let token = UUID()
-        let gate = SpeechRecognitionContinuationGate()
         activeToken = token
-        activeGate = gate
         defer {
             if activeToken == token {
                 activeTask = nil
@@ -95,7 +92,85 @@ final class LocalSpeechTranscriptionService {
                 activeToken = nil
             }
         }
-        let document = try await withTaskCancellationHandler {
+        let asset = AVURLAsset(url: audioURL)
+        let duration = try await asset.load(.duration).seconds
+        let chunks = TranscriptChunkPlanner.plan(durationSeconds: duration)
+        guard !chunks.isEmpty else { throw LocalSpeechTranscriptionError.missingSource }
+        let generatedAt = Date()
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ScreenTraceTranscription-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: temporaryDirectory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        var chunkDocuments: [TranscriptChunkDocument] = []
+        for chunk in chunks {
+            try Task.checkCancellation()
+            guard activeToken == token else { throw CancellationError() }
+            let chunkURL = temporaryDirectory.appendingPathComponent(
+                String(format: "speech-%03d.m4a", chunk.index)
+            )
+            _ = try await chunkExporter.export(
+                inputURL: audioURL,
+                chunk: chunk,
+                outputURL: chunkURL
+            )
+            try Task.checkCancellation()
+            guard activeToken == token else { throw CancellationError() }
+            let document = try await recognize(
+                audioURL: chunkURL,
+                recognizer: recognizer,
+                localeIdentifier: localeIdentifier,
+                sourceRole: sourceRole,
+                generatedAt: generatedAt,
+                operationToken: token
+            )
+            chunkDocuments.append(TranscriptChunkDocument(
+                chunk: chunk,
+                document: document
+            ))
+            progress?(chunk.index + 1, chunks.count)
+        }
+        if chunks.count == 1, let document = chunkDocuments.first?.document {
+            return document
+        }
+        return TranscriptChunkMerger.merge(
+            chunkDocuments,
+            engine: "apple-speech",
+            generatedAt: generatedAt,
+            localeIdentifier: localeIdentifier,
+            isOnDevice: true,
+            sourceRole: sourceRole
+        )
+    }
+
+    private func recognize(
+        audioURL: URL,
+        recognizer: SFSpeechRecognizer,
+        localeIdentifier: String,
+        sourceRole: TraceAsset.Role,
+        generatedAt: Date,
+        operationToken: UUID
+    ) async throws -> TranscriptDocument {
+        guard activeToken == operationToken else { throw CancellationError() }
+        let request = SFSpeechURLRecognitionRequest(url: audioURL)
+        request.shouldReportPartialResults = false
+        request.requiresOnDeviceRecognition = true
+        request.taskHint = .dictation
+        let gate = SpeechRecognitionContinuationGate()
+        activeGate = gate
+        defer {
+            if activeToken == operationToken {
+                activeTask = nil
+                activeGate = nil
+            }
+        }
+        return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<TranscriptDocument, Error>) in
                 gate.install(continuation)
@@ -113,7 +188,8 @@ final class LocalSpeechTranscriptionService {
                                 )
                             },
                             localeIdentifier: localeIdentifier,
-                            sourceRole: sourceRole
+                            sourceRole: sourceRole,
+                            generatedAt: generatedAt
                         ))
                     } else if let error {
                         gate.resume(throwing: error)
@@ -123,11 +199,10 @@ final class LocalSpeechTranscriptionService {
         } onCancel: {
             gate.resume(throwing: CancellationError())
             Task { @MainActor [weak self] in
-                guard self?.activeToken == token else { return }
+                guard self?.activeToken == operationToken else { return }
                 self?.activeTask?.cancel()
             }
         }
-        return document
     }
 
     func cancel() {

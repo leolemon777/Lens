@@ -107,6 +107,64 @@ final class TraceProjectStoreTests: XCTestCase {
         }
     }
 
+    func testScreenshotEditPlanAndRenderedPreviewPreserveOriginal() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let rawBytes = Data([0x89, 0x50, 0x4E, 0x47, 0x01])
+        let screenshot = try store.saveScreenshot(
+            pngData: rawBytes,
+            width: 1_000,
+            height: 600
+        )
+        let plan = ScreenshotEditPlan(
+            sourceDimensions: TraceDimensions(width: 1_000, height: 600),
+            annotations: [
+                ScreenshotAnnotation(
+                    kind: .rectangle,
+                    bounds: TraceRect(x: 0.1, y: 0.1, width: 0.4, height: 0.3)
+                )
+            ]
+        )
+
+        let withPlan = try store.writeScreenshotEditPlan(plan, to: screenshot)
+        let renderedURL = screenshot.packageURL.appendingPathComponent("previews/annotated.png")
+        try Data([1, 2, 3]).write(to: renderedURL)
+        let completed = try store.completeScreenshotEditing(
+            packageURL: screenshot.packageURL,
+            renderedImageURL: renderedURL
+        )
+
+        XCTAssertEqual(try store.loadScreenshotEditPlan(from: screenshot.packageURL), plan)
+        XCTAssertEqual(try Data(contentsOf: screenshot.rawAssetURL), rawBytes)
+        XCTAssertTrue(withPlan.manifest.assets.contains {
+            $0.role == .screenshotEditPlan && $0.relativePath == "edits/screenshot-edit.json"
+        })
+        XCTAssertTrue(completed.manifest.assets.contains {
+            $0.role == .renderedScreenshot && $0.relativePath == "previews/annotated.png"
+        })
+    }
+
+    func testScreenshotEditPlanRejectsMismatchedSourceDimensions() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let screenshot = try store.saveScreenshot(
+            pngData: Data([1]),
+            width: 800,
+            height: 500
+        )
+        let plan = ScreenshotEditPlan(
+            sourceDimensions: TraceDimensions(width: 801, height: 500)
+        )
+
+        XCTAssertThrowsError(try store.writeScreenshotEditPlan(plan, to: screenshot)) { error in
+            XCTAssertEqual(error as? TraceProjectStoreError, .invalidDimensions)
+        }
+    }
+
     func testRecordingLifecycleCreatesEventTracksAndFinalizesManifest() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)

@@ -6,6 +6,8 @@ public enum TraceProjectStoreError: LocalizedError, Equatable {
     case missingRawRecording
     case emptyRawRecording
     case missingRenderedVideo
+    case missingRenderedScreenshot
+    case emptyRenderedScreenshot
     case incompatibleTraceKind
 
     public var errorDescription: String? {
@@ -20,6 +22,10 @@ public enum TraceProjectStoreError: LocalizedError, Equatable {
             return "原始录屏文件为空。"
         case .missingRenderedVideo:
             return "自动成片文件不存在。"
+        case .missingRenderedScreenshot:
+            return "标注后的截图文件不存在。"
+        case .emptyRenderedScreenshot:
+            return "标注后的截图文件为空。"
         case .incompatibleTraceKind:
             return "项目类型不支持这项分析结果。"
         }
@@ -142,6 +148,81 @@ public struct TraceProjectStore: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(OCRDocument.self, from: data)
+    }
+
+    public func writeScreenshotEditPlan(
+        _ plan: ScreenshotEditPlan,
+        to savedTrace: SavedTrace
+    ) throws -> SavedTrace {
+        var manifest = try loadManifest(from: savedTrace.packageURL)
+        guard manifest.kind == .screenshot else {
+            throw TraceProjectStoreError.incompatibleTraceKind
+        }
+        guard manifest.dimensions == plan.sourceDimensions else {
+            throw TraceProjectStoreError.invalidDimensions
+        }
+
+        let relativePath = "edits/screenshot-edit.json"
+        let outputURL = savedTrace.packageURL.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(plan).write(to: outputURL, options: .atomic)
+
+        if !manifest.assets.contains(where: { $0.role == .screenshotEditPlan }) {
+            manifest.assets.append(
+                TraceAsset(role: .screenshotEditPlan, relativePath: relativePath)
+            )
+        }
+        try writeManifest(manifest, to: savedTrace.packageURL)
+        return SavedTrace(
+            packageURL: savedTrace.packageURL,
+            rawAssetURL: savedTrace.rawAssetURL,
+            manifest: manifest
+        )
+    }
+
+    public func loadScreenshotEditPlan(from packageURL: URL) throws -> ScreenshotEditPlan {
+        let data = try Data(
+            contentsOf: packageURL.appendingPathComponent("edits/screenshot-edit.json")
+        )
+        return try JSONDecoder().decode(ScreenshotEditPlan.self, from: data)
+    }
+
+    public func completeScreenshotEditing(
+        packageURL: URL,
+        renderedImageURL: URL
+    ) throws -> SavedTrace {
+        guard FileManager.default.fileExists(atPath: renderedImageURL.path) else {
+            throw TraceProjectStoreError.missingRenderedScreenshot
+        }
+        let attributes = try FileManager.default.attributesOfItem(atPath: renderedImageURL.path)
+        guard (attributes[.size] as? NSNumber)?.int64Value ?? 0 > 0 else {
+            throw TraceProjectStoreError.emptyRenderedScreenshot
+        }
+
+        var manifest = try loadManifest(from: packageURL)
+        guard manifest.kind == .screenshot else {
+            throw TraceProjectStoreError.incompatibleTraceKind
+        }
+        let relativePath = renderedImageURL.path.replacingOccurrences(
+            of: packageURL.path + "/",
+            with: ""
+        )
+        if !manifest.assets.contains(where: { $0.role == .renderedScreenshot }) {
+            manifest.assets.append(
+                TraceAsset(role: .renderedScreenshot, relativePath: relativePath)
+            )
+        }
+        manifest.state = .ready
+        try writeManifest(manifest, to: packageURL)
+        let rawAsset = manifest.assets.first(where: { $0.role == .screenshot })
+            .map { packageURL.appendingPathComponent($0.relativePath) }
+            ?? packageURL.appendingPathComponent("raw/screenshot.png")
+        return SavedTrace(packageURL: packageURL, rawAssetURL: rawAsset, manifest: manifest)
     }
 
     public func beginRecording(

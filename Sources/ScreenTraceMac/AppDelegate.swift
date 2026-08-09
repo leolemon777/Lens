@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let previewRenderer = AutoPreviewRenderer()
     private let toast = ToastWindowController()
     private let permissionCenter = PermissionCenterWindowController()
+    private lazy var annotationEditor = ScreenshotAnnotationEditorWindowController(store: store)
 
     private lazy var captureCoordinator = CaptureCoordinator(
         store: store,
@@ -52,6 +53,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quickAccess.onPinRequested = { [weak self] trace, image in
             self?.pinnedImages.pin(trace: trace, image: image)
             self?.toast.show(title: "已贴在桌面", detail: "双击或按 Esc 关闭贴图", symbol: "pin.fill")
+        }
+        quickAccess.onAnnotateRequested = { [weak self] trace, image in
+            self?.annotationEditor.show(trace: trace, fallbackImage: image)
+        }
+        annotationEditor.onSaved = { [weak self] trace, image in
+            guard let self else { return }
+            model.setRecentTrace(trace, thumbnail: image)
+            quickAccess.show(trace: trace, image: image)
+            toast.show(
+                title: "标注已复制",
+                detail: "对象与原图均已保留，可继续修改",
+                symbol: "checkmark.circle.fill"
+            )
+        }
+        annotationEditor.onFailure = { [weak self] error in
+            self?.toast.show(
+                title: "原图与标注计划仍然安全",
+                detail: error.localizedDescription,
+                symbol: "exclamationmark.arrow.triangle.2.circlepath"
+            )
         }
         recordingControl.onStop = { [weak self] in
             self?.stopRecording()

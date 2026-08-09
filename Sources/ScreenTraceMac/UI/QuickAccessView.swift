@@ -6,6 +6,7 @@ struct QuickAccessView: View {
     let trace: SavedTrace
     let image: NSImage
     let onCopy: () -> Void
+    let onAnnotate: () -> Void
     let onReveal: () -> Void
     let onPin: () -> Void
     let onClose: () -> Void
@@ -33,6 +34,7 @@ struct QuickAccessView: View {
                 }
                 HStack(spacing: 6) {
                     quickButton("复制", symbol: "doc.on.doc", action: onCopy)
+                    quickButton("标注", symbol: "pencil.tip", action: onAnnotate)
                     quickButton("显示", symbol: "folder", action: onReveal)
                     quickButton("贴图", symbol: "pin", action: onPin)
                 }

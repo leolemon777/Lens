@@ -1,0 +1,36 @@
+import Foundation
+import XCTest
+@testable import ScreenTraceCore
+
+final class ScreenshotEditPlanTests: XCTestCase {
+    func testPlanRoundTripsAllAnnotationKinds() throws {
+        let annotations = ScreenshotAnnotationKind.allCases.enumerated().map { index, kind in
+            ScreenshotAnnotation(
+                id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index + 1))!,
+                kind: kind,
+                bounds: TraceRect(x: 0.1, y: 0.2, width: 0.3, height: 0.2),
+                start: kind == .arrow ? TracePoint(x: 0.1, y: 0.2) : nil,
+                end: kind == .arrow ? TracePoint(x: 0.4, y: 0.4) : nil,
+                text: kind == .text ? "ScreenTrace" : nil,
+                style: ScreenshotAnnotationStyle(
+                    lineWidth: 0.008,
+                    fontSize: 0.05,
+                    color: .orange,
+                    fillColor: TraceColor(red: 1, green: 0.2, blue: 0.1, alpha: 0.12),
+                    intensity: 0.04
+                )
+            )
+        }
+        let plan = ScreenshotEditPlan(
+            sourceDimensions: TraceDimensions(width: 1_440, height: 900),
+            annotations: annotations
+        )
+
+        let data = try JSONEncoder().encode(plan)
+        let decoded = try JSONDecoder().decode(ScreenshotEditPlan.self, from: data)
+
+        XCTAssertEqual(decoded, plan)
+        XCTAssertEqual(decoded.annotations.map(\.kind), ScreenshotAnnotationKind.allCases)
+        XCTAssertEqual(decoded.schemaVersion, ScreenshotEditPlan.currentSchemaVersion)
+    }
+}

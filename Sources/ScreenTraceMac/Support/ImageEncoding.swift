@@ -32,4 +32,16 @@ enum ImageEncoding {
             size: NSSize(width: image.width, height: image.height)
         )
     }
+
+    static func cgImage(from image: NSImage) throws -> CGImage {
+        var proposedRect = CGRect(origin: .zero, size: image.size)
+        guard let cgImage = image.cgImage(
+            forProposedRect: &proposedRect,
+            context: nil,
+            hints: nil
+        ) else {
+            throw ImageEncodingError.unableToCreateBitmap
+        }
+        return cgImage
+    }
 }

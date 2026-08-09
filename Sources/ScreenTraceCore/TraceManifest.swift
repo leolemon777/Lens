@@ -22,11 +22,13 @@ public struct TraceAsset: Codable, Equatable, Sendable {
         case camera
         case thumbnail
         case renderedVideo
+        case renderedScreenshot
         case pointerEvents
         case clickEvents
         case keyboardEvents
         case windowEvents
         case editPlan
+        case screenshotEditPlan
         case ocr
     }
 

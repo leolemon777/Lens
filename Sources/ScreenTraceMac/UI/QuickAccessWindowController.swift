@@ -9,6 +9,7 @@ final class QuickAccessWindowController {
     private var activeTrace: SavedTrace?
     private var activeImage: NSImage?
     var onPinRequested: ((SavedTrace, NSImage) -> Void)?
+    var onAnnotateRequested: ((SavedTrace, NSImage) -> Void)?
 
     func show(trace: SavedTrace, image: NSImage) {
         dismissTask?.cancel()
@@ -21,7 +22,11 @@ final class QuickAccessWindowController {
             trace: trace,
             image: image,
             onCopy: { [weak self] in self?.copyActiveImage() },
-            onReveal: { NSWorkspace.shared.activateFileViewerSelecting([trace.rawAssetURL]) },
+            onAnnotate: { [weak self] in self?.requestAnnotation() },
+            onReveal: { [weak self] in
+                guard let self else { return }
+                NSWorkspace.shared.activateFileViewerSelecting([revealURL(for: trace)])
+            },
             onPin: { [weak self] in self?.requestPin() },
             onClose: { [weak self] in self?.hide() }
         )
@@ -79,6 +84,18 @@ final class QuickAccessWindowController {
     private func requestPin() {
         guard let activeTrace, let activeImage else { return }
         onPinRequested?(activeTrace, activeImage)
+    }
+
+    private func requestAnnotation() {
+        guard let activeTrace, let activeImage else { return }
+        hide()
+        onAnnotateRequested?(activeTrace, activeImage)
+    }
+
+    private func revealURL(for trace: SavedTrace) -> URL {
+        trace.manifest.assets.first(where: { $0.role == .renderedScreenshot })
+            .map { trace.packageURL.appendingPathComponent($0.relativePath) }
+            ?? trace.rawAssetURL
     }
 }
 

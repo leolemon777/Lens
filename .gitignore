@@ -1,0 +1,10 @@
+.DS_Store
+/.build/
+/Build/
+/.swiftpm/
+*.xcuserstate
+xcuserdata/
+DerivedData/
+*.screentrace
+*.mp4
+*.mov

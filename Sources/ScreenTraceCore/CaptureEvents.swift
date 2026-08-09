@@ -1,0 +1,234 @@
+import Foundation
+
+public struct TracePoint: Codable, Equatable, Sendable {
+    public let x: Double
+    public let y: Double
+
+    public init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
+    }
+}
+
+public enum PointerEventKind: String, Codable, Sendable {
+    case moved
+    case dragged
+}
+
+public struct PointerEvent: Codable, Equatable, Sendable {
+    public let time: Double
+    public let kind: PointerEventKind
+    public let location: TracePoint
+    public let normalizedLocation: TracePoint?
+    public let displayID: UInt32?
+
+    public init(
+        time: Double,
+        kind: PointerEventKind,
+        location: TracePoint,
+        normalizedLocation: TracePoint? = nil,
+        displayID: UInt32?
+    ) {
+        self.time = time
+        self.kind = kind
+        self.location = location
+        self.normalizedLocation = normalizedLocation
+        self.displayID = displayID
+    }
+}
+
+public enum PointerButton: String, Codable, Sendable {
+    case left
+    case right
+    case middle
+    case other
+}
+
+public enum ClickPhase: String, Codable, Sendable {
+    case down
+    case up
+}
+
+public struct ClickEvent: Codable, Equatable, Sendable {
+    public let time: Double
+    public let button: PointerButton
+    public let phase: ClickPhase
+    public let location: TracePoint
+    public let normalizedLocation: TracePoint?
+    public let displayID: UInt32?
+    public let clickCount: Int
+
+    public init(
+        time: Double,
+        button: PointerButton,
+        phase: ClickPhase,
+        location: TracePoint,
+        normalizedLocation: TracePoint? = nil,
+        displayID: UInt32? = nil,
+        clickCount: Int
+    ) {
+        self.time = time
+        self.button = button
+        self.phase = phase
+        self.location = location
+        self.normalizedLocation = normalizedLocation
+        self.displayID = displayID
+        self.clickCount = clickCount
+    }
+}
+
+public struct AutoEditPlan: Codable, Equatable, Sendable {
+    public struct ClickPulse: Codable, Equatable, Sendable {
+        public let time: Double
+        public let position: TracePoint
+        public let button: PointerButton
+        public let duration: Double
+
+        public init(
+            time: Double,
+            position: TracePoint,
+            button: PointerButton,
+            duration: Double = 0.55
+        ) {
+            self.time = time
+            self.position = position
+            self.button = button
+            self.duration = max(duration, 0.05)
+        }
+    }
+
+    public struct Interaction: Codable, Equatable, Sendable {
+        public var showsClickPulse: Bool
+        public var clickPulses: [ClickPulse]
+
+        public init(showsClickPulse: Bool = true, clickPulses: [ClickPulse] = []) {
+            self.showsClickPulse = showsClickPulse
+            self.clickPulses = clickPulses
+        }
+    }
+
+    public struct Canvas: Codable, Equatable, Sendable {
+        public var isEnabled: Bool
+        public var margin: Double
+        public var cornerRadius: Double
+        public var shadowOpacity: Double
+        public var backgroundTopHex: String
+        public var backgroundBottomHex: String
+
+        public init(
+            isEnabled: Bool = true,
+            margin: Double = 0.055,
+            cornerRadius: Double = 0.026,
+            shadowOpacity: Double = 0.28,
+            backgroundTopHex: String = "#D9D6CF",
+            backgroundBottomHex: String = "#9EA9A7"
+        ) {
+            self.isEnabled = isEnabled
+            self.margin = min(max(margin, 0), 0.25)
+            self.cornerRadius = min(max(cornerRadius, 0), 0.2)
+            self.shadowOpacity = min(max(shadowOpacity, 0), 1)
+            self.backgroundTopHex = backgroundTopHex
+            self.backgroundBottomHex = backgroundBottomHex
+        }
+    }
+
+    public struct CursorKeyframe: Codable, Equatable, Sendable {
+        public let time: Double
+        public let position: TracePoint
+
+        public init(time: Double, position: TracePoint) {
+            self.time = time
+            self.position = position
+        }
+    }
+
+    public struct CameraKeyframe: Codable, Equatable, Sendable {
+        public enum Reason: String, Codable, Sendable {
+            case baseline
+            case clickFocus
+            case clickHold
+            case returnToOverview
+        }
+
+        public let time: Double
+        public let scale: Double
+        public let center: TracePoint
+        public let easing: String
+        public let reason: Reason
+
+        public init(
+            time: Double,
+            scale: Double,
+            center: TracePoint,
+            easing: String,
+            reason: Reason
+        ) {
+            self.time = time
+            self.scale = scale
+            self.center = center
+            self.easing = easing
+            self.reason = reason
+        }
+    }
+
+    public struct Cursor: Codable, Equatable, Sendable {
+        public var smoothing: Double
+        public var scale: Double
+        public var hidesWhenIdle: Bool
+        public var keyframes: [CursorKeyframe]
+
+        public init(
+            smoothing: Double,
+            scale: Double,
+            hidesWhenIdle: Bool,
+            keyframes: [CursorKeyframe] = []
+        ) {
+            self.smoothing = smoothing
+            self.scale = scale
+            self.hidesWhenIdle = hidesWhenIdle
+            self.keyframes = keyframes
+        }
+    }
+
+    public struct Camera: Codable, Equatable, Sendable {
+        public var mode: String
+        public var zoomIntensity: Double
+        public var followPointer: Bool
+        public var keyframes: [CameraKeyframe]
+
+        public init(
+            mode: String,
+            zoomIntensity: Double,
+            followPointer: Bool,
+            keyframes: [CameraKeyframe] = []
+        ) {
+            self.mode = mode
+            self.zoomIntensity = zoomIntensity
+            self.followPointer = followPointer
+            self.keyframes = keyframes
+        }
+    }
+
+    public let schemaVersion: String
+    public var preset: String
+    public var cursor: Cursor
+    public var camera: Camera
+    public var canvas: Canvas?
+    public var interaction: Interaction?
+
+    public init(
+        schemaVersion: String = "0.1",
+        preset: String = "natural",
+        cursor: Cursor = Cursor(smoothing: 0.72, scale: 1.15, hidesWhenIdle: true),
+        camera: Camera = Camera(mode: "event-driven", zoomIntensity: 0.42, followPointer: true),
+        canvas: Canvas? = Canvas(),
+        interaction: Interaction? = Interaction()
+    ) {
+        self.schemaVersion = schemaVersion
+        self.preset = preset
+        self.cursor = cursor
+        self.camera = camera
+        self.canvas = canvas
+        self.interaction = interaction
+    }
+}

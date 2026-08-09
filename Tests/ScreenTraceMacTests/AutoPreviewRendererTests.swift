@@ -152,6 +152,66 @@ final class AutoPreviewRendererTests: XCTestCase {
     }
 
     @MainActor
+    func testOverlappingTimelineTransitionSurvivesScreenEffectsPipeline() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ScreenTraceTransitionPipelineTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inputURL = directory.appendingPathComponent("input.mp4")
+        let outputURL = directory.appendingPathComponent("transitioned.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: inputURL,
+            frameCount: 48,
+            framesPerSecond: 24,
+            style: .temporalSplit(splitFrame: 24)
+        )
+        var plan = AutoEditPlan()
+        plan.presenterCamera?.isEnabled = false
+        plan.canvas?.isEnabled = false
+        plan.timeline = VideoEditTimeline(
+            sourceDurationSeconds: 2,
+            segments: [
+                VideoEditSegment(
+                    sourceStartSeconds: 0,
+                    sourceEndSeconds: 1,
+                    transitionToNext: VideoEditTransition(
+                        kind: .crossDissolve,
+                        durationSeconds: 0.5
+                    )
+                ),
+                VideoEditSegment(sourceStartSeconds: 1, sourceEndSeconds: 2)
+            ]
+        )
+
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: inputURL,
+            outputURL: outputURL,
+            plan: plan
+        )
+
+        let asset = AVURLAsset(url: outputURL)
+        let duration = try await asset.load(.duration).seconds
+        XCTAssertEqual(duration, 1.5, accuracy: 0.1)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let frame = try await generator.image(
+            at: CMTime(seconds: 0.75, preferredTimescale: 600)
+        ).image
+        let bitmap = NSBitmapImageRep(cgImage: frame)
+        let color = try XCTUnwrap(
+            bitmap.colorAt(x: frame.width / 2, y: frame.height / 2)?
+                .usingColorSpace(.deviceRGB)
+        )
+        XCTAssertGreaterThan(color.redComponent, 0.24, "\(color)")
+        XCTAssertGreaterThan(color.blueComponent, 0.24, "\(color)")
+    }
+
+    @MainActor
     func testTranscriptIsBurnedIntoPreviewOnlyDuringCaptionCue() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTraceCaptionRenderTests-\(UUID().uuidString)", isDirectory: true)
@@ -230,12 +290,12 @@ final class AutoPreviewRendererTests: XCTestCase {
         let outputURL = directory.appendingPathComponent("presenter.mp4")
         try await SyntheticVideoFactory.makeVideo(
             at: screenURL,
-            frameCount: 30,
+            frameCount: 48,
             framesPerSecond: 24
         )
         try await SyntheticVideoFactory.makeVideo(
             at: cameraURL,
-            frameCount: 30,
+            frameCount: 48,
             framesPerSecond: 24,
             style: .greenCamera
         )
@@ -248,6 +308,20 @@ final class AutoPreviewRendererTests: XCTestCase {
             margin: 0.04,
             isMirrored: true,
             shadowOpacity: 0.35
+        )
+        plan.timeline = VideoEditTimeline(
+            sourceDurationSeconds: 2,
+            segments: [
+                VideoEditSegment(
+                    sourceStartSeconds: 0,
+                    sourceEndSeconds: 1,
+                    transitionToNext: VideoEditTransition(
+                        kind: .crossDissolve,
+                        durationSeconds: 0.5
+                    )
+                ),
+                VideoEditSegment(sourceStartSeconds: 1, sourceEndSeconds: 2)
+            ]
         )
         let renderer = AutoPreviewRenderer()
 
@@ -263,11 +337,11 @@ final class AutoPreviewRendererTests: XCTestCase {
         let duration = try await asset.load(.duration).seconds
         let videoTracks = try await asset.loadTracks(withMediaType: .video)
         XCTAssertEqual(videoTracks.count, 1)
-        XCTAssertGreaterThan(duration, 1.1)
+        XCTAssertEqual(duration, 1.5, accuracy: 0.1)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         let frame = try await generator.image(
-            at: CMTime(seconds: 0.5, preferredTimescale: 600)
+            at: CMTime(seconds: 0.75, preferredTimescale: 600)
         ).image
         let bitmap = NSBitmapImageRep(cgImage: frame)
         var greenPixels = 0
@@ -555,6 +629,7 @@ final class AutoPreviewRendererTests: XCTestCase {
 enum SyntheticVideoStyle {
     case quadrants
     case greenCamera
+    case temporalSplit(splitFrame: Int)
 }
 
 enum SyntheticVideoFactory {
@@ -654,6 +729,11 @@ enum SyntheticVideoFactory {
                     row[offset] = 25
                     row[offset + 1] = 235
                     row[offset + 2] = 20
+                case let .temporalSplit(splitFrame):
+                    let isFirstColor = frame < splitFrame
+                    row[offset] = isFirstColor ? 20 : 235
+                    row[offset + 1] = 20
+                    row[offset + 2] = isFirstColor ? 235 : 20
                 }
                 row[offset + 3] = 255
             }

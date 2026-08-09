@@ -494,11 +494,21 @@ final class TraceProjectStoreTests: XCTestCase {
         )
         plan.timeline = VideoEditTimeline(
             sourceDurationSeconds: 40,
-            segments: [VideoEditSegment(
-                sourceStartSeconds: 2,
-                sourceEndSeconds: 30,
-                playbackRate: 9
-            )]
+            segments: [
+                VideoEditSegment(
+                    sourceStartSeconds: 2,
+                    sourceEndSeconds: 6,
+                    transitionToNext: VideoEditTransition(
+                        kind: .crossDissolve,
+                        durationSeconds: 0.45
+                    )
+                ),
+                VideoEditSegment(
+                    sourceStartSeconds: 6,
+                    sourceEndSeconds: 30,
+                    playbackRate: 9
+                )
+            ]
         )
 
         let updated = try store.writeAutoEditPlan(plan, to: saved.packageURL)
@@ -507,8 +517,12 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(updated.manifest.state, .processing)
         XCTAssertEqual(reloaded.schemaVersion, AutoEditPlan.currentSchemaVersion)
         XCTAssertEqual(reloaded.timeline?.sourceDurationSeconds, 10)
-        XCTAssertEqual(reloaded.timeline?.segments.first?.sourceEndSeconds, 10)
-        XCTAssertEqual(reloaded.timeline?.segments.first?.playbackRate, 4)
+        XCTAssertEqual(reloaded.timeline?.segments.last?.sourceEndSeconds, 10)
+        XCTAssertEqual(reloaded.timeline?.segments.last?.playbackRate, 4)
+        XCTAssertEqual(
+            reloaded.timeline?.segments.first?.transitionToNext,
+            VideoEditTransition(kind: .crossDissolve, durationSeconds: 0.45)
+        )
         XCTAssertEqual(reloaded.captions, plan.captions)
         XCTAssertEqual(reloaded.presenterCamera, plan.presenterCamera)
         XCTAssertEqual(

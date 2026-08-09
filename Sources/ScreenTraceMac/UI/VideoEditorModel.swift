@@ -71,6 +71,8 @@ final class VideoEditorModel: ObservableObject {
     }
 
     var activeSegments: [VideoEditSegment] { timeline.activeSegments }
+    var segmentLayouts: [VideoEditSegmentLayout] { timeline.segmentLayouts }
+    var resolvedTransitions: [VideoEditResolvedTransition] { timeline.resolvedTransitions }
     var outputDurationSeconds: Double { timeline.outputDurationSeconds }
     var selectedSegment: VideoEditSegment? {
         guard let selectedSegmentID else { return nil }
@@ -80,6 +82,25 @@ final class VideoEditorModel: ObservableObject {
     var canRedo: Bool { !redoHistory.isEmpty }
     var canRemoveSelectedSegment: Bool {
         selectedSegment?.isEnabled == true && activeSegments.count > 1
+    }
+    var canTransitionFromSelectedSegment: Bool {
+        guard let selectedSegmentID,
+              let index = activeSegments.firstIndex(where: { $0.id == selectedSegmentID }) else {
+            return false
+        }
+        return index < activeSegments.count - 1
+    }
+    var selectedTransitionKind: VideoEditTransition.Kind {
+        selectedSegment?.transitionToNext?.kind ?? .cut
+    }
+    var selectedTransitionDuration: Double {
+        selectedSegment?.transitionToNext?.durationSeconds ?? 0.35
+    }
+    var selectedResolvedTransitionDuration: Double? {
+        guard let selectedSegmentID else { return nil }
+        return resolvedTransitions.first {
+            $0.fromSegmentID == selectedSegmentID
+        }?.durationSeconds
     }
     var cameraMotionEnabled: Bool { plan.camera.mode != "off" }
     var cursorEnabled: Bool { plan.cursor.isEnabled != false }
@@ -156,6 +177,32 @@ final class VideoEditorModel: ObservableObject {
         guard let selectedSegmentID else { return }
         mutate(timelineChanged: true) { plan in
             plan.timeline?.setPlaybackRate(rate, for: selectedSegmentID)
+        }
+    }
+
+    func setSelectedTransitionKind(_ kind: VideoEditTransition.Kind) {
+        guard let selectedSegmentID, canTransitionFromSelectedSegment else { return }
+        let duration = selectedTransitionDuration
+        mutate(timelineChanged: true) { plan in
+            plan.timeline?.setTransition(
+                kind == .cut
+                    ? nil
+                    : VideoEditTransition(kind: kind, durationSeconds: duration),
+                after: selectedSegmentID
+            )
+        }
+    }
+
+    func setSelectedTransitionDuration(_ duration: Double) {
+        guard let selectedSegmentID,
+              canTransitionFromSelectedSegment,
+              selectedTransitionKind != .cut else { return }
+        let kind = selectedTransitionKind
+        mutate(timelineChanged: true) { plan in
+            plan.timeline?.setTransition(
+                VideoEditTransition(kind: kind, durationSeconds: duration),
+                after: selectedSegmentID
+            )
         }
     }
 

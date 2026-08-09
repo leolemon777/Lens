@@ -376,52 +376,76 @@ struct VideoEditorView: View {
             }
             GeometryReader { proxy in
                 let total = max(model.outputDurationSeconds, 0.001)
-                let spacing = CGFloat(max(model.activeSegments.count - 1, 0)) * 4
-                let availableWidth = max(proxy.size.width - spacing, 1)
+                let availableWidth = max(proxy.size.width, 1)
                 ZStack(alignment: .leading) {
-                    HStack(spacing: 4) {
-                        ForEach(Array(model.activeSegments.enumerated()), id: \.element.id) { index, segment in
-                            Button {
-                                model.selectSegment(segment.id)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("片段 \(index + 1)")
-                                        .font(.system(size: 9.5, weight: .bold))
-                                    Text(String(format: "%.1f–%.1f s · %.2gx", segment.sourceStartSeconds, segment.sourceEndSeconds, segment.playbackRate))
-                                        .font(.system(size: 8.5, weight: .medium, design: .rounded))
-                                        .opacity(0.74)
-                                }
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-                                .padding(.horizontal, 9)
-                                .background(
-                                    LinearGradient(
-                                        colors: index.isMultiple(of: 2)
-                                            ? [.cyan.opacity(0.76), .blue.opacity(0.72)]
-                                            : [.indigo.opacity(0.76), .purple.opacity(0.68)],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    in: RoundedRectangle(cornerRadius: 9)
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 9)
-                                        .stroke(
-                                            model.selectedSegmentID == segment.id
-                                                ? .white.opacity(0.95)
-                                                : .white.opacity(0.16),
-                                            lineWidth: model.selectedSegmentID == segment.id ? 2 : 1
-                                        )
-                                )
+                    ForEach(Array(model.activeSegments.enumerated()), id: \.element.id) { index, segment in
+                        let layout = model.segmentLayouts[index]
+                        let segmentWidth = max(
+                            availableWidth * layout.outputDurationSeconds / total,
+                            38
+                        )
+                        let segmentStart = availableWidth
+                            * layout.outputStartSeconds / total
+                        Button {
+                            model.selectSegment(segment.id)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("片段 \(index + 1)")
+                                    .font(.system(size: 9.5, weight: .bold))
+                                Text(String(
+                                    format: "%.1f–%.1f s · %.2gx",
+                                    segment.sourceStartSeconds,
+                                    segment.sourceEndSeconds,
+                                    segment.playbackRate
+                                ))
+                                .font(.system(size: 8.5, weight: .medium, design: .rounded))
+                                .opacity(0.74)
                             }
-                            .buttonStyle(.plain)
-                            .frame(
-                                width: max(
-                                    availableWidth * segment.outputDurationSeconds / total,
-                                    56
-                                )
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                            .padding(.horizontal, 9)
+                            .background(
+                                LinearGradient(
+                                    colors: index.isMultiple(of: 2)
+                                        ? [.cyan.opacity(0.82), .blue.opacity(0.76)]
+                                        : [.indigo.opacity(0.82), .purple.opacity(0.74)],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                in: RoundedRectangle(cornerRadius: 9)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 9)
+                                    .stroke(
+                                        model.selectedSegmentID == segment.id
+                                            ? .white.opacity(0.95)
+                                            : .white.opacity(0.18),
+                                        lineWidth: model.selectedSegmentID == segment.id ? 2 : 1
+                                    )
                             )
                         }
+                        .buttonStyle(.plain)
+                        .frame(width: segmentWidth, height: 58)
+                        .offset(x: segmentStart)
+                        .zIndex(model.selectedSegmentID == segment.id ? 2 : Double(index % 2))
+                    }
+                    ForEach(model.resolvedTransitions, id: \.fromSegmentID) { transition in
+                        let center = availableWidth
+                            * (transition.outputStartSeconds
+                                + transition.durationSeconds / 2) / total
+                        Image(systemName: transition.kind == .crossDissolve
+                            ? "circle.lefthalf.filled"
+                            : "circle.bottomhalf.filled")
+                            .font(.system(size: 8.5, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 20, height: 20)
+                            .background(.black.opacity(0.58), in: Circle())
+                            .overlay(Circle().stroke(.white.opacity(0.45), lineWidth: 0.7))
+                            .offset(x: center - 10, y: 19)
+                            .zIndex(4)
+                            .help(transition.kind == .crossDissolve
+                                ? String(format: "交叉叠化 · %.2f 秒", transition.durationSeconds)
+                                : String(format: "淡入黑场 · %.2f 秒", transition.durationSeconds))
                     }
                     ForEach(
                         Array(model.presenterKeyframeOutputTimes.enumerated()),
@@ -459,27 +483,74 @@ struct VideoEditorView: View {
             .frame(height: 58)
 
             if let selected = model.selectedSegment {
-                HStack(spacing: 8) {
-                    Text("所选片段速度")
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Picker("速度", selection: Binding(
-                        get: { selected.playbackRate },
-                        set: { model.setSelectedPlaybackRate($0) }
-                    )) {
-                        Text("0.5×").tag(0.5)
-                        Text("1×").tag(1.0)
-                        Text("1.5×").tag(1.5)
-                        Text("2×").tag(2.0)
-                        Text("3×").tag(3.0)
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text("所选片段速度")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Picker("速度", selection: Binding(
+                            get: { selected.playbackRate },
+                            set: { model.setSelectedPlaybackRate($0) }
+                        )) {
+                            Text("0.5×").tag(0.5)
+                            Text("1×").tag(1.0)
+                            Text("1.5×").tag(1.5)
+                            Text("2×").tag(2.0)
+                            Text("3×").tag(3.0)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 260)
+                        Spacer()
+                        Text("源素材 \(timeText(model.sourceDurationSeconds))")
+                            .font(.system(size: 9.5, weight: .medium))
+                            .foregroundStyle(.secondary)
                     }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 260)
-                    Spacer()
-                    Text("源素材 \(timeText(model.sourceDurationSeconds))")
-                        .font(.system(size: 9.5, weight: .medium))
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 8) {
+                        Text("到下一片段")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                        Picker("转场", selection: Binding(
+                            get: { model.selectedTransitionKind },
+                            set: { model.setSelectedTransitionKind($0) }
+                        )) {
+                            Text("直接切换").tag(VideoEditTransition.Kind.cut)
+                            Text("交叉叠化").tag(VideoEditTransition.Kind.crossDissolve)
+                            Text("淡入黑场").tag(VideoEditTransition.Kind.dipToBlack)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .frame(width: 260)
+                        .disabled(!model.canTransitionFromSelectedSegment)
+                        if model.canTransitionFromSelectedSegment,
+                           model.selectedTransitionKind != .cut {
+                            let resolvedDuration = model.selectedResolvedTransitionDuration
+                                ?? model.selectedTransitionDuration
+                            let wasClamped = abs(
+                                resolvedDuration - model.selectedTransitionDuration
+                            ) > 0.005
+                            Slider(
+                                value: Binding(
+                                    get: { model.selectedTransitionDuration },
+                                    set: { model.setSelectedTransitionDuration($0) }
+                                ),
+                                in: 0.15...1.2
+                            )
+                            .frame(width: 112)
+                            Text(String(
+                                format: wasClamped ? "%.2f s · 已限幅" : "%.2f s",
+                                resolvedDuration
+                            ))
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(wasClamped ? .orange : .cyan)
+                        }
+                        Spacer()
+                        if !model.canTransitionFromSelectedSegment {
+                            Text("末尾片段无需转场")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
                 }
             }
         }

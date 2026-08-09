@@ -78,7 +78,7 @@ public struct ClickEvent: Codable, Equatable, Sendable {
 }
 
 public struct AutoEditPlan: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.4"
+    public static let currentSchemaVersion = "0.5"
 
     public struct ClickPulse: Codable, Equatable, Sendable {
         public let time: Double

@@ -45,6 +45,11 @@ final class VideoEditorViewTests: XCTestCase {
         )
         model.split(atOutputTime: 7)
         model.setSelectedPlaybackRate(1.5)
+        if let firstID = model.activeSegments.first?.id {
+            model.selectSegment(firstID)
+            model.setSelectedTransitionKind(.crossDissolve)
+            model.setSelectedTransitionDuration(0.55)
+        }
         let playback = VideoEditorPlaybackController()
         let root = VideoEditorView(
             model: model,

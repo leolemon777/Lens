@@ -32,14 +32,14 @@ final class VideoEditorPlaybackController: ObservableObject {
         loadTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let composition = try await VideoTimelineCompositionBuilder().build(
+                let package = try await VideoTimelineCompositionBuilder().buildPackage(
                     inputURL: sourceURL,
                     timeline: timeline,
                     includesVideo: true,
                     includesAudio: true,
                     requiresVideo: true
                 )
-                let duration = try await composition.load(.duration).seconds
+                let duration = try await package.composition.load(.duration).seconds
                 let aspectRatio = await VideoEditorMediaInspector.aspectRatio(
                     for: sourceURL
                 )
@@ -49,7 +49,10 @@ final class VideoEditorPlaybackController: ObservableObject {
                     aspectRatio.isFinite ? aspectRatio : 16.0 / 9.0,
                     0.25
                 ), 4)
-                player.replaceCurrentItem(with: AVPlayerItem(asset: composition))
+                let item = AVPlayerItem(asset: package.composition)
+                item.videoComposition = package.videoComposition
+                item.audioMix = package.audioMix
+                player.replaceCurrentItem(with: item)
                 seek(to: min(preservedTime, durationSeconds))
                 isLoading = false
             } catch is CancellationError {

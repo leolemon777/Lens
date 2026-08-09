@@ -59,13 +59,38 @@ final class AutoPreviewRenderer {
                 timeline: plan.timeline
             )
         }()
+        let transitionedInputURL: URL? = if let timeline = plan.timeline,
+                                           timeline.hasActiveTransitions {
+            outputURL.deletingLastPathComponent().appendingPathComponent(
+                ".timeline-transitions-\(UUID().uuidString).mp4"
+            )
+        } else {
+            nil
+        }
+        if let transitionedInputURL, let timeline = plan.timeline {
+            _ = try await VideoTimelineCompositionBuilder().export(
+                inputURL: inputURL,
+                timeline: timeline,
+                outputURL: transitionedInputURL,
+                includesVideo: true,
+                includesAudio: true,
+                requiresVideo: true
+            )
+        }
+        defer {
+            if let transitionedInputURL {
+                try? FileManager.default.removeItem(at: transitionedInputURL)
+            }
+        }
+        let effectsInputURL = transitionedInputURL ?? inputURL
         guard let presenter = activePresenter,
               let cameraURL = availableCameraURL else {
             return try await renderScreenEffects(
-                inputURL: inputURL,
+                inputURL: effectsInputURL,
                 outputURL: outputURL,
                 plan: plan,
-                captionRenderer: captionRenderer
+                captionRenderer: captionRenderer,
+                appliesTimeline: transitionedInputURL == nil
             )
         }
 
@@ -74,10 +99,11 @@ final class AutoPreviewRenderer {
         )
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
         _ = try await renderScreenEffects(
-            inputURL: inputURL,
+            inputURL: effectsInputURL,
             outputURL: temporaryURL,
             plan: plan,
-            captionRenderer: captionRenderer
+            captionRenderer: captionRenderer,
+            appliesTimeline: transitionedInputURL == nil
         )
         do {
             return try await PresenterCameraRenderer().render(
@@ -104,10 +130,11 @@ final class AutoPreviewRenderer {
         inputURL: URL,
         outputURL: URL,
         plan: AutoEditPlan,
-        captionRenderer: CaptionOverlayRenderer?
+        captionRenderer: CaptionOverlayRenderer?,
+        appliesTimeline: Bool
     ) async throws -> URL {
         let asset: AVAsset
-        if let timeline = plan.timeline {
+        if appliesTimeline, let timeline = plan.timeline {
             asset = try await VideoTimelineCompositionBuilder().build(
                 inputURL: inputURL,
                 timeline: timeline,

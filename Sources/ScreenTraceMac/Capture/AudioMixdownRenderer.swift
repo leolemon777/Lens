@@ -37,8 +37,25 @@ final class AudioMixdownRenderer: @unchecked Sendable {
         timeline: VideoEditTimeline? = nil
     ) async throws -> URL {
         let inputAsset = AVURLAsset(url: inputURL)
+        let transitionedMicrophoneURL: URL? = if timeline?.hasActiveTransitions == true {
+            outputURL.deletingLastPathComponent().appendingPathComponent(
+                ".microphone-transitions-\(UUID().uuidString).m4a"
+            )
+        } else {
+            nil
+        }
         let microphoneAsset: AVAsset
-        if let timeline {
+        if let timeline, let transitionedMicrophoneURL {
+            _ = try await VideoTimelineCompositionBuilder().export(
+                inputURL: microphoneURL,
+                timeline: timeline,
+                outputURL: transitionedMicrophoneURL,
+                includesVideo: false,
+                includesAudio: true,
+                requiresAudio: true
+            )
+            microphoneAsset = AVURLAsset(url: transitionedMicrophoneURL)
+        } else if let timeline {
             microphoneAsset = try await VideoTimelineCompositionBuilder().build(
                 inputURL: microphoneURL,
                 timeline: timeline,
@@ -48,6 +65,11 @@ final class AudioMixdownRenderer: @unchecked Sendable {
             )
         } else {
             microphoneAsset = AVURLAsset(url: microphoneURL)
+        }
+        defer {
+            if let transitionedMicrophoneURL {
+                try? FileManager.default.removeItem(at: transitionedMicrophoneURL)
+            }
         }
         guard let sourceVideo = try await inputAsset.loadTracks(withMediaType: .video).first else {
             throw AudioMixdownRendererError.missingVideoTrack

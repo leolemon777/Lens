@@ -36,6 +36,41 @@ final class VideoEditorModelTests: XCTestCase {
         XCTAssertTrue(model.isDirty)
     }
 
+    func testTransitionControlsAreNonDestructiveUndoableAndUpdateOutputDuration() throws {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 8,
+            hasCameraTrack: false
+        )
+        model.split(atOutputTime: 4)
+        let trailingID = try XCTUnwrap(model.selectedSegmentID)
+        let leadingID = try XCTUnwrap(model.activeSegments.first?.id)
+        model.selectSegment(leadingID)
+
+        XCTAssertTrue(model.canTransitionFromSelectedSegment)
+        XCTAssertEqual(model.selectedTransitionKind, .cut)
+        model.setSelectedTransitionKind(.crossDissolve)
+        model.setSelectedTransitionDuration(0.8)
+
+        XCTAssertEqual(model.selectedTransitionKind, .crossDissolve)
+        XCTAssertEqual(model.selectedTransitionDuration, 0.8)
+        XCTAssertEqual(model.outputDurationSeconds, 7.2, accuracy: 0.000_001)
+        XCTAssertEqual(model.resolvedTransitions.first?.fromSegmentID, leadingID)
+        XCTAssertEqual(model.resolvedTransitions.first?.toSegmentID, trailingID)
+
+        model.undo()
+        XCTAssertEqual(model.selectedTransitionDuration, 0.35)
+        XCTAssertEqual(model.outputDurationSeconds, 7.65, accuracy: 0.000_001)
+        model.undo()
+        XCTAssertEqual(model.selectedTransitionKind, .cut)
+        XCTAssertEqual(model.outputDurationSeconds, 8, accuracy: 0.000_001)
+
+        model.selectSegment(trailingID)
+        XCTAssertFalse(model.canTransitionFromSelectedSegment)
+        model.setSelectedTransitionKind(.dipToBlack)
+        XCTAssertNil(model.selectedSegment?.transitionToNext)
+    }
+
     func testEffectInspectorMutationsRemainUndoableAndRespectMissingCameraTrack() {
         let model = VideoEditorModel(
             plan: AutoEditPlan(),

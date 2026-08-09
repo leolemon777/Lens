@@ -38,8 +38,25 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         captionCues: [CaptionCue]? = nil
     ) async throws -> URL {
         let screenAsset = AVURLAsset(url: screenURL)
+        let transitionedCameraURL: URL? = if timeline?.hasActiveTransitions == true {
+            outputURL.deletingLastPathComponent().appendingPathComponent(
+                ".presenter-transitions-\(UUID().uuidString).mp4"
+            )
+        } else {
+            nil
+        }
         let cameraAsset: AVAsset
-        if let timeline {
+        if let timeline, let transitionedCameraURL {
+            _ = try await VideoTimelineCompositionBuilder().export(
+                inputURL: cameraURL,
+                timeline: timeline,
+                outputURL: transitionedCameraURL,
+                includesVideo: true,
+                includesAudio: false,
+                requiresVideo: true
+            )
+            cameraAsset = AVURLAsset(url: transitionedCameraURL)
+        } else if let timeline {
             cameraAsset = try await VideoTimelineCompositionBuilder().build(
                 inputURL: cameraURL,
                 timeline: timeline,
@@ -49,6 +66,11 @@ final class PresenterCameraRenderer: @unchecked Sendable {
             )
         } else {
             cameraAsset = AVURLAsset(url: cameraURL)
+        }
+        defer {
+            if let transitionedCameraURL {
+                try? FileManager.default.removeItem(at: transitionedCameraURL)
+            }
         }
         guard let screenTrack = try await screenAsset.loadTracks(withMediaType: .video).first else {
             throw PresenterCameraRendererError.missingScreenTrack

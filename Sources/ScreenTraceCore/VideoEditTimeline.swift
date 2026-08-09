@@ -1,18 +1,64 @@
 import Foundation
 
+public struct VideoEditTransition: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, CaseIterable, Sendable {
+        case cut
+        case crossDissolve
+        case dipToBlack
+    }
+
+    public static let maximumDurationSeconds = 2.0
+
+    public var kind: Kind
+    public var durationSeconds: Double
+
+    public init(
+        kind: Kind = .crossDissolve,
+        durationSeconds: Double = 0.35
+    ) {
+        self.kind = kind
+        self.durationSeconds = kind == .cut ? 0 : min(
+            max(durationSeconds.isFinite ? durationSeconds : 0.35, 0.05),
+            Self.maximumDurationSeconds
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case durationSeconds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            kind: try container.decode(Kind.self, forKey: .kind),
+            durationSeconds: try container.decode(Double.self, forKey: .durationSeconds)
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(durationSeconds, forKey: .durationSeconds)
+    }
+}
+
 public struct VideoEditSegment: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public var sourceStartSeconds: Double
     public var sourceEndSeconds: Double
     public var playbackRate: Double
     public var isEnabled: Bool
+    /// The transition from this segment to the next enabled segment.
+    public var transitionToNext: VideoEditTransition?
 
     public init(
         id: UUID = UUID(),
         sourceStartSeconds: Double,
         sourceEndSeconds: Double,
         playbackRate: Double = 1,
-        isEnabled: Bool = true
+        isEnabled: Bool = true,
+        transitionToNext: VideoEditTransition? = nil
     ) {
         self.id = id
         let start = sourceStartSeconds.isFinite ? max(sourceStartSeconds, 0) : 0
@@ -21,6 +67,9 @@ public struct VideoEditSegment: Codable, Equatable, Identifiable, Sendable {
         self.sourceEndSeconds = max(end, start)
         self.playbackRate = Self.safePlaybackRate(playbackRate)
         self.isEnabled = isEnabled
+        self.transitionToNext = transitionToNext.map {
+            VideoEditTransition(kind: $0.kind, durationSeconds: $0.durationSeconds)
+        }
     }
 
     public var sourceDurationSeconds: Double {
@@ -34,6 +83,56 @@ public struct VideoEditSegment: Codable, Equatable, Identifiable, Sendable {
 
     static func safePlaybackRate(_ value: Double) -> Double {
         min(max(value.isFinite ? value : 1, 0.25), 4)
+    }
+}
+
+public struct VideoEditSegmentLayout: Equatable, Sendable {
+    public let segmentID: UUID
+    public let outputStartSeconds: Double
+    public let outputEndSeconds: Double
+
+    public init(
+        segmentID: UUID,
+        outputStartSeconds: Double,
+        outputEndSeconds: Double
+    ) {
+        self.segmentID = segmentID
+        self.outputStartSeconds = outputStartSeconds
+        self.outputEndSeconds = max(outputEndSeconds, outputStartSeconds)
+    }
+
+    public var outputDurationSeconds: Double {
+        max(outputEndSeconds - outputStartSeconds, 0)
+    }
+}
+
+public struct VideoEditResolvedTransition: Equatable, Sendable {
+    public let fromSegmentID: UUID
+    public let toSegmentID: UUID
+    public let kind: VideoEditTransition.Kind
+    public let durationSeconds: Double
+    public let outputStartSeconds: Double
+    public let outputEndSeconds: Double
+
+    public init(
+        fromSegmentID: UUID,
+        toSegmentID: UUID,
+        kind: VideoEditTransition.Kind,
+        durationSeconds: Double,
+        outputStartSeconds: Double,
+        outputEndSeconds: Double
+    ) {
+        self.fromSegmentID = fromSegmentID
+        self.toSegmentID = toSegmentID
+        self.kind = kind
+        self.durationSeconds = max(durationSeconds, 0)
+        self.outputStartSeconds = outputStartSeconds
+        self.outputEndSeconds = max(outputEndSeconds, outputStartSeconds)
+    }
+
+    public func progress(atOutputTime seconds: Double) -> Double {
+        guard durationSeconds > 0 else { return 1 }
+        return min(max((seconds - outputStartSeconds) / durationSeconds, 0), 1)
     }
 }
 
@@ -86,8 +185,20 @@ public struct VideoEditTimeline: Codable, Equatable, Sendable {
         segments.filter(\.isEnabled)
     }
 
+    public var segmentLayouts: [VideoEditSegmentLayout] {
+        resolvedLayout().layouts
+    }
+
+    public var resolvedTransitions: [VideoEditResolvedTransition] {
+        resolvedLayout().transitions
+    }
+
+    public var hasActiveTransitions: Bool {
+        !resolvedTransitions.isEmpty
+    }
+
     public var outputDurationSeconds: Double {
-        activeSegments.reduce(0) { $0 + $1.outputDurationSeconds }
+        segmentLayouts.last?.outputEndSeconds ?? 0
     }
 
     public func normalized(sourceDurationSeconds requestedDuration: Double? = nil) -> Self {
@@ -107,7 +218,8 @@ public struct VideoEditTimeline: Codable, Equatable, Sendable {
                 sourceStartSeconds: start,
                 sourceEndSeconds: end,
                 playbackRate: segment.playbackRate,
-                isEnabled: segment.isEnabled
+                isEnabled: segment.isEnabled,
+                transitionToNext: segment.transitionToNext
             )
         }
         let fallback: [VideoEditSegment]
@@ -130,41 +242,54 @@ public struct VideoEditTimeline: Codable, Equatable, Sendable {
         let active = activeSegments
         guard !active.isEmpty else { return nil }
         let requested = min(max(seconds.isFinite ? seconds : 0, 0), outputDurationSeconds)
-        var outputCursor = 0.0
-        for (index, segment) in active.enumerated() {
-            let end = outputCursor + segment.outputDurationSeconds
-            if requested < end || index == active.count - 1 {
-                let localOutput = min(max(requested - outputCursor, 0), segment.outputDurationSeconds)
-                return VideoEditTimelinePosition(
-                    segmentID: segment.id,
-                    sourceTimeSeconds: min(
-                        segment.sourceStartSeconds + localOutput * segment.playbackRate,
-                        segment.sourceEndSeconds
-                    )
-                )
-            }
-            outputCursor = end
+        let layout = resolvedLayout()
+        let containing = layout.layouts.enumerated().filter { index, item in
+            requested >= item.outputStartSeconds
+                && (requested < item.outputEndSeconds || index == layout.layouts.count - 1)
         }
-        return nil
+        guard !containing.isEmpty else { return nil }
+        let chosen: (offset: Int, element: VideoEditSegmentLayout)
+        if containing.count > 1,
+           let transition = layout.transitions.first(where: {
+               requested >= $0.outputStartSeconds && requested < $0.outputEndSeconds
+           }),
+           let incoming = containing.first(where: {
+               $0.element.segmentID == transition.toSegmentID
+           }),
+           transition.progress(atOutputTime: requested) >= 0.5 {
+            chosen = incoming
+        } else {
+            chosen = containing[0]
+        }
+        let segment = active[chosen.offset]
+        let localOutput = min(
+            max(requested - chosen.element.outputStartSeconds, 0),
+            segment.outputDurationSeconds
+        )
+        return VideoEditTimelinePosition(
+            segmentID: segment.id,
+            sourceTimeSeconds: min(
+                segment.sourceStartSeconds + localOutput * segment.playbackRate,
+                segment.sourceEndSeconds
+            )
+        )
     }
 
     public func outputRanges(
         forSourceRange sourceRange: VideoEditTimeRange
     ) -> [VideoEditTimeRange] {
-        var outputCursor = 0.0
         var ranges: [VideoEditTimeRange] = []
-        for segment in activeSegments {
+        for (segment, layout) in zip(activeSegments, segmentLayouts) {
             let overlapStart = max(sourceRange.startSeconds, segment.sourceStartSeconds)
             let overlapEnd = min(sourceRange.endSeconds, segment.sourceEndSeconds)
             if overlapEnd > overlapStart {
                 ranges.append(VideoEditTimeRange(
-                    startSeconds: outputCursor
+                    startSeconds: layout.outputStartSeconds
                         + (overlapStart - segment.sourceStartSeconds) / segment.playbackRate,
-                    endSeconds: outputCursor
+                    endSeconds: layout.outputStartSeconds
                         + (overlapEnd - segment.sourceStartSeconds) / segment.playbackRate
                 ))
             }
-            outputCursor += segment.outputDurationSeconds
         }
         return ranges
     }
@@ -174,16 +299,15 @@ public struct VideoEditTimeline: Codable, Equatable, Sendable {
     public func outputTimes(forSourceTime seconds: Double) -> [Double] {
         guard seconds.isFinite else { return [] }
         let active = activeSegments
-        var outputCursor = 0.0
+        let layouts = segmentLayouts
         var results: [Double] = []
         for (index, segment) in active.enumerated() {
             let includesEnd = index == active.count - 1 && seconds == segment.sourceEndSeconds
             if seconds >= segment.sourceStartSeconds,
                seconds < segment.sourceEndSeconds || includesEnd {
-                results.append(outputCursor
+                results.append(layouts[index].outputStartSeconds
                     + (seconds - segment.sourceStartSeconds) / segment.playbackRate)
             }
-            outputCursor += segment.outputDurationSeconds
         }
         return results
     }
@@ -198,11 +322,13 @@ public struct VideoEditTimeline: Codable, Equatable, Sendable {
             return nil
         }
         segments[index].sourceEndSeconds = splitTime
+        segments[index].transitionToNext = nil
         let trailing = VideoEditSegment(
             sourceStartSeconds: splitTime,
             sourceEndSeconds: segment.sourceEndSeconds,
             playbackRate: segment.playbackRate,
-            isEnabled: segment.isEnabled
+            isEnabled: segment.isEnabled,
+            transitionToNext: segment.transitionToNext
         )
         segments.insert(trailing, at: index + 1)
         return trailing.id
@@ -221,6 +347,25 @@ public struct VideoEditTimeline: Codable, Equatable, Sendable {
     public mutating func setPlaybackRate(_ rate: Double, for segmentID: UUID) {
         guard let index = segments.firstIndex(where: { $0.id == segmentID }) else { return }
         segments[index].playbackRate = VideoEditSegment.safePlaybackRate(rate)
+    }
+
+    public mutating func setTransition(
+        _ transition: VideoEditTransition?,
+        after segmentID: UUID
+    ) {
+        guard let index = segments.firstIndex(where: { $0.id == segmentID }) else { return }
+        guard activeSegments.last?.id != segmentID else {
+            segments[index].transitionToNext = nil
+            return
+        }
+        guard let transition, transition.kind != .cut else {
+            segments[index].transitionToNext = nil
+            return
+        }
+        segments[index].transitionToNext = VideoEditTransition(
+            kind: transition.kind,
+            durationSeconds: transition.durationSeconds
+        )
     }
 
     public mutating func trimStart(of segmentID: UUID, to sourceTime: Double) {
@@ -249,6 +394,56 @@ public struct VideoEditTimeline: Codable, Equatable, Sendable {
     ) {
         sourceDurationSeconds = uncheckedSourceDurationSeconds
         self.segments = segments
+    }
+
+    private func resolvedLayout() -> (
+        layouts: [VideoEditSegmentLayout],
+        transitions: [VideoEditResolvedTransition]
+    ) {
+        let active = activeSegments
+        guard !active.isEmpty else { return ([], []) }
+        var layouts: [VideoEditSegmentLayout] = []
+        var transitions: [VideoEditResolvedTransition] = []
+        var outputStart = 0.0
+
+        for (index, segment) in active.enumerated() {
+            let outputEnd = outputStart + segment.outputDurationSeconds
+            layouts.append(VideoEditSegmentLayout(
+                segmentID: segment.id,
+                outputStartSeconds: outputStart,
+                outputEndSeconds: outputEnd
+            ))
+            guard index < active.count - 1 else { continue }
+            let next = active[index + 1]
+            let requested = segment.transitionToNext
+            let kind = requested?.kind ?? .cut
+            let duration: Double
+            if kind == .cut {
+                duration = 0
+            } else {
+                duration = min(
+                    requested?.durationSeconds ?? 0.35,
+                    segment.outputDurationSeconds / 2,
+                    next.outputDurationSeconds / 2,
+                    VideoEditTransition.maximumDurationSeconds
+                )
+            }
+            let effectiveDuration = duration >= Self.minimumSegmentDurationSeconds
+                ? duration
+                : 0
+            if effectiveDuration > 0 {
+                transitions.append(VideoEditResolvedTransition(
+                    fromSegmentID: segment.id,
+                    toSegmentID: next.id,
+                    kind: kind,
+                    durationSeconds: effectiveDuration,
+                    outputStartSeconds: outputEnd - effectiveDuration,
+                    outputEndSeconds: outputEnd
+                ))
+            }
+            outputStart = outputEnd - effectiveDuration
+        }
+        return (layouts, transitions)
     }
 
     private static func safeDuration(_ value: Double) -> Double {

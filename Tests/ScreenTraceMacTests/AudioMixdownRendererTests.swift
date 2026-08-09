@@ -136,7 +136,14 @@ final class AudioMixdownRendererTests: XCTestCase {
         editPlan.timeline = VideoEditTimeline(
             sourceDurationSeconds: 2,
             segments: [
-                VideoEditSegment(sourceStartSeconds: 0.2, sourceEndSeconds: 0.7),
+                VideoEditSegment(
+                    sourceStartSeconds: 0.2,
+                    sourceEndSeconds: 0.7,
+                    transitionToNext: VideoEditTransition(
+                        kind: .crossDissolve,
+                        durationSeconds: 0.2
+                    )
+                ),
                 VideoEditSegment(
                     sourceStartSeconds: 1,
                     sourceEndSeconds: 1.8,
@@ -164,7 +171,7 @@ final class AudioMixdownRendererTests: XCTestCase {
         let audioTracks = try await output.loadTracks(withMediaType: .audio)
         XCTAssertEqual(videoTracks.count, 1)
         XCTAssertEqual(audioTracks.count, 1)
-        XCTAssertEqual(duration, 0.9, accuracy: 0.10)
+        XCTAssertEqual(duration, 0.7, accuracy: 0.10)
     }
 
     private func makeTone(

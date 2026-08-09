@@ -14,11 +14,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let toast = ToastWindowController()
     private let permissionCenter = PermissionCenterWindowController()
     private lazy var annotationEditor = ScreenshotAnnotationEditorWindowController(store: store)
+    private lazy var traceLibrary = TraceLibraryWindowController(store: store)
 
     private lazy var captureCoordinator = CaptureCoordinator(
         store: store,
         model: model,
         quickAccess: quickAccess,
+        onTraceChanged: { [weak self] in
+            self?.traceLibrary.reloadIfVisible()
+        },
         onOCRCompleted: { [weak self] document, trace in
             self?.handleOCRCompleted(document, trace: trace)
         },
@@ -61,6 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             model.setRecentTrace(trace, thumbnail: image)
             quickAccess.show(trace: trace, image: image)
+            traceLibrary.reloadIfVisible()
             toast.show(
                 title: "标注已复制",
                 detail: "对象与原图均已保留，可继续修改",
@@ -76,6 +81,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         recordingControl.onStop = { [weak self] in
             self?.stopRecording()
+        }
+        traceLibrary.onAnnotateRequested = { [weak self] trace, image in
+            self?.annotationEditor.show(trace: trace, fallbackImage: image)
         }
     }
 
@@ -122,7 +130,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(menuItem("选区 OCR", action: #selector(beginOCR)))
         menu.addItem(menuItem("开始屏幕录制", action: #selector(beginRecording)))
         menu.addItem(.separator())
-        menu.addItem(menuItem("打开屏迹目录", action: #selector(openTraceDirectory)))
+        menu.addItem(menuItem("打开屏迹库", action: #selector(showTraceLibrary)))
+        menu.addItem(menuItem("在 Finder 中打开屏迹目录", action: #selector(openTraceDirectory)))
         menu.addItem(menuItem("设置与权限", action: #selector(openSettingsAndPermissions)))
         menu.addItem(.separator())
         menu.addItem(menuItem("退出屏迹", action: #selector(quit), keyEquivalent: "q"))
@@ -193,7 +202,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         case .openLibrary:
             actionCenter.hide()
-            openTraceDirectory()
+            traceLibrary.show()
         case .openSettings:
             actionCenter.hide()
             permissionCenter.show()
@@ -232,6 +241,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openTraceDirectory() {
         try? FileManager.default.createDirectory(at: store.rootDirectory, withIntermediateDirectories: true)
         NSWorkspace.shared.open(store.rootDirectory)
+    }
+
+    @objc private func showTraceLibrary() {
+        actionCenter.hide()
+        traceLibrary.show()
     }
 
     @objc private func openSettingsAndPermissions() {
@@ -311,6 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     detail: String(format: "%.1f 秒 · 正在后台生成自然模式", seconds),
                     symbol: "checkmark.circle.fill"
                 )
+                traceLibrary.reloadIfVisible()
                 await processRecording(saved)
             } catch {
                 showRecordingError(error)
@@ -350,6 +365,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 packageURL: saved.packageURL,
                 renderedVideoURL: outputURL
             )
+            traceLibrary.reloadIfVisible()
             toast.show(
                 title: "自然模式成片已就绪",
                 detail: "原始视频和自动效果均已保留",

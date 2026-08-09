@@ -225,6 +225,41 @@ public struct TraceProjectStore: Sendable {
         return SavedTrace(packageURL: packageURL, rawAssetURL: rawAsset, manifest: manifest)
     }
 
+    /// Builds a tolerant local index. Invalid packages are skipped; valid interrupted captures remain visible.
+    public func libraryEntries() -> [TraceLibraryEntry] {
+        tracePackageURLs(in: rootDirectory).compactMap { packageURL in
+            guard let manifest = try? loadManifest(from: packageURL) else { return nil }
+            let primaryRole: TraceAsset.Role = manifest.kind == .screenshot ? .screenshot : .screenVideo
+            guard let primaryAsset = manifest.assets.first(where: { $0.role == primaryRole }) else {
+                return nil
+            }
+            let primaryURL = packageURL.appendingPathComponent(primaryAsset.relativePath)
+            let preferredDisplayRoles: [TraceAsset.Role] = manifest.kind == .screenshot
+                ? [.renderedScreenshot, .thumbnail]
+                : [.renderedVideo, .thumbnail]
+            let displayURL = preferredDisplayRoles.lazy.compactMap { role in
+                manifest.assets.first(where: { $0.role == role })
+            }
+            .map { packageURL.appendingPathComponent($0.relativePath) }
+            .first(where: { FileManager.default.fileExists(atPath: $0.path) })
+                ?? primaryURL
+            let ocrText = (try? loadOCR(from: packageURL))?.fullText
+            return TraceLibraryEntry(
+                packageURL: packageURL,
+                manifest: manifest,
+                primaryAssetURL: primaryURL,
+                displayAssetURL: displayURL,
+                ocrText: ocrText
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.manifest.createdAt != rhs.manifest.createdAt {
+                return lhs.manifest.createdAt > rhs.manifest.createdAt
+            }
+            return lhs.manifest.id.uuidString > rhs.manifest.id.uuidString
+        }
+    }
+
     public func beginRecording(
         width: Int,
         height: Int,

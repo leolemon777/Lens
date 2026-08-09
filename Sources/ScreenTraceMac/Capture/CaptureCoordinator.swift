@@ -12,6 +12,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private let store: TraceProjectStore
     private let model: AppModel
     private let quickAccess: QuickAccessWindowController
+    private let onTraceChanged: () -> Void
     private let onOCRCompleted: (OCRDocument, SavedTrace) -> Void
     private let onOCRFailed: (Error, SavedTrace) -> Void
     private let captureService = ScreenCaptureService()
@@ -26,12 +27,14 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         store: TraceProjectStore,
         model: AppModel,
         quickAccess: QuickAccessWindowController,
+        onTraceChanged: @escaping () -> Void,
         onOCRCompleted: @escaping (OCRDocument, SavedTrace) -> Void,
         onOCRFailed: @escaping (Error, SavedTrace) -> Void
     ) {
         self.store = store
         self.model = model
         self.quickAccess = quickAccess
+        self.onTraceChanged = onTraceChanged
         self.onOCRCompleted = onOCRCompleted
         self.onOCRFailed = onOCRFailed
     }
@@ -164,6 +167,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                 let cgImage = try await operation()
                 let (saved, image) = try saveCapturedImage(cgImage)
                 model.setRecentTrace(saved, thumbnail: image)
+                onTraceChanged()
                 switch purpose {
                 case .screenshot:
                     copyImageToClipboard(image)
@@ -197,6 +201,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             let document = try await ocrService.recognizeText(in: cgImage)
             let updated = try store.attachOCR(document, to: saved)
             model.setRecentTrace(updated, thumbnail: thumbnail)
+            onTraceChanged()
             let text = document.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty {
                 copyTextToClipboard(text)

@@ -76,6 +76,74 @@ final class ScreenshotAnnotationEditorModelTests: XCTestCase {
         XCTAssertEqual(model.annotations.count, 2)
     }
 
+    func testSelectionMovesTopmostObjectAndUndoRestoresItsPosition() {
+        let model = makeModel()
+        model.selectedTool = .rectangle
+        _ = model.commitDraft(
+            start: TracePoint(x: 0.1, y: 0.1),
+            end: TracePoint(x: 0.4, y: 0.4)
+        )
+        model.selectedTool = .ellipse
+        _ = model.commitDraft(
+            start: TracePoint(x: 0.2, y: 0.2),
+            end: TracePoint(x: 0.5, y: 0.5)
+        )
+        let topmostID = model.annotations.last?.id
+
+        model.activateSelectionTool()
+        model.beginSelectionInteraction(
+            at: TracePoint(x: 0.3, y: 0.3),
+            hitTolerance: 0.01,
+            handleTolerance: 0.01
+        )
+        model.updateSelectionInteraction(to: TracePoint(x: 0.5, y: 0.55))
+        model.endSelectionInteraction()
+
+        XCTAssertEqual(model.selectedAnnotationID, topmostID)
+        XCTAssertEqual(model.selectedAnnotation?.bounds.x ?? 0, 0.4, accuracy: 0.000_001)
+        XCTAssertEqual(model.selectedAnnotation?.bounds.y ?? 0, 0.45, accuracy: 0.000_001)
+
+        model.undo()
+        XCTAssertEqual(model.selectedAnnotation?.bounds.x ?? 0, 0.2, accuracy: 0.000_001)
+        XCTAssertEqual(model.selectedAnnotation?.bounds.y ?? 0, 0.2, accuracy: 0.000_001)
+    }
+
+    func testSelectionResizesRecolorsDeletesAndUndoRestoresObject() {
+        let model = makeModel()
+        model.selectedTool = .rectangle
+        _ = model.commitDraft(
+            start: TracePoint(x: 0.2, y: 0.2),
+            end: TracePoint(x: 0.4, y: 0.4)
+        )
+        model.activateSelectionTool()
+        model.beginSelectionInteraction(
+            at: TracePoint(x: 0.3, y: 0.3),
+            hitTolerance: 0.01,
+            handleTolerance: 0.01
+        )
+        model.endSelectionInteraction()
+
+        model.beginSelectionInteraction(
+            at: TracePoint(x: 0.4, y: 0.4),
+            hitTolerance: 0.01,
+            handleTolerance: 0.02
+        )
+        model.updateSelectionInteraction(to: TracePoint(x: 0.7, y: 0.8))
+        model.endSelectionInteraction()
+        XCTAssertEqual(model.selectedAnnotation?.bounds.width ?? 0, 0.5, accuracy: 0.000_001)
+        XCTAssertEqual(model.selectedAnnotation?.bounds.height ?? 0, 0.6, accuracy: 0.000_001)
+
+        model.setColor(.blue)
+        XCTAssertEqual(model.selectedAnnotation?.style.color, .blue)
+        XCTAssertEqual(model.selectedAnnotation?.style.fillColor?.alpha, 0.10)
+
+        model.deleteSelected()
+        XCTAssertTrue(model.annotations.isEmpty)
+        model.undo()
+        XCTAssertEqual(model.annotations.count, 1)
+        XCTAssertEqual(model.annotations[0].style.color, .blue)
+    }
+
     private func makeModel() -> ScreenshotAnnotationEditorModel {
         ScreenshotAnnotationEditorModel(
             sourceDimensions: TraceDimensions(width: 1_000, height: 600)

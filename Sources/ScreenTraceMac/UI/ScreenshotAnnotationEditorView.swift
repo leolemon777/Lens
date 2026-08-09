@@ -71,23 +71,43 @@ struct ScreenshotAnnotationEditorView: View {
 
     private var toolbar: some View {
         HStack(spacing: 8) {
+            Button {
+                model.activateSelectionTool()
+            } label: {
+                Label("选择", systemImage: "cursorarrow")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 6)
+                    .background(
+                        model.isSelectionMode
+                            ? Color.cyan.opacity(0.16)
+                            : Color.primary.opacity(0.045),
+                        in: Capsule()
+                    )
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(model.isSelectionMode ? .cyan : .primary)
+            .help("选择、移动或缩放对象")
+
+            Divider().frame(height: 25)
+
             ForEach(ScreenshotAnnotationKind.allCases, id: \.self) { tool in
                 Button {
-                    model.selectedTool = tool
+                    model.activateDrawingTool(tool)
                 } label: {
                     Label(tool.editorTitle, systemImage: tool.editorSymbol)
                         .font(.system(size: 10.5, weight: .semibold))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 6)
                         .background(
-                            model.selectedTool == tool
+                            !model.isSelectionMode && model.selectedTool == tool
                                 ? Color.cyan.opacity(0.16)
                                 : Color.primary.opacity(0.045),
                             in: Capsule()
                         )
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(model.selectedTool == tool ? .cyan : .primary)
+                .foregroundStyle(!model.isSelectionMode && model.selectedTool == tool ? .cyan : .primary)
                 .help(tool.editorTitle)
             }
 
@@ -95,7 +115,7 @@ struct ScreenshotAnnotationEditorView: View {
 
             ForEach(editorColors, id: \.name) { item in
                 Button {
-                    model.selectedColor = item.color
+                    model.setColor(item.color)
                 } label: {
                     Circle()
                         .fill(item.color.swiftUIColor)
@@ -112,13 +132,24 @@ struct ScreenshotAnnotationEditorView: View {
                 .help(item.name)
             }
 
-            if model.selectedTool == .text {
+            if !model.isSelectionMode && model.selectedTool == .text {
                 TextField("标注文字", text: $model.textDraft)
                     .textFieldStyle(.roundedBorder)
                     .frame(minWidth: 120, maxWidth: 190)
             }
 
             Spacer(minLength: 6)
+            if model.isSelectionMode {
+                Button {
+                    model.deleteSelected()
+                } label: {
+                    Label("删除", systemImage: "trash")
+                        .font(.system(size: 10.5, weight: .semibold))
+                }
+                .buttonStyle(.borderless)
+                .disabled(model.selectedAnnotation == nil)
+                .keyboardShortcut(.delete, modifiers: [])
+            }
             Button {
                 model.clear()
             } label: {
@@ -157,6 +188,9 @@ struct ScreenshotAnnotationEditorView: View {
                     if let draft = model.draftAnnotation {
                         draw(draft, context: &context, imageRect: imageRect, isDraft: true)
                     }
+                    if model.isSelectionMode, let selected = model.selectedAnnotation {
+                        drawSelection(selected, context: &context, imageRect: imageRect)
+                    }
                 }
                 .allowsHitTesting(false)
 
@@ -172,9 +206,15 @@ struct ScreenshotAnnotationEditorView: View {
 
     private var footer: some View {
         HStack {
-            Label("拖动添加标注", systemImage: "cursorarrow.motionlines")
-            Text("·")
-            Text("文字工具可单击放置")
+            if model.isSelectionMode {
+                Label("点选对象，拖动移动；拖动控制点缩放", systemImage: "cursorarrow.motionlines")
+                Text("·")
+                Text("Delete 删除")
+            } else {
+                Label("拖动添加标注", systemImage: "cursorarrow.motionlines")
+                Text("·")
+                Text("文字工具可单击放置")
+            }
             Spacer()
             Text("\(model.annotations.count) 个对象")
         }
@@ -186,19 +226,59 @@ struct ScreenshotAnnotationEditorView: View {
     }
 
     private func annotationGesture(in imageRect: CGRect) -> some Gesture {
-        DragGesture(minimumDistance: model.selectedTool == .text ? 0 : 1)
+        DragGesture(minimumDistance: model.isSelectionMode || model.selectedTool == .text ? 0 : 1)
             .onChanged { value in
-                model.updateDraft(
-                    start: normalizedPoint(value.startLocation, in: imageRect),
-                    end: normalizedPoint(value.location, in: imageRect)
-                )
+                let start = normalizedPoint(value.startLocation, in: imageRect)
+                let end = normalizedPoint(value.location, in: imageRect)
+                if model.isSelectionMode {
+                    let shortestSide = max(min(imageRect.width, imageRect.height), 1)
+                    model.beginSelectionInteraction(
+                        at: start,
+                        hitTolerance: 7 / shortestSide,
+                        handleTolerance: 12 / shortestSide
+                    )
+                    model.updateSelectionInteraction(to: end)
+                } else {
+                    model.updateDraft(start: start, end: end)
+                }
             }
             .onEnded { value in
-                _ = model.commitDraft(
-                    start: normalizedPoint(value.startLocation, in: imageRect),
-                    end: normalizedPoint(value.location, in: imageRect)
-                )
+                if model.isSelectionMode {
+                    model.updateSelectionInteraction(
+                        to: normalizedPoint(value.location, in: imageRect)
+                    )
+                    model.endSelectionInteraction()
+                } else {
+                    _ = model.commitDraft(
+                        start: normalizedPoint(value.startLocation, in: imageRect),
+                        end: normalizedPoint(value.location, in: imageRect)
+                    )
+                }
             }
+    }
+
+    private func drawSelection(
+        _ annotation: ScreenshotAnnotation,
+        context: inout GraphicsContext,
+        imageRect: CGRect
+    ) {
+        let rect = viewRect(annotation.bounds, in: imageRect).insetBy(dx: -3, dy: -3)
+        context.stroke(
+            Path(roundedRect: rect, cornerRadius: 5),
+            with: .color(.cyan.opacity(0.92)),
+            style: StrokeStyle(lineWidth: 1.5, dash: [5, 3])
+        )
+
+        for handle in ScreenshotAnnotationResizeHandle.allCases {
+            guard let point = ScreenshotAnnotationGeometry.point(
+                for: handle,
+                annotation: annotation
+            ) else { continue }
+            let center = viewPoint(point, in: imageRect)
+            let handleRect = CGRect(x: center.x - 4.5, y: center.y - 4.5, width: 9, height: 9)
+            context.fill(Path(ellipseIn: handleRect), with: .color(.white))
+            context.stroke(Path(ellipseIn: handleRect), with: .color(.cyan), lineWidth: 2)
+        }
     }
 
     private func normalizedPoint(_ point: CGPoint, in rect: CGRect) -> TracePoint {

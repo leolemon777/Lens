@@ -53,6 +53,60 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
     }
 
+    func testOCRRoundTripAddsAnalysisAssetWithoutChangingRawScreenshot() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let rawBytes = Data([0x89, 0x50, 0x4E, 0x47])
+        let screenshot = try store.saveScreenshot(
+            pngData: rawBytes,
+            width: 800,
+            height: 500
+        )
+        let document = OCRDocument(
+            engine: "test-engine",
+            recognizedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            recognitionLanguages: ["zh-Hans", "en-US"],
+            blocks: [
+                OCRTextBlock(
+                    text: "屏迹 ScreenTrace",
+                    confidence: 0.98,
+                    normalizedBounds: TraceRect(x: 0.1, y: 0.2, width: 0.5, height: 0.1)
+                )
+            ]
+        )
+
+        let updated = try store.attachOCR(document, to: screenshot)
+        let updatedAgain = try store.attachOCR(document, to: updated)
+
+        XCTAssertEqual(try Data(contentsOf: screenshot.rawAssetURL), rawBytes)
+        XCTAssertEqual(try store.loadOCR(from: screenshot.packageURL), document)
+        XCTAssertEqual(updatedAgain.manifest.assets.filter { $0.role == .ocr }, [
+            TraceAsset(role: .ocr, relativePath: "analysis/ocr.json")
+        ])
+        XCTAssertEqual(document.fullText, "屏迹 ScreenTrace")
+    }
+
+    func testOCRCannotBeAttachedToRecordingProject() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let session = try store.beginRecording(width: 640, height: 360)
+        try Data([1]).write(to: session.videoURL)
+        let recording = try store.finalizeRecording(session, durationSeconds: 1)
+        let document = OCRDocument(
+            engine: "test-engine",
+            recognitionLanguages: [],
+            blocks: []
+        )
+
+        XCTAssertThrowsError(try store.attachOCR(document, to: recording)) { error in
+            XCTAssertEqual(error as? TraceProjectStoreError, .incompatibleTraceKind)
+        }
+    }
+
     func testRecordingLifecycleCreatesEventTracksAndFinalizesManifest() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)

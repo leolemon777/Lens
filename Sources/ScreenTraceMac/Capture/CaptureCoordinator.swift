@@ -4,32 +4,55 @@ import ScreenTraceCore
 
 @MainActor
 final class CaptureCoordinator: CaptureOverlayViewDelegate {
+    private enum CapturePurpose {
+        case screenshot
+        case ocr
+    }
+
     private let store: TraceProjectStore
     private let model: AppModel
     private let quickAccess: QuickAccessWindowController
+    private let onOCRCompleted: (OCRDocument, SavedTrace) -> Void
+    private let onOCRFailed: (Error, SavedTrace) -> Void
     private let captureService = ScreenCaptureService()
+    private let ocrService = VisionOCRService()
     private var overlayWindows: [CaptureOverlayWindow] = []
     private var windowTargets: [CGWindowID: WindowCaptureTarget] = [:]
+    private var pendingPurpose: CapturePurpose = .screenshot
     private var isPreparingCapture = false
     private var isFinishingCapture = false
 
     init(
         store: TraceProjectStore,
         model: AppModel,
-        quickAccess: QuickAccessWindowController
+        quickAccess: QuickAccessWindowController,
+        onOCRCompleted: @escaping (OCRDocument, SavedTrace) -> Void,
+        onOCRFailed: @escaping (Error, SavedTrace) -> Void
     ) {
         self.store = store
         self.model = model
         self.quickAccess = quickAccess
+        self.onOCRCompleted = onOCRCompleted
+        self.onOCRFailed = onOCRFailed
     }
 
     func beginRegionCapture() {
+        beginRegionCapture(purpose: .screenshot)
+    }
+
+    func beginOCRCapture() {
+        beginRegionCapture(purpose: .ocr)
+    }
+
+    private func beginRegionCapture(purpose: CapturePurpose) {
         guard canBeginCapture(), ensurePermission() else { return }
+        pendingPurpose = purpose
         showOverlays(mode: .region)
     }
 
     func beginWindowCapture() {
         guard canBeginCapture(), ensurePermission() else { return }
+        pendingPurpose = .screenshot
         isPreparingCapture = true
 
         Task { @MainActor [weak self] in
@@ -52,13 +75,14 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
 
     func beginDisplayCapture() {
         guard canBeginCapture(), ensurePermission() else { return }
+        pendingPurpose = .screenshot
         guard let screen = screenUnderPointer(), let displayID = screen.displayID else {
             showError(message: "没有找到可以捕获的显示器。")
             return
         }
 
         let displayBounds = CGDisplayBounds(displayID)
-        finishCapture {
+        finishCapture(purpose: .screenshot) {
             try await self.captureService.capture(globalDisplayRect: displayBounds)
         }
     }
@@ -90,6 +114,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     func captureOverlayDidCancel(_ view: CaptureOverlayView) {
         dismissOverlays()
         windowTargets.removeAll()
+        pendingPurpose = .screenshot
     }
 
     func captureOverlay(
@@ -102,7 +127,8 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             fromLocalRect: rect,
             displayBounds: displayBounds
         ).integral
-        finishCapture {
+        let purpose = pendingPurpose
+        finishCapture(purpose: purpose) {
             try await self.captureService.capture(globalDisplayRect: globalRect)
         }
     }
@@ -114,18 +140,20 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             showError(message: "所选窗口已经关闭，请重新选择。")
             return
         }
-        finishCapture {
+        finishCapture(purpose: .screenshot) {
             try await self.captureService.capture(window: target.window)
         }
     }
 
     private func finishCapture(
+        purpose: CapturePurpose,
         operation: @escaping @MainActor () async throws -> CGImage
     ) {
         guard !isFinishingCapture else { return }
         isFinishingCapture = true
         dismissOverlays()
         windowTargets.removeAll()
+        pendingPurpose = .screenshot
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -134,14 +162,22 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                 // Allow the action center or selection overlay to leave the compositor first.
                 try await Task.sleep(for: .milliseconds(90))
                 let cgImage = try await operation()
-                try persistCapturedImage(cgImage)
+                let (saved, image) = try saveCapturedImage(cgImage)
+                model.setRecentTrace(saved, thumbnail: image)
+                switch purpose {
+                case .screenshot:
+                    copyImageToClipboard(image)
+                    quickAccess.show(trace: saved, image: image)
+                case .ocr:
+                    await processOCR(cgImage: cgImage, saved: saved, thumbnail: image)
+                }
             } catch {
                 showError(message: error.localizedDescription)
             }
         }
     }
 
-    private func persistCapturedImage(_ cgImage: CGImage) throws {
+    private func saveCapturedImage(_ cgImage: CGImage) throws -> (SavedTrace, NSImage) {
         let pngData = try ImageEncoding.pngData(from: cgImage)
         let saved = try store.saveScreenshot(
             pngData: pngData,
@@ -149,9 +185,27 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             height: cgImage.height
         )
         let image = ImageEncoding.nsImage(from: cgImage)
-        copyToClipboard(image)
-        model.setRecentTrace(saved, thumbnail: image)
-        quickAccess.show(trace: saved, image: image)
+        return (saved, image)
+    }
+
+    private func processOCR(
+        cgImage: CGImage,
+        saved: SavedTrace,
+        thumbnail: NSImage
+    ) async {
+        do {
+            let document = try await ocrService.recognizeText(in: cgImage)
+            let updated = try store.attachOCR(document, to: saved)
+            model.setRecentTrace(updated, thumbnail: thumbnail)
+            let text = document.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty {
+                copyTextToClipboard(text)
+            }
+            onOCRCompleted(document, updated)
+        } catch {
+            // OCR is analysis: its failure must never discard the screenshot captured above.
+            onOCRFailed(error, saved)
+        }
     }
 
     private func canBeginCapture() -> Bool {
@@ -171,10 +225,16 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         overlayWindows.removeAll()
     }
 
-    private func copyToClipboard(_ image: NSImage) {
+    private func copyImageToClipboard(_ image: NSImage) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.writeObjects([image])
+    }
+
+    private func copyTextToClipboard(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
     }
 
     private func windowUnderPointer() -> CaptureOverlayWindow? {

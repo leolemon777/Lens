@@ -27,6 +27,7 @@ public struct TraceAsset: Codable, Equatable, Sendable {
         case keyboardEvents
         case windowEvents
         case editPlan
+        case ocr
     }
 
     public let role: Role

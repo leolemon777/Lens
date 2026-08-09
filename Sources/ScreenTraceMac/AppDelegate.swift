@@ -17,7 +17,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var captureCoordinator = CaptureCoordinator(
         store: store,
         model: model,
-        quickAccess: quickAccess
+        quickAccess: quickAccess,
+        onOCRCompleted: { [weak self] document, trace in
+            self?.handleOCRCompleted(document, trace: trace)
+        },
+        onOCRFailed: { [weak self] error, trace in
+            self?.handleOCRFailed(error, trace: trace)
+        }
     )
     private lazy var recordingService = ScreenRecordingService(
         store: store,
@@ -92,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(menuItem("区域截图  (fn + control)", action: #selector(beginScreenshot)))
         menu.addItem(menuItem("窗口截图", action: #selector(beginWindowScreenshot)))
         menu.addItem(menuItem("当前屏幕截图", action: #selector(beginDisplayScreenshot)))
+        menu.addItem(menuItem("选区 OCR", action: #selector(beginOCR)))
         menu.addItem(menuItem("开始屏幕录制", action: #selector(beginRecording)))
         menu.addItem(.separator())
         menu.addItem(menuItem("打开屏迹目录", action: #selector(openTraceDirectory)))
@@ -138,7 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             startRecording()
         case .ocr:
             actionCenter.hide()
-            toast.show(title: "OCR 已进入 M3", detail: "届时使用本地 Vision 识别", symbol: "text.viewfinder")
+            captureCoordinator.beginOCRCapture()
         case .scrollingCapture:
             actionCenter.hide()
             toast.show(title: "长截图已进入 M3", detail: "将支持浏览器与普通滚动视图", symbol: "arrow.up.and.down")
@@ -191,6 +198,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         captureCoordinator.beginDisplayCapture()
     }
 
+    @objc private func beginOCR() {
+        actionCenter.hide()
+        captureCoordinator.beginOCRCapture()
+    }
+
     @objc private func beginRecording() {
         actionCenter.hide()
         startRecording()
@@ -208,6 +220,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    private func handleOCRCompleted(_ document: OCRDocument, trace: SavedTrace) {
+        let text = document.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            toast.show(
+                title: "没有识别到文字",
+                detail: "原图已保存在屏迹项目中",
+                symbol: "text.magnifyingglass"
+            )
+            return
+        }
+
+        let firstLine = text.split(whereSeparator: \Character.isNewline).first.map(String.init) ?? text
+        let preview = firstLine.count > 42 ? String(firstLine.prefix(41)) + "…" : firstLine
+        toast.show(
+            title: "文字已复制",
+            detail: "\(document.blocks.count) 段 · \(preview)",
+            symbol: "doc.on.clipboard.fill"
+        )
+    }
+
+    private func handleOCRFailed(_ error: Error, trace: SavedTrace) {
+        toast.show(
+            title: "原图已安全保存",
+            detail: "文字识别未完成：\(error.localizedDescription)",
+            symbol: "exclamationmark.arrow.triangle.2.circlepath"
+        )
     }
 
     private func startRecording() {

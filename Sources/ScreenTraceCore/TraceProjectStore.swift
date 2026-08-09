@@ -6,6 +6,7 @@ public enum TraceProjectStoreError: LocalizedError, Equatable {
     case missingRawRecording
     case emptyRawRecording
     case missingRenderedVideo
+    case incompatibleTraceKind
 
     public var errorDescription: String? {
         switch self {
@@ -19,6 +20,8 @@ public enum TraceProjectStoreError: LocalizedError, Equatable {
             return "原始录屏文件为空。"
         case .missingRenderedVideo:
             return "自动成片文件不存在。"
+        case .incompatibleTraceKind:
+            return "项目类型不支持这项分析结果。"
         }
     }
 }
@@ -101,6 +104,44 @@ public struct TraceProjectStore: Sendable {
     public func loadAutoEditPlan(from packageURL: URL) throws -> AutoEditPlan {
         let data = try Data(contentsOf: packageURL.appendingPathComponent("edits/edit-plan.json"))
         return try JSONDecoder().decode(AutoEditPlan.self, from: data)
+    }
+
+    public func attachOCR(
+        _ document: OCRDocument,
+        to savedTrace: SavedTrace
+    ) throws -> SavedTrace {
+        var manifest = try loadManifest(from: savedTrace.packageURL)
+        guard manifest.kind == .screenshot else {
+            throw TraceProjectStoreError.incompatibleTraceKind
+        }
+
+        let relativePath = "analysis/ocr.json"
+        let outputURL = savedTrace.packageURL.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(document).write(to: outputURL, options: .atomic)
+
+        if !manifest.assets.contains(where: { $0.role == .ocr }) {
+            manifest.assets.append(TraceAsset(role: .ocr, relativePath: relativePath))
+        }
+        try writeManifest(manifest, to: savedTrace.packageURL)
+        return SavedTrace(
+            packageURL: savedTrace.packageURL,
+            rawAssetURL: savedTrace.rawAssetURL,
+            manifest: manifest
+        )
+    }
+
+    public func loadOCR(from packageURL: URL) throws -> OCRDocument {
+        let data = try Data(contentsOf: packageURL.appendingPathComponent("analysis/ocr.json"))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(OCRDocument.self, from: data)
     }
 
     public func beginRecording(

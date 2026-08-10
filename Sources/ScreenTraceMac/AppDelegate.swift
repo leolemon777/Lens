@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let transcriptionService = LocalSpeechTranscriptionService()
     private let toast = ToastWindowController()
     private let diagnostics = LocalDiagnosticLog()
+    private let launchHealth = LaunchHealthMonitor()
     private lazy var permissionCenter = PermissionCenterWindowController(
         appModel: model,
         onShortcutsChanged: { [weak self] in self?.restartHotKeys() },
@@ -78,12 +79,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         ProcessInfo.processInfo.disableSuddenTermination()
         ProcessInfo.processInfo.disableAutomaticTermination("ScreenTrace remains ready in the menu bar.")
+        let version = appVersionMetadata
+        let previousSessionWasUnclean = launchHealth.beginSession(
+            appVersion: version["appVersion"] ?? "development",
+            build: version["build"] ?? "development"
+        )
         configureStatusItem()
         wireControllers()
         recoverInterruptedRecordings()
         startHotKeys()
         actionCenter.show()
-        logDiagnostic("app.launched", metadata: appVersionMetadata)
+        logDiagnostic("app.launched", metadata: version)
+        if previousSessionWasUnclean {
+            logDiagnostic(
+                "app.previous_session_unclean",
+                level: .warning,
+                metadata: ["status": "detected"]
+            )
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        launchHealth.completeSession()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

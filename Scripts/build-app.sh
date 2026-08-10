@@ -26,6 +26,14 @@ cd "$PROJECT_DIR"
 swift build -c "$CONFIGURATION" --product ScreenTrace
 BIN_DIR="$(swift build -c "$CONFIGURATION" --show-bin-path)"
 
+EXPECTED_APP_DIR="$PROJECT_DIR/Build/ScreenTrace.app"
+if [[ "$APP_DIR" != "$EXPECTED_APP_DIR" ]]; then
+    echo "Refusing to replace unexpected app path: $APP_DIR" >&2
+    exit 64
+fi
+if [[ -e "$APP_DIR" ]]; then
+    rm -rf -- "$APP_DIR"
+fi
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BIN_DIR/ScreenTrace" "$MACOS_DIR/ScreenTrace"
 

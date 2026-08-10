@@ -116,6 +116,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        actionCenter.show()
+        return true
+    }
+
     private func wireControllers() {
         quickAccess.onPinRequested = { [weak self] trace, image in
             self?.pinnedImages.pin(trace: trace, image: image)

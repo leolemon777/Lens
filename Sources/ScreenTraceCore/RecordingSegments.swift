@@ -28,10 +28,15 @@ public struct RecordingSegment: Codable, Equatable, Sendable {
 }
 
 public struct RecordingSegmentIndex: Codable, Equatable, Sendable {
+    public static let currentSchemaVersion = "0.1"
+
     public let schemaVersion: String
     public var segments: [RecordingSegment]
 
-    public init(schemaVersion: String = "0.1", segments: [RecordingSegment] = []) {
+    public init(
+        schemaVersion: String = RecordingSegmentIndex.currentSchemaVersion,
+        segments: [RecordingSegment] = []
+    ) {
         self.schemaVersion = schemaVersion
         self.segments = segments.sorted { $0.index < $1.index }
     }

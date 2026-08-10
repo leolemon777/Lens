@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "0.1",
+  "id": "22222222-2222-2222-2222-222222222222",
+  "kind": "screenshot",
+  "createdAt": "2026-01-03T03:04:05Z",
+  "title": "旧版截图黄金样本",
+  "state": "ready",
+  "dimensions": { "width": 800, "height": 900 },
+  "assets": [
+    { "role": "screenshot", "relativePath": "raw/screenshot.png" },
+    { "role": "screenshotEditPlan", "relativePath": "edits/screenshot-edit.json" },
+    { "role": "scrollingCapturePlan", "relativePath": "events/scrolling-capture.json" },
+    { "role": "ocr", "relativePath": "analysis/ocr.json" }
+  ]
+}

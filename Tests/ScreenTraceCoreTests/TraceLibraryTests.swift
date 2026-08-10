@@ -161,6 +161,36 @@ final class TraceLibraryTests: XCTestCase {
         )
     }
 
+    func testOutdatedPersistentIndexRebuildsThroughCurrentSchemaGate() throws {
+        let root = temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let screenshot = try store.saveScreenshot(
+            pngData: Data([1, 3, 5]),
+            width: 320,
+            height: 180
+        )
+        XCTAssertEqual(store.libraryEntries().map(\.manifest.id), [screenshot.manifest.id])
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let current = try decoder.decode(
+            TraceLibraryPersistentIndex.self,
+            from: Data(contentsOf: store.libraryIndexURL)
+        )
+        let outdated = TraceLibraryPersistentIndex(schemaVersion: 2, records: current.records)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(outdated).write(to: store.libraryIndexURL, options: .atomic)
+
+        XCTAssertEqual(store.libraryEntries().map(\.manifest.id), [screenshot.manifest.id])
+        let rebuilt = try decoder.decode(
+            TraceLibraryPersistentIndex.self,
+            from: Data(contentsOf: store.libraryIndexURL)
+        )
+        XCTAssertEqual(rebuilt.schemaVersion, TraceLibraryPersistentIndex.currentSchemaVersion)
+    }
+
     func testPersistentIndexSkipsSymlinkPackagesAndRecursiveCycles() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

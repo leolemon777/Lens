@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "0.1",
+  "segments": [
+    {
+      "index": 0,
+      "timelineStartSeconds": 0,
+      "durationSeconds": 8,
+      "screenRelativePath": "raw/screen.mp4"
+    }
+  ]
+}

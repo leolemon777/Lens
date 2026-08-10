@@ -115,12 +115,15 @@ public struct TraceProjectStore: Sendable {
         let data = try Data(contentsOf: packageURL.appendingPathComponent("manifest.json"))
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(TraceManifest.self, from: data)
+        let manifest = try decoder.decode(TraceManifest.self, from: data)
+        try TraceProjectSchema.manifest.validate(manifest.schemaVersion)
+        return manifest
     }
 
     public func loadAutoEditPlan(from packageURL: URL) throws -> AutoEditPlan {
         let data = try Data(contentsOf: packageURL.appendingPathComponent("edits/edit-plan.json"))
         var plan = try JSONDecoder().decode(AutoEditPlan.self, from: data)
+        try TraceProjectSchema.autoEditPlan.validate(plan.schemaVersion)
         if let manifest = try? loadManifest(from: packageURL),
            let duration = manifest.durationSeconds {
             plan.videoAnnotations = plan.videoAnnotations?.compactMap {
@@ -189,13 +192,16 @@ public struct TraceProjectStore: Sendable {
 
     public func loadRecordingSegmentIndex(from packageURL: URL) throws -> RecordingSegmentIndex {
         let data = try Data(contentsOf: packageURL.appendingPathComponent("events/segments.json"))
-        return try JSONDecoder().decode(RecordingSegmentIndex.self, from: data)
+        let index = try JSONDecoder().decode(RecordingSegmentIndex.self, from: data)
+        try TraceProjectSchema.recordingSegments.validate(index.schemaVersion)
+        return index
     }
 
     public func attachOCR(
         _ document: OCRDocument,
         to savedTrace: SavedTrace
     ) throws -> SavedTrace {
+        try TraceProjectSchema.ocr.validate(document.schemaVersion)
         var manifest = try loadManifest(from: savedTrace.packageURL)
         guard manifest.kind == .screenshot else {
             throw TraceProjectStoreError.incompatibleTraceKind
@@ -227,13 +233,16 @@ public struct TraceProjectStore: Sendable {
         let data = try Data(contentsOf: packageURL.appendingPathComponent("analysis/ocr.json"))
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(OCRDocument.self, from: data)
+        let document = try decoder.decode(OCRDocument.self, from: data)
+        try TraceProjectSchema.ocr.validate(document.schemaVersion)
+        return document
     }
 
     public func attachTranscript(
         _ document: TranscriptDocument,
         to savedTrace: SavedTrace
     ) throws -> SavedTrace {
+        try TraceProjectSchema.transcript.validate(document.schemaVersion)
         var manifest = try loadManifest(from: savedTrace.packageURL)
         guard manifest.kind == .recording else {
             throw TraceProjectStoreError.incompatibleTraceKind
@@ -266,13 +275,16 @@ public struct TraceProjectStore: Sendable {
         )
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(TranscriptDocument.self, from: data)
+        let document = try decoder.decode(TranscriptDocument.self, from: data)
+        try TraceProjectSchema.transcript.validate(document.schemaVersion)
+        return document
     }
 
     public func attachInsights(
         _ document: TraceInsightsDocument,
         to savedTrace: SavedTrace
     ) throws -> SavedTrace {
+        try TraceProjectSchema.insights.validate(document.schemaVersion)
         var manifest = try loadManifest(from: savedTrace.packageURL)
         manifest.schemaVersion = TraceManifest.currentSchemaVersion
         let relativePath = "analysis/insights.json"
@@ -302,13 +314,16 @@ public struct TraceProjectStore: Sendable {
         )
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode(TraceInsightsDocument.self, from: data)
+        let document = try decoder.decode(TraceInsightsDocument.self, from: data)
+        try TraceProjectSchema.insights.validate(document.schemaVersion)
+        return document
     }
 
     public func writeScreenshotEditPlan(
         _ plan: ScreenshotEditPlan,
         to savedTrace: SavedTrace
     ) throws -> SavedTrace {
+        try TraceProjectSchema.screenshotEditPlan.validate(plan.schemaVersion)
         var manifest = try loadManifest(from: savedTrace.packageURL)
         guard manifest.kind == .screenshot else {
             throw TraceProjectStoreError.incompatibleTraceKind
@@ -344,7 +359,9 @@ public struct TraceProjectStore: Sendable {
         let data = try Data(
             contentsOf: packageURL.appendingPathComponent("edits/screenshot-edit.json")
         )
-        return try JSONDecoder().decode(ScreenshotEditPlan.self, from: data)
+        let plan = try JSONDecoder().decode(ScreenshotEditPlan.self, from: data)
+        try TraceProjectSchema.screenshotEditPlan.validate(plan.schemaVersion)
+        return plan
     }
 
     public func attachScrollingCapture(
@@ -352,6 +369,7 @@ public struct TraceProjectStore: Sendable {
         framePNGs: [Data],
         to savedTrace: SavedTrace
     ) throws -> SavedTrace {
+        try TraceProjectSchema.scrollingCapture.validate(plan.schemaVersion)
         var manifest = try loadManifest(from: savedTrace.packageURL)
         guard manifest.kind == .screenshot else {
             throw TraceProjectStoreError.incompatibleTraceKind
@@ -475,7 +493,9 @@ public struct TraceProjectStore: Sendable {
         let data = try Data(
             contentsOf: packageURL.appendingPathComponent("events/scrolling-capture.json")
         )
-        return try JSONDecoder().decode(ScrollingCapturePlan.self, from: data)
+        let plan = try JSONDecoder().decode(ScrollingCapturePlan.self, from: data)
+        try TraceProjectSchema.scrollingCapture.validate(plan.schemaVersion)
+        return plan
     }
 
     public func completeScreenshotEditing(

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "0.1",
+  "preset": "natural",
+  "cursor": {
+    "smoothing": 0.72,
+    "scale": 1.15,
+    "hidesWhenIdle": true,
+    "keyframes": []
+  },
+  "camera": {
+    "mode": "event-driven",
+    "zoomIntensity": 0.42,
+    "followPointer": true,
+    "keyframes": []
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "0.1",
+  "displayID": 1,
+  "sourceRect": { "x": 0, "y": 0, "width": 800, "height": 600 },
+  "viewportDimensions": { "width": 800, "height": 600 },
+  "outputDimensions": { "width": 800, "height": 900 },
+  "frames": [
+    {
+      "index": 0,
+      "relativePath": "raw/scrolling/frame-000.png",
+      "verticalOffsetPixels": 0,
+      "appendedHeightPixels": 600,
+      "overlapDifference": 0
+    },
+    {
+      "index": 1,
+      "relativePath": "raw/scrolling/frame-001.png",
+      "verticalOffsetPixels": 300,
+      "appendedHeightPixels": 300,
+      "overlapDifference": 0.01
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "0.1",
+  "engine": "legacy-local",
+  "generatedAt": "2026-01-02T03:06:00Z",
+  "suggestedTitle": "旧版整理结果",
+  "summary": "验证旧版项目读取。",
+  "tags": ["兼容性"],
+  "keyPoints": ["不改写原始文件"],
+  "chapters": [],
+  "sensitiveFindings": []
+}

@@ -1,7 +1,9 @@
 import Foundation
 
 struct TraceLibraryPersistentIndex: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 2
+    // Version 3 guarantees every cached portable document passed the central
+    // project-schema compatibility gate before its searchable fields were stored.
+    static let currentSchemaVersion = 3
 
     var schemaVersion: Int
     var records: [TraceLibraryIndexRecord]
@@ -111,13 +113,15 @@ struct TraceLibraryPersistentIndexStore: Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         guard let manifestData = try? Data(contentsOf: manifestURL),
-              let manifest = try? decoder.decode(TraceManifest.self, from: manifestData) else {
+              let manifest = try? decoder.decode(TraceManifest.self, from: manifestData),
+              (try? TraceProjectSchema.manifest.validate(manifest.schemaVersion)) != nil else {
             return nil
         }
         let ocrText: String?
         if ocrFingerprint.exists,
            let data = try? Data(contentsOf: ocrURL),
-           let document = try? decoder.decode(OCRDocument.self, from: data) {
+           let document = try? decoder.decode(OCRDocument.self, from: data),
+           (try? TraceProjectSchema.ocr.validate(document.schemaVersion)) != nil {
             ocrText = document.fullText
         } else {
             ocrText = nil
@@ -125,15 +129,18 @@ struct TraceLibraryPersistentIndexStore: Sendable {
         let transcriptText: String?
         if transcriptFingerprint.exists,
            let data = try? Data(contentsOf: transcriptURL),
-           let document = try? decoder.decode(TranscriptDocument.self, from: data) {
+           let document = try? decoder.decode(TranscriptDocument.self, from: data),
+           (try? TraceProjectSchema.transcript.validate(document.schemaVersion)) != nil {
             transcriptText = document.fullText
         } else {
             transcriptText = nil
         }
         let insights: TraceInsightsDocument?
         if insightsFingerprint.exists,
-           let data = try? Data(contentsOf: insightsURL) {
-            insights = try? decoder.decode(TraceInsightsDocument.self, from: data)
+           let data = try? Data(contentsOf: insightsURL),
+           let document = try? decoder.decode(TraceInsightsDocument.self, from: data),
+           (try? TraceProjectSchema.insights.validate(document.schemaVersion)) != nil {
+            insights = document
         } else {
             insights = nil
         }

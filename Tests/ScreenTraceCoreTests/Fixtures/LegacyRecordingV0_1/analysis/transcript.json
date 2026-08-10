@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "0.1",
+  "engine": "legacy-fixture",
+  "generatedAt": "2026-01-02T03:05:00Z",
+  "localeIdentifier": "zh-CN",
+  "isOnDevice": true,
+  "sourceRole": "systemAudio",
+  "fullText": "旧版项目仍然可以读取",
+  "segments": [
+    {
+      "startSeconds": 0.5,
+      "endSeconds": 3.5,
+      "text": "旧版项目仍然可以读取",
+      "confidence": 0.9
+    }
+  ]
+}

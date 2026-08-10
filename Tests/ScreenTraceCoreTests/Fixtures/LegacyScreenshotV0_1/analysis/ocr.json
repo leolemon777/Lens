@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "0.1",
+  "engine": "legacy-vision",
+  "recognizedAt": "2026-01-03T03:05:00Z",
+  "recognitionLanguages": ["en-US"],
+  "fullText": "Legacy OCR",
+  "blocks": [
+    {
+      "text": "Legacy OCR",
+      "confidence": 0.95,
+      "normalizedBounds": { "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.1 }
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "0.1",
+  "id": "11111111-1111-1111-1111-111111111111",
+  "kind": "recording",
+  "createdAt": "2026-01-02T03:04:05Z",
+  "title": "旧版录屏黄金样本",
+  "state": "ready",
+  "durationSeconds": 8,
+  "dimensions": { "width": 1280, "height": 720 },
+  "assets": [
+    { "role": "screenVideo", "relativePath": "raw/screen.mp4" },
+    { "role": "recordingSegments", "relativePath": "events/segments.json" },
+    { "role": "editPlan", "relativePath": "edits/edit-plan.json" },
+    { "role": "transcript", "relativePath": "analysis/transcript.json" },
+    { "role": "insights", "relativePath": "analysis/insights.json" }
+  ]
+}

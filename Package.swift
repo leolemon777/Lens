@@ -20,7 +20,8 @@ let package = Package(
         ),
         .testTarget(
             name: "ScreenTraceCoreTests",
-            dependencies: ["ScreenTraceCore"]
+            dependencies: ["ScreenTraceCore"],
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "ScreenTraceMacTests",

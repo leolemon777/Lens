@@ -10,6 +10,7 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertTrue(ActionCenterAction.allCases.contains(.windowRecording))
         XCTAssertTrue(ActionCenterAction.allCases.contains(.recording))
         XCTAssertTrue(ActionCenterAction.allCases.contains(.scrollingCapture))
+        XCTAssertTrue(ActionCenterAction.allCases.contains(.multiWindowScreenshot))
     }
 
     func testCaptureOverlayExplainsScreenshotAndRecordingIntentsSeparately() {

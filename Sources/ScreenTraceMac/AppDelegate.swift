@@ -272,6 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(beginScreenshot)
         ))
         menu.addItem(menuItem("窗口截图", action: #selector(beginWindowScreenshot)))
+        menu.addItem(menuItem("多窗口截图", action: #selector(beginMultiWindowScreenshot)))
         menu.addItem(menuItem("当前屏幕截图", action: #selector(beginDisplayScreenshot)))
         menu.addItem(menuItem("选区 OCR", action: #selector(beginOCR)))
         menu.addItem(menuItem("滚动长截图", action: #selector(beginScrollingCapture)))
@@ -316,6 +317,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .windowScreenshot:
             actionCenter.hide()
             captureCoordinator.beginWindowCapture()
+        case .multiWindowScreenshot:
+            actionCenter.hide()
+            captureCoordinator.beginMultiWindowCapture()
         case .displayScreenshot:
             actionCenter.hide()
             captureCoordinator.beginDisplayCapture()
@@ -376,6 +380,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func beginWindowScreenshot() {
         actionCenter.hide()
         captureCoordinator.beginWindowCapture()
+    }
+
+    @objc private func beginMultiWindowScreenshot() {
+        actionCenter.hide()
+        captureCoordinator.beginMultiWindowCapture()
     }
 
     @objc private func beginDisplayScreenshot() {

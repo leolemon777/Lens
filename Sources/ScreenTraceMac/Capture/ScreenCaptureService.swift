@@ -10,6 +10,7 @@ enum ScreenCaptureServiceError: LocalizedError {
     case noImageReturned
     case noEligibleWindows
     case displayUnavailable
+    case compositionFailed
 
     var errorDescription: String? {
         switch self {
@@ -23,6 +24,8 @@ enum ScreenCaptureServiceError: LocalizedError {
             return "当前屏幕上没有可截取的普通窗口。"
         case .displayUnavailable:
             return "用于长截图的显示器已断开。"
+        case .compositionFailed:
+            return "无法合成所选窗口的截图。"
         }
     }
 }
@@ -63,6 +66,32 @@ struct ScreenCaptureService {
     }
 
     func capture(window: SCWindow) async throws -> CGImage {
+        try await capture(window: window, includesShadow: true)
+    }
+
+    func capture(windows targets: [WindowCaptureTarget]) async throws -> CGImage {
+        guard let layout = CaptureGeometry.multiWindowLayout(
+            candidates: targets.map(\.candidate)
+        ) else {
+            throw ScreenCaptureServiceError.emptySelection
+        }
+        let targetsByID = Dictionary(
+            uniqueKeysWithValues: targets.map { ($0.candidate.id, $0) }
+        )
+        var imagesByID: [CGWindowID: CGImage] = [:]
+        for placement in layout.placements {
+            guard let target = targetsByID[placement.windowID] else {
+                throw ScreenCaptureServiceError.noEligibleWindows
+            }
+            imagesByID[placement.windowID] = try await capture(
+                window: target.window,
+                includesShadow: false
+            )
+        }
+        return try composeWindowImages(imagesByID, using: layout)
+    }
+
+    private func capture(window: SCWindow, includesShadow: Bool) async throws -> CGImage {
         guard #available(macOS 15.2, *) else {
             throw ScreenCaptureServiceError.unsupportedSystem
         }
@@ -71,8 +100,8 @@ struct ScreenCaptureService {
         if #available(macOS 26.0, *) {
             let configuration = SCScreenshotConfiguration()
             configuration.showsCursor = false
-            configuration.ignoreShadows = false
-            configuration.includeChildWindows = true
+            configuration.ignoreShadows = !includesShadow
+            configuration.includeChildWindows = includesShadow
             configuration.dynamicRange = .sdr
 
             return try await withCheckedThrowingContinuation { continuation in
@@ -103,7 +132,7 @@ struct ScreenCaptureService {
         configuration.captureResolution = .best
         configuration.showsCursor = false
         configuration.showMouseClicks = false
-        configuration.ignoreShadowsSingleWindow = false
+        configuration.ignoreShadowsSingleWindow = !includesShadow
         configuration.ignoreGlobalClipSingleWindow = true
         configuration.shouldBeOpaque = false
         configuration.scalesToFit = false
@@ -122,6 +151,61 @@ struct ScreenCaptureService {
                 }
             }
         }
+    }
+
+    func composeWindowImages(
+        _ imagesByID: [CGWindowID: CGImage],
+        using layout: MultiWindowCaptureLayout
+    ) throws -> CGImage {
+        let scales = layout.placements.compactMap { placement -> CGFloat? in
+            guard let image = imagesByID[placement.windowID],
+                  placement.frame.width > 0,
+                  placement.frame.height > 0 else { return nil }
+            return max(
+                CGFloat(image.width) / placement.frame.width,
+                CGFloat(image.height) / placement.frame.height
+            )
+        }
+        guard let scale = scales.max(), scale.isFinite, scale > 0 else {
+            throw ScreenCaptureServiceError.compositionFailed
+        }
+
+        let width = max(Int(ceil(layout.globalBounds.width * scale)), 1)
+        let height = max(Int(ceil(layout.globalBounds.height * scale)), 1)
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            throw ScreenCaptureServiceError.compositionFailed
+        }
+
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        context.interpolationQuality = .high
+        for placement in layout.placements {
+            guard let image = imagesByID[placement.windowID] else {
+                throw ScreenCaptureServiceError.compositionFailed
+            }
+            context.draw(
+                image,
+                in: CGRect(
+                    x: placement.frame.minX * scale,
+                    y: placement.frame.minY * scale,
+                    width: placement.frame.width * scale,
+                    height: placement.frame.height * scale
+                )
+            )
+        }
+        guard let image = context.makeImage() else {
+            throw ScreenCaptureServiceError.compositionFailed
+        }
+        return image
     }
 
     func prepareScrollingRegion(

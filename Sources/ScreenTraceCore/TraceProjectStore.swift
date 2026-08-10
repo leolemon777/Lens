@@ -56,6 +56,7 @@ public struct TraceProjectStore: Sendable {
         width: Int,
         height: Int,
         titlePrefix: String = "截图",
+        captureSource: ScreenshotCaptureMetadata? = nil,
         createdAt: Date = Date(),
         id: UUID = UUID()
     ) throws -> SavedTrace {
@@ -91,6 +92,7 @@ public struct TraceProjectStore: Sendable {
                 createdAt: createdAt,
                 title: "\(normalizedTitlePrefix.isEmpty ? "截图" : normalizedTitlePrefix) \(Self.displayTimestamp.string(from: createdAt))",
                 dimensions: TraceDimensions(width: width, height: height),
+                screenshotCaptureSource: captureSource,
                 assets: [TraceAsset(role: .screenshot, relativePath: "raw/screenshot.png")]
             )
 

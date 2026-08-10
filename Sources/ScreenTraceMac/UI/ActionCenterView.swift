@@ -3,6 +3,7 @@ import SwiftUI
 enum ActionCenterAction: String, CaseIterable, Identifiable {
     case screenshot
     case windowScreenshot
+    case multiWindowScreenshot
     case displayScreenshot
     case recording
     case regionRecording
@@ -19,6 +20,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         switch self {
         case .screenshot: "截图"
         case .windowScreenshot: "窗口截图"
+        case .multiWindowScreenshot: "多窗口截图"
         case .displayScreenshot: "屏幕截图"
         case .recording: "录屏"
         case .regionRecording: "区域录制"
@@ -35,6 +37,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         switch self {
         case .screenshot: "区域 · 窗口 · 屏幕"
         case .windowScreenshot: "选择一个窗口"
+        case .multiWindowScreenshot: "组合多个窗口"
         case .displayScreenshot: "当前显示器"
         case .recording: "区域 · 窗口 · 屏幕"
         case .regionRecording: "选择一个区域"
@@ -51,6 +54,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         switch self {
         case .screenshot: "viewfinder"
         case .windowScreenshot: "macwindow"
+        case .multiWindowScreenshot: "rectangle.3.group"
         case .displayScreenshot: "display"
         case .recording: "record.circle"
         case .regionRecording: "viewfinder.circle"
@@ -66,7 +70,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
     var tint: Color {
         switch self {
         case .recording, .regionRecording, .windowRecording: .red
-        case .screenshot, .windowScreenshot, .displayScreenshot: .cyan
+        case .screenshot, .windowScreenshot, .multiWindowScreenshot, .displayScreenshot: .cyan
         case .ocr: .indigo
         case .scrollingCapture: .orange
         case .pin: .yellow
@@ -138,6 +142,11 @@ struct ActionCenterView: View {
                 onAction(.windowScreenshot)
             } label: {
                 Label("窗口截图", systemImage: "macwindow")
+            }
+            Button {
+                onAction(.multiWindowScreenshot)
+            } label: {
+                Label("多窗口截图", systemImage: "rectangle.3.group")
             }
             Button {
                 onAction(.displayScreenshot)

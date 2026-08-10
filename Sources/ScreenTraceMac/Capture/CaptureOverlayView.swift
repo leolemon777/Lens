@@ -4,6 +4,7 @@ import ScreenTraceCore
 enum CaptureOverlayMode {
     case region(action: CaptureOverlayAction)
     case window(candidates: [WindowSelectionCandidate], action: CaptureOverlayAction)
+    case multiWindow(candidates: [WindowSelectionCandidate])
 }
 
 enum CaptureOverlayAction {
@@ -33,6 +34,8 @@ protocol CaptureOverlayViewDelegate: AnyObject {
     func captureOverlayDidCancel(_ view: CaptureOverlayView)
     func captureOverlay(_ view: CaptureOverlayView, didSelect rect: CGRect, displayID: CGDirectDisplayID)
     func captureOverlay(_ view: CaptureOverlayView, didSelectWindow windowID: CGWindowID)
+    func captureOverlay(_ view: CaptureOverlayView, didToggleWindow windowID: CGWindowID)
+    func captureOverlayDidConfirmWindows(_ view: CaptureOverlayView)
 }
 
 @MainActor
@@ -45,6 +48,7 @@ final class CaptureOverlayView: NSView {
     private var startPoint: CGPoint?
     private var currentPoint: CGPoint?
     private var hoveredWindow: WindowSelectionCandidate?
+    private var selectedWindowIDs: Set<CGWindowID> = []
     private var mouseTrackingArea: NSTrackingArea?
 
     init(
@@ -93,6 +97,28 @@ final class CaptureOverlayView: NSView {
             punchOut(localRect)
             drawSelectionBorder(localRect)
             drawWindowPill(for: hoveredWindow, selection: localRect)
+        case let .multiWindow(candidates):
+            for candidate in candidates where selectedWindowIDs.contains(candidate.id) {
+                guard let localRect = CaptureGeometry.localIntersection(
+                    of: candidate.globalFrame,
+                    displayBounds: displayBounds
+                ) else { continue }
+                punchOut(localRect)
+                drawSelectionBorder(localRect)
+            }
+            if let hoveredWindow,
+               let localRect = CaptureGeometry.localIntersection(
+                of: hoveredWindow.globalFrame,
+                displayBounds: displayBounds
+               ) {
+                punchOut(localRect)
+                drawSelectionBorder(localRect)
+                drawWindowPill(for: hoveredWindow, selection: localRect)
+            }
+            let guidance = selectedWindowIDs.isEmpty
+                ? "单击选择多个窗口  ·  Return 截取  ·  Esc 取消"
+                : "已选择 \(selectedWindowIDs.count) 个窗口  ·  Return 截取  ·  再次单击取消"
+            drawGuidance(guidance)
         }
     }
 
@@ -100,7 +126,7 @@ final class CaptureOverlayView: NSView {
         switch mode {
         case .region:
             addCursorRect(bounds, cursor: .crosshair)
-        case .window:
+        case .window, .multiWindow:
             addCursorRect(bounds, cursor: .arrow)
         }
     }
@@ -152,16 +178,20 @@ final class CaptureOverlayView: NSView {
             updateHoveredWindow(with: event)
             guard let hoveredWindow else { return }
             delegate?.captureOverlay(self, didSelectWindow: hoveredWindow.id)
+        case .multiWindow:
+            updateHoveredWindow(with: event)
+            guard let hoveredWindow else { return }
+            delegate?.captureOverlay(self, didToggleWindow: hoveredWindow.id)
         }
     }
 
     override func mouseMoved(with event: NSEvent) {
-        guard case .window = mode else { return }
+        guard isWindowSelectionMode else { return }
         updateHoveredWindow(with: event)
     }
 
     override func mouseExited(with event: NSEvent) {
-        guard case .window = mode else { return }
+        guard isWindowSelectionMode else { return }
         hoveredWindow = nil
         needsDisplay = true
     }
@@ -171,7 +201,19 @@ final class CaptureOverlayView: NSView {
             delegate?.captureOverlayDidCancel(self)
             return
         }
+        if case .multiWindow = mode,
+           !selectedWindowIDs.isEmpty,
+           event.keyCode == 36 || event.keyCode == 76 {
+            delegate?.captureOverlayDidConfirmWindows(self)
+            return
+        }
         super.keyDown(with: event)
+    }
+
+    func setSelectedWindowIDs(_ ids: Set<CGWindowID>) {
+        guard case .multiWindow = mode else { return }
+        selectedWindowIDs = ids
+        needsDisplay = true
     }
 
     private var selection: CGRect? {
@@ -192,7 +234,13 @@ final class CaptureOverlayView: NSView {
     }
 
     private func updateHoveredWindow(with event: NSEvent) {
-        guard case let .window(candidates, _) = mode else { return }
+        let candidates: [WindowSelectionCandidate]
+        switch mode {
+        case let .window(values, _), let .multiWindow(values):
+            candidates = values
+        case .region:
+            return
+        }
         let localPoint = clipped(convert(event.locationInWindow, from: nil))
         let globalPoint = CaptureGeometry.globalPoint(
             fromLocalPoint: localPoint,
@@ -202,6 +250,13 @@ final class CaptureOverlayView: NSView {
         if next?.id != hoveredWindow?.id {
             hoveredWindow = next
             needsDisplay = true
+        }
+    }
+
+    private var isWindowSelectionMode: Bool {
+        switch mode {
+        case .window, .multiWindow: true
+        case .region: false
         }
     }
 
@@ -218,7 +273,7 @@ final class CaptureOverlayView: NSView {
 
         let accent: NSColor = switch mode {
         case .region(.recording), .window(_, .recording): .systemRed
-        case .region(.screenshot), .window(_, .screenshot): .systemCyan
+        case .region(.screenshot), .window(_, .screenshot), .multiWindow: .systemCyan
         case .region(.scrollingCapture), .window(_, .scrollingCapture): .systemOrange
         }
         accent.withAlphaComponent(0.76).setStroke()

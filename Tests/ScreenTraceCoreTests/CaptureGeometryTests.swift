@@ -57,7 +57,52 @@ final class CaptureGeometryTests: XCTestCase {
     }
 
     func testScreenshotModeRawValuesAreStableForProjectAndShortcutRouting() {
-        XCTAssertEqual(ScreenshotCaptureMode.allCases.map(\.rawValue), ["region", "window", "display"])
+        XCTAssertEqual(
+            ScreenshotCaptureMode.allCases.map(\.rawValue),
+            ["region", "window", "multiWindow", "display"]
+        )
+    }
+
+    func testMultiWindowLayoutUsesUnionAndDrawsBackToFront() throws {
+        let front = candidate(
+            id: 20,
+            frame: CGRect(x: 100, y: -20, width: 500, height: 400),
+            order: 1
+        )
+        let back = candidate(
+            id: 10,
+            frame: CGRect(x: -200, y: 100, width: 800, height: 600),
+            order: 4
+        )
+
+        let layout = try XCTUnwrap(CaptureGeometry.multiWindowLayout(candidates: [front, back]))
+
+        XCTAssertEqual(layout.globalBounds, CGRect(x: -200, y: -20, width: 800, height: 720))
+        XCTAssertEqual(layout.placements.map(\.windowID), [10, 20])
+        XCTAssertEqual(
+            layout.placements[1].frame,
+            CGRect(x: 300, y: 0, width: 500, height: 400)
+        )
+    }
+
+    func testMultiWindowLayoutRejectsEmptyInput() {
+        XCTAssertNil(CaptureGeometry.multiWindowLayout(candidates: []))
+    }
+
+    func testScreenshotCaptureMetadataNormalizesWindowIDs() throws {
+        let metadata = ScreenshotCaptureMetadata(
+            mode: .multiWindow,
+            windowIDs: [9, 3, 9],
+            globalBounds: CGRect(x: -20, y: 4, width: 640, height: 480)
+        )
+        let decoded = try JSONDecoder().decode(
+            ScreenshotCaptureMetadata.self,
+            from: JSONEncoder().encode(metadata)
+        )
+
+        XCTAssertEqual(decoded.windowIDs, [3, 9])
+        XCTAssertEqual(decoded.mode, .multiWindow)
+        XCTAssertEqual(decoded.globalBounds, TraceRect(x: -20, y: 4, width: 640, height: 480))
     }
 
     func testRecordingModesRemainStableForCrossPlatformRouting() {

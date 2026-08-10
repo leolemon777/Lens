@@ -6,6 +6,7 @@ import ScreenTraceCore
 final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private enum CapturePurpose: Equatable {
         case screenshot
+        case multiWindowScreenshot
         case ocr
         case scrollingCapture
         case recordingRegion
@@ -32,6 +33,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private let scrollingCapture = ScrollingCaptureSessionController()
     private var overlayWindows: [CaptureOverlayWindow] = []
     private var windowTargets: [CGWindowID: WindowCaptureTarget] = [:]
+    private var selectedWindowIDs: Set<CGWindowID> = []
     private var pendingPurpose: CapturePurpose = .screenshot
     private var isPreparingCapture = false
     private var isFinishingCapture = false
@@ -94,6 +96,10 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         beginWindowSelection(purpose: .screenshot)
     }
 
+    func beginMultiWindowCapture() {
+        beginWindowSelection(purpose: .multiWindowScreenshot)
+    }
+
     func beginRegionRecordingSelection() {
         guard canBeginCapture(), ensurePermission() else { return }
         pendingPurpose = .recordingRegion
@@ -119,10 +125,16 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                 windowTargets = Dictionary(
                     uniqueKeysWithValues: targets.map { ($0.candidate.id, $0) }
                 )
-                showOverlays(mode: .window(
-                    candidates: targets.map(\.candidate),
-                    action: purpose == .recordingWindow ? .recording : .screenshot
-                ))
+                let candidates = targets.map(\.candidate)
+                if purpose == .multiWindowScreenshot {
+                    selectedWindowIDs.removeAll()
+                    showOverlays(mode: .multiWindow(candidates: candidates))
+                } else {
+                    showOverlays(mode: .window(
+                        candidates: candidates,
+                        action: purpose == .recordingWindow ? .recording : .screenshot
+                    ))
+                }
             } catch {
                 windowTargets.removeAll()
                 pendingPurpose = .screenshot
@@ -140,7 +152,12 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         }
 
         let displayBounds = CGDisplayBounds(displayID)
-        finishCapture(purpose: .screenshot) {
+        let metadata = ScreenshotCaptureMetadata(
+            mode: .display,
+            displayID: displayID,
+            globalBounds: displayBounds
+        )
+        finishCapture(purpose: .screenshot, captureSource: metadata) {
             try await self.captureService.capture(globalDisplayRect: displayBounds)
         }
     }
@@ -172,6 +189,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     func captureOverlayDidCancel(_ view: CaptureOverlayView) {
         dismissOverlays()
         windowTargets.removeAll()
+        selectedWindowIDs.removeAll()
         pendingPurpose = .screenshot
     }
 
@@ -208,7 +226,13 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             startScrollingCapture(displayID: displayID, localRect: rect)
             return
         }
-        finishCapture(purpose: purpose) {
+        let metadata = ScreenshotCaptureMetadata(
+            mode: .region,
+            displayID: displayID,
+            globalBounds: globalRect,
+            sourceRect: rect
+        )
+        finishCapture(purpose: purpose, captureSource: metadata) {
             try await self.captureService.capture(globalDisplayRect: globalRect)
         }
     }
@@ -229,17 +253,59 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             )
             return
         }
-        finishCapture(purpose: .screenshot) {
+        let metadata = ScreenshotCaptureMetadata(
+            mode: .window,
+            windowIDs: [target.candidate.id],
+            globalBounds: target.candidate.globalFrame
+        )
+        finishCapture(purpose: .screenshot, captureSource: metadata) {
             try await self.captureService.capture(window: target.window)
+        }
+    }
+
+    func captureOverlay(_ view: CaptureOverlayView, didToggleWindow windowID: CGWindowID) {
+        guard pendingPurpose == .multiWindowScreenshot,
+              windowTargets[windowID] != nil else { return }
+        if !selectedWindowIDs.insert(windowID).inserted {
+            selectedWindowIDs.remove(windowID)
+        }
+        overlayWindows.forEach { window in
+            (window.contentView as? CaptureOverlayView)?
+                .setSelectedWindowIDs(selectedWindowIDs)
+        }
+    }
+
+    func captureOverlayDidConfirmWindows(_ view: CaptureOverlayView) {
+        guard pendingPurpose == .multiWindowScreenshot else { return }
+        let targets = selectedWindowIDs.compactMap { windowTargets[$0] }
+        guard let layout = CaptureGeometry.multiWindowLayout(
+            candidates: targets.map(\.candidate)
+        ) else {
+            showError(message: "请至少选择一个仍然可用的窗口。")
+            return
+        }
+        let metadata = ScreenshotCaptureMetadata(
+            mode: .multiWindow,
+            windowIDs: targets.map { $0.candidate.id },
+            globalBounds: layout.globalBounds
+        )
+        finishCapture(
+            purpose: .multiWindowScreenshot,
+            titlePrefix: "多窗口截图",
+            captureSource: metadata
+        ) {
+            try await self.captureService.capture(windows: targets)
         }
     }
 
     private func finishCapture(
         purpose: CapturePurpose,
+        titlePrefix: String = "截图",
+        captureSource: ScreenshotCaptureMetadata? = nil,
         operation: @escaping @MainActor () async throws -> CGImage
     ) {
         switch purpose {
-        case .screenshot, .ocr:
+        case .screenshot, .multiWindowScreenshot, .ocr:
             break
         case .scrollingCapture, .recordingRegion, .recordingWindow:
             return
@@ -248,6 +314,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         isFinishingCapture = true
         dismissOverlays()
         windowTargets.removeAll()
+        selectedWindowIDs.removeAll()
         pendingPurpose = .screenshot
 
         Task { @MainActor [weak self] in
@@ -257,11 +324,15 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                 // Allow the action center or selection overlay to leave the compositor first.
                 try await Task.sleep(for: .milliseconds(90))
                 let cgImage = try await operation()
-                let (saved, image) = try saveCapturedImage(cgImage)
+                let (saved, image) = try saveCapturedImage(
+                    cgImage,
+                    titlePrefix: titlePrefix,
+                    captureSource: captureSource
+                )
                 model.setRecentTrace(saved, thumbnail: image)
                 onTraceChanged()
                 switch purpose {
-                case .screenshot:
+                case .screenshot, .multiWindowScreenshot:
                     copyImageToClipboard(image)
                     quickAccess.show(trace: saved, image: image)
                     scheduleAutomaticOCR(
@@ -367,14 +438,16 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
 
     private func saveCapturedImage(
         _ cgImage: CGImage,
-        titlePrefix: String = "截图"
+        titlePrefix: String = "截图",
+        captureSource: ScreenshotCaptureMetadata? = nil
     ) throws -> (SavedTrace, NSImage) {
         let pngData = try ImageEncoding.pngData(from: cgImage)
         let saved = try store.saveScreenshot(
             pngData: pngData,
             width: cgImage.width,
             height: cgImage.height,
-            titlePrefix: titlePrefix
+            titlePrefix: titlePrefix,
+            captureSource: captureSource
         )
         let image = ImageEncoding.nsImage(from: cgImage)
         return (saved, image)

@@ -5,6 +5,7 @@ import Foundation
 public enum ScreenshotCaptureMode: String, Codable, CaseIterable, Sendable {
     case region
     case window
+    case multiWindow
     case display
 }
 
@@ -68,6 +69,28 @@ public struct WindowSelectionCandidate: Identifiable, Sendable {
     }
 }
 
+/// Platform-neutral drawing plan for combining independently captured windows.
+/// Placements are ordered back-to-front so later draws preserve the desktop stack.
+public struct MultiWindowCaptureLayout: Equatable, Sendable {
+    public struct Placement: Equatable, Sendable {
+        public let windowID: UInt32
+        public let frame: CGRect
+
+        public init(windowID: UInt32, frame: CGRect) {
+            self.windowID = windowID
+            self.frame = frame.standardized
+        }
+    }
+
+    public let globalBounds: CGRect
+    public let placements: [Placement]
+
+    public init(globalBounds: CGRect, placements: [Placement]) {
+        self.globalBounds = globalBounds.standardized
+        self.placements = placements
+    }
+}
+
 public enum CaptureGeometry {
     public static func globalRect(fromLocalRect localRect: CGRect, displayBounds: CGRect) -> CGRect {
         let local = localRect.standardized
@@ -107,6 +130,41 @@ public enum CaptureGeometry {
                 }
                 return lhs.id < rhs.id
             }
+    }
+
+    public static func multiWindowLayout(
+        candidates: [WindowSelectionCandidate]
+    ) -> MultiWindowCaptureLayout? {
+        let eligible = candidates.filter {
+            $0.globalFrame.width >= 1 && $0.globalFrame.height >= 1
+        }
+        guard let first = eligible.first else { return nil }
+
+        let globalBounds = eligible.dropFirst().reduce(first.globalFrame) { bounds, candidate in
+            bounds.union(candidate.globalFrame)
+        }.integral
+        guard globalBounds.width >= 1, globalBounds.height >= 1 else { return nil }
+
+        let placements = eligible
+            .sorted { lhs, rhs in
+                if lhs.frontToBackOrder != rhs.frontToBackOrder {
+                    return lhs.frontToBackOrder > rhs.frontToBackOrder
+                }
+                return lhs.id > rhs.id
+            }
+            .map { candidate in
+                MultiWindowCaptureLayout.Placement(
+                    windowID: candidate.id,
+                    frame: candidate.globalFrame.offsetBy(
+                        dx: -globalBounds.minX,
+                        dy: -globalBounds.minY
+                    )
+                )
+            }
+        return MultiWindowCaptureLayout(
+            globalBounds: globalBounds,
+            placements: placements
+        )
     }
 
     public static func displayRecordingSource(

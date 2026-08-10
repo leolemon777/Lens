@@ -37,6 +37,31 @@ final class TraceProjectStoreTests: XCTestCase {
         ])
     }
 
+    func testMultiWindowScreenshotPersistsPortableCaptureSource() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let source = ScreenshotCaptureMetadata(
+            mode: .multiWindow,
+            windowIDs: [71, 42],
+            globalBounds: CGRect(x: -200, y: 40, width: 1_600, height: 900)
+        )
+
+        let saved = try store.saveScreenshot(
+            pngData: Data([0x89, 0x50, 0x4E, 0x47]),
+            width: 3_200,
+            height: 1_800,
+            titlePrefix: "多窗口截图",
+            captureSource: source
+        )
+        let reloaded = try store.loadManifest(from: saved.packageURL)
+
+        XCTAssertEqual(reloaded.screenshotCaptureSource, source)
+        XCTAssertEqual(reloaded.screenshotCaptureSource?.windowIDs, [42, 71])
+        XCTAssertTrue(reloaded.title.hasPrefix("多窗口截图 "))
+    }
+
     func testInvalidDimensionsDoNotCreatePackage() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)

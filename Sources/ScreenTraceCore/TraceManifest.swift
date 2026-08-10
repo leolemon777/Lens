@@ -108,8 +108,32 @@ public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
     }
 }
 
+public struct ScreenshotCaptureMetadata: Codable, Equatable, Sendable {
+    public let mode: ScreenshotCaptureMode
+    public let displayID: UInt32?
+    public let windowIDs: [UInt32]
+    /// Absolute global capture bounds in logical points.
+    public let globalBounds: TraceRect
+    /// Display-local crop in logical points for region capture.
+    public let sourceRect: TraceRect?
+
+    public init(
+        mode: ScreenshotCaptureMode,
+        displayID: UInt32? = nil,
+        windowIDs: [UInt32] = [],
+        globalBounds: CGRect,
+        sourceRect: CGRect? = nil
+    ) {
+        self.mode = mode
+        self.displayID = displayID
+        self.windowIDs = Array(Set(windowIDs)).sorted()
+        self.globalBounds = TraceRect(globalBounds.standardized)
+        self.sourceRect = sourceRect.map { TraceRect($0.standardized) }
+    }
+}
+
 public struct TraceManifest: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.7"
+    public static let currentSchemaVersion = "0.8"
 
     public var schemaVersion: String
     public let id: UUID
@@ -120,6 +144,7 @@ public struct TraceManifest: Codable, Equatable, Sendable {
     public var durationSeconds: Double?
     public let dimensions: TraceDimensions?
     public let captureSource: TraceCaptureMetadata?
+    public let screenshotCaptureSource: ScreenshotCaptureMetadata?
     public var assets: [TraceAsset]
 
     public init(
@@ -132,6 +157,7 @@ public struct TraceManifest: Codable, Equatable, Sendable {
         durationSeconds: Double? = nil,
         dimensions: TraceDimensions?,
         captureSource: TraceCaptureMetadata? = nil,
+        screenshotCaptureSource: ScreenshotCaptureMetadata? = nil,
         assets: [TraceAsset]
     ) {
         self.schemaVersion = schemaVersion
@@ -143,6 +169,7 @@ public struct TraceManifest: Codable, Equatable, Sendable {
         self.durationSeconds = durationSeconds
         self.dimensions = dimensions
         self.captureSource = captureSource
+        self.screenshotCaptureSource = screenshotCaptureSource
         self.assets = assets
     }
 }

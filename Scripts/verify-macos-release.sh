@@ -167,7 +167,7 @@ dsym_checksum_count=0
 manifest_checksum_count=0
 release_notes_checksum_count=0
 while read -r checksum filename trailing; do
-    [[ -n "$checksum" && -n "$filename" && -z "${trailing:-}" ]] \
+    [[ "$checksum" =~ ^[0-9a-f]{64}$ && -n "$filename" && -z "${trailing:-}" ]] \
         || fail "malformed checksum line in $CHECKSUMS_FILENAME"
     case "$filename" in
         "$DMG_FILENAME")
@@ -197,10 +197,12 @@ expect_value "App checksum entry count" "$app_checksum_count" "1"
 expect_value "dSYM checksum entry count" "$dsym_checksum_count" "1"
 expect_value "manifest checksum entry count" "$manifest_checksum_count" "1"
 expect_value "release notes checksum entry count" "$release_notes_checksum_count" "1"
-(
+if ! (
     cd "$MANIFEST_DIR"
     shasum -a 256 -c "$CHECKSUMS_FILENAME"
-)
+); then
+    fail "one or more release artifact checksums do not match"
+fi
 
 grep -Fqx -- "- 发布级别: $RELEASE_CHANNEL" "$RELEASE_NOTES_PATH" \
     || fail "release notes channel does not match manifest"

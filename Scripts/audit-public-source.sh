@@ -24,6 +24,7 @@ required_files=(
     "docs/第三方依赖与素材清单.md"
     "docs/品牌资产说明.md"
     "docs/发布检查清单.md"
+    "Scripts/verify-macos-release.sh"
     ".github/ISSUE_TEMPLATE/bug_report.yml"
     ".github/ISSUE_TEMPLATE/feature_request.yml"
     ".github/PULL_REQUEST_TEMPLATE.md"

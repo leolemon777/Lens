@@ -67,6 +67,8 @@ open Build/ScreenTrace.app
 
 本地可安装 DMG、App zip、dSYM、SHA-256 清单与机器可读 `release.json` 使用 `bash Scripts/package-macos-release.sh`，输出到 `Build/Releases/`。发布清单记录版本、最低系统、Git commit/工作区状态、Mach-O UUID、签名身份、Team ID、公证 request ID，以及三类制品的尺寸和摘要；校验和文件也覆盖发布清单本身。默认仍是 ad-hoc 签名且跳过公证；发布环境需通过 `SCREENTRACE_SIGNING_IDENTITY`、`SCREENTRACE_NOTARY_PROFILE`、`SCREENTRACE_VERSION` 和 `SCREENTRACE_BUILD_NUMBER` 显式提供签名/公证与版本信息。公证凭据只通过 `notarytool` 钥匙串 profile 读取，不写入仓库或命令行。
 
+生成后用 `bash Scripts/verify-macos-release.sh --development Build/Releases/ScreenTrace-0.1.0-1-release.json` 独立反查开发包结构；去掉 `--development` 即进入公开发布门槛，会额外要求根许可证、Developer ID、Team ID、App/DMG 公证 Accepted、Staple 和 Gatekeeper 全部通过。
+
 公开源码前执行 `bash Scripts/audit-public-source.sh`；它会拒绝被 Git 跟踪的媒体、项目包、崩溃报告、发布/签名文件、超大或非文本文件，以及常见私钥和访问令牌格式。脚本通过不代表已经选定许可证。
 
 离线崩溃符号化使用 `Scripts/symbolicate-screen-trace-crash.sh <ScreenTrace.ips> <ScreenTrace.dSYM>`。脚本会先校验 Bundle ID 和 UUID，不一致时拒绝继续；仅符号化故障线程中 ScreenTrace 自身镜像的帧。

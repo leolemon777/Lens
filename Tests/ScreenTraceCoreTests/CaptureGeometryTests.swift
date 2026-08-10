@@ -3,6 +3,41 @@ import XCTest
 @testable import ScreenTraceCore
 
 final class CaptureGeometryTests: XCTestCase {
+    func testRegionPointSnapsIndependentlyToNearestWindowEdges() {
+        let result = CaptureGeometry.snappedPoint(
+            CGPoint(x: 97, y: 506),
+            to: [CGRect(x: 100, y: 80, width: 600, height: 420)],
+            inside: CGRect(x: 0, y: 0, width: 1_440, height: 900)
+        )
+
+        XCTAssertEqual(result.point, CGPoint(x: 100, y: 500))
+        XCTAssertEqual(result.snappedX, 100)
+        XCTAssertEqual(result.snappedY, 500)
+    }
+
+    func testRegionPointUsesDisplayEdgesAndRejectsDistantTargets() {
+        let result = CaptureGeometry.snappedPoint(
+            CGPoint(x: 5, y: 330),
+            to: [CGRect(x: 400, y: 400, width: 200, height: 200)],
+            inside: CGRect(x: 0, y: 0, width: 1_440, height: 900)
+        )
+
+        XCTAssertEqual(result.point, CGPoint(x: 0, y: 330))
+        XCTAssertEqual(result.snappedX, 0)
+        XCTAssertNil(result.snappedY)
+    }
+
+    func testRegionPointSnappingCanBeDisabledWithZeroThreshold() {
+        let point = CGPoint(x: 97, y: 506)
+        let result = CaptureGeometry.snappedPoint(
+            point,
+            to: [CGRect(x: 100, y: 80, width: 600, height: 420)],
+            inside: CGRect(x: 0, y: 0, width: 1_440, height: 900),
+            threshold: 0
+        )
+
+        XCTAssertEqual(result, CaptureSnapResult(point: point, snappedX: nil, snappedY: nil))
+    }
     func testLocalRegionMapsIntoOffsetDisplaySpace() {
         let display = CGRect(x: 1_920, y: -180, width: 1_440, height: 900)
         let local = CGRect(x: 120, y: 80, width: 640, height: 360)

@@ -2,7 +2,7 @@ import AppKit
 import ScreenTraceCore
 
 enum CaptureOverlayMode {
-    case region(action: CaptureOverlayAction)
+    case region(action: CaptureOverlayAction, snapRects: [CGRect])
     case window(candidates: [WindowSelectionCandidate], action: CaptureOverlayAction)
     case multiWindow(candidates: [WindowSelectionCandidate])
 }
@@ -14,9 +14,9 @@ enum CaptureOverlayAction {
 
     var regionGuidance: String {
         switch self {
-        case .screenshot: "拖动选择区域  ·  Esc 取消"
-        case .recording: "拖动选择录制区域  ·  Esc 取消"
-        case .scrollingCapture: "拖动选择滚动内容区域  ·  Esc 取消"
+        case .screenshot: "拖动选择区域  ·  方向键微调  ·  Option 暂停吸附  ·  Esc 取消"
+        case .recording: "拖动选择录制区域  ·  方向键微调  ·  Option 暂停吸附  ·  Esc 取消"
+        case .scrollingCapture: "拖动选择滚动内容区域  ·  方向键微调  ·  Option 暂停吸附"
         }
     }
 
@@ -45,8 +45,11 @@ final class CaptureOverlayView: NSView {
     private let displayID: CGDirectDisplayID
     private let displayBounds: CGRect
     private let mode: CaptureOverlayMode
+    private let regionSnapRects: [CGRect]
     private var startPoint: CGPoint?
     private var currentPoint: CGPoint?
+    private var currentSnapResult: CaptureSnapResult?
+    private var didFineAdjustCurrentPoint = false
     private var hoveredWindow: WindowSelectionCandidate?
     private var selectedWindowIDs: Set<CGWindowID> = []
     private var mouseTrackingArea: NSTrackingArea?
@@ -60,6 +63,13 @@ final class CaptureOverlayView: NSView {
         self.displayID = displayID
         self.displayBounds = displayBounds
         self.mode = mode
+        if case let .region(_, globalSnapRects) = mode {
+            regionSnapRects = globalSnapRects.compactMap {
+                CaptureGeometry.localIntersection(of: $0, displayBounds: displayBounds)
+            }
+        } else {
+            regionSnapRects = []
+        }
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -77,7 +87,7 @@ final class CaptureOverlayView: NSView {
         bounds.fill()
 
         switch mode {
-        case let .region(action):
+        case let .region(action, _):
             guard let selection else {
                 drawGuidance(action.regionGuidance)
                 return
@@ -85,6 +95,7 @@ final class CaptureOverlayView: NSView {
             punchOut(selection)
             drawSelectionBorder(selection)
             drawDimensionPill(for: selection)
+            drawSnapGuides()
         case let .window(_, action):
             guard let hoveredWindow,
                   let localRect = CaptureGeometry.localIntersection(
@@ -152,24 +163,42 @@ final class CaptureOverlayView: NSView {
             return
         }
         let point = clipped(convert(event.locationInWindow, from: nil))
-        startPoint = point
-        currentPoint = point
+        let result = regionPoint(for: point, event: event)
+        startPoint = result.point
+        currentPoint = result.point
+        currentSnapResult = result
+        didFineAdjustCurrentPoint = false
         needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard case .region = mode else { return }
-        currentPoint = clipped(convert(event.locationInWindow, from: nil))
+        let result = regionPoint(
+            for: clipped(convert(event.locationInWindow, from: nil)),
+            event: event
+        )
+        currentPoint = result.point
+        currentSnapResult = result
+        didFineAdjustCurrentPoint = false
         needsDisplay = true
     }
 
     override func mouseUp(with event: NSEvent) {
         switch mode {
         case .region:
-            currentPoint = clipped(convert(event.locationInWindow, from: nil))
+            if !didFineAdjustCurrentPoint {
+                let result = regionPoint(
+                    for: clipped(convert(event.locationInWindow, from: nil)),
+                    event: event
+                )
+                currentPoint = result.point
+                currentSnapResult = result
+            }
             guard let selection, selection.width >= 3, selection.height >= 3 else {
                 startPoint = nil
                 currentPoint = nil
+                currentSnapResult = nil
+                didFineAdjustCurrentPoint = false
                 needsDisplay = true
                 return
             }
@@ -199,6 +228,19 @@ final class CaptureOverlayView: NSView {
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {
             delegate?.captureOverlayDidCancel(self)
+            return
+        }
+        if case .region = mode,
+           startPoint != nil,
+           let currentPoint,
+           let delta = regionFineAdjustment(for: event) {
+            self.currentPoint = clipped(CGPoint(
+                x: currentPoint.x + delta.x,
+                y: currentPoint.y + delta.y
+            ))
+            currentSnapResult = nil
+            didFineAdjustCurrentPoint = true
+            needsDisplay = true
             return
         }
         if case .multiWindow = mode,
@@ -231,6 +273,30 @@ final class CaptureOverlayView: NSView {
             x: min(max(point.x, bounds.minX), bounds.maxX),
             y: min(max(point.y, bounds.minY), bounds.maxY)
         )
+    }
+
+    private func regionPoint(for point: CGPoint, event: NSEvent) -> CaptureSnapResult {
+        guard case .region = mode,
+              !event.modifierFlags.contains(.option) else {
+            return CaptureSnapResult(point: clipped(point), snappedX: nil, snappedY: nil)
+        }
+        return CaptureGeometry.snappedPoint(
+            point,
+            to: regionSnapRects,
+            inside: bounds,
+            threshold: 8
+        )
+    }
+
+    private func regionFineAdjustment(for event: NSEvent) -> CGPoint? {
+        let amount: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
+        return switch event.keyCode {
+        case 123: CGPoint(x: -amount, y: 0)
+        case 124: CGPoint(x: amount, y: 0)
+        case 125: CGPoint(x: 0, y: amount)
+        case 126: CGPoint(x: 0, y: -amount)
+        default: nil
+        }
     }
 
     private func updateHoveredWindow(with event: NSEvent) {
@@ -272,14 +338,35 @@ final class CaptureOverlayView: NSView {
         border.stroke()
 
         let accent: NSColor = switch mode {
-        case .region(.recording), .window(_, .recording): .systemRed
-        case .region(.screenshot), .window(_, .screenshot), .multiWindow: .systemCyan
-        case .region(.scrollingCapture), .window(_, .scrollingCapture): .systemOrange
+        case .region(.recording, _), .window(_, .recording): .systemRed
+        case .region(.screenshot, _), .window(_, .screenshot), .multiWindow: .systemCyan
+        case .region(.scrollingCapture, _), .window(_, .scrollingCapture): .systemOrange
         }
         accent.withAlphaComponent(0.76).setStroke()
         let glow = NSBezierPath(roundedRect: rect.insetBy(dx: -1, dy: -1), xRadius: 5, yRadius: 5)
         glow.lineWidth = 1
         glow.stroke()
+    }
+
+    private func drawSnapGuides() {
+        guard let currentSnapResult else { return }
+        NSColor.systemCyan.withAlphaComponent(0.7).setStroke()
+        if let x = currentSnapResult.snappedX {
+            let path = NSBezierPath()
+            path.move(to: CGPoint(x: x, y: bounds.minY))
+            path.line(to: CGPoint(x: x, y: bounds.maxY))
+            path.lineWidth = 0.8
+            path.setLineDash([4, 4], count: 2, phase: 0)
+            path.stroke()
+        }
+        if let y = currentSnapResult.snappedY {
+            let path = NSBezierPath()
+            path.move(to: CGPoint(x: bounds.minX, y: y))
+            path.line(to: CGPoint(x: bounds.maxX, y: y))
+            path.lineWidth = 0.8
+            path.setLineDash([4, 4], count: 2, phase: 0)
+            path.stroke()
+        }
     }
 
     private func drawGuidance(_ text: String) {

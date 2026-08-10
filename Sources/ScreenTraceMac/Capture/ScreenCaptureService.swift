@@ -44,6 +44,31 @@ struct ScrollingCaptureTarget {
 
 @MainActor
 struct ScreenCaptureService {
+    func regionSnapRects(excludingProcessID: pid_t) -> [CGRect] {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
+            as? [[String: Any]] else { return [] }
+        return regionSnapRects(from: info, excludingProcessID: excludingProcessID)
+    }
+
+    func regionSnapRects(
+        from windowInfo: [[String: Any]],
+        excludingProcessID: pid_t
+    ) -> [CGRect] {
+        windowInfo.compactMap { item -> CGRect? in
+            guard (item[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  (item[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
+                    != excludingProcessID,
+                  let boundsDictionary = item[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(
+                    dictionaryRepresentation: boundsDictionary as CFDictionary
+                  ),
+                  rect.width >= 48,
+                  rect.height >= 32 else { return nil }
+            return rect.standardized
+        }
+    }
+
     func capture(globalDisplayRect: CGRect) async throws -> CGImage {
         guard globalDisplayRect.width >= 1, globalDisplayRect.height >= 1 else {
             throw ScreenCaptureServiceError.emptySelection

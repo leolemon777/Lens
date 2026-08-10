@@ -89,7 +89,12 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         case .scrollingCapture: .scrollingCapture
         default: .screenshot
         }
-        showOverlays(mode: .region(action: action))
+        showOverlays(mode: .region(
+            action: action,
+            snapRects: captureService.regionSnapRects(
+                excludingProcessID: ProcessInfo.processInfo.processIdentifier
+            )
+        ))
     }
 
     func beginWindowCapture() {
@@ -103,7 +108,12 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     func beginRegionRecordingSelection() {
         guard canBeginCapture(), ensurePermission() else { return }
         pendingPurpose = .recordingRegion
-        showOverlays(mode: .region(action: .recording))
+        showOverlays(mode: .region(
+            action: .recording,
+            snapRects: captureService.regionSnapRects(
+                excludingProcessID: ProcessInfo.processInfo.processIdentifier
+            )
+        ))
     }
 
     func beginWindowRecordingSelection() {

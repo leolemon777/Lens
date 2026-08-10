@@ -5,6 +5,27 @@ import XCTest
 
 @MainActor
 final class ScreenCaptureServiceTests: XCTestCase {
+    func testRegionSnapRectsKeepOnlyEligibleForeignWindows() {
+        func item(pid: pid_t, layer: Int, rect: CGRect) -> [String: Any] {
+            [
+                kCGWindowOwnerPID as String: NSNumber(value: pid),
+                kCGWindowLayer as String: NSNumber(value: layer),
+                kCGWindowBounds as String: rect.dictionaryRepresentation
+            ]
+        }
+        let result = ScreenCaptureService().regionSnapRects(
+            from: [
+                item(pid: 99, layer: 0, rect: CGRect(x: 20, y: 30, width: 640, height: 480)),
+                item(pid: 42, layer: 0, rect: CGRect(x: 0, y: 0, width: 800, height: 600)),
+                item(pid: 99, layer: 4, rect: CGRect(x: 0, y: 0, width: 800, height: 600)),
+                item(pid: 99, layer: 0, rect: CGRect(x: 0, y: 0, width: 20, height: 20))
+            ],
+            excludingProcessID: 42
+        )
+
+        XCTAssertEqual(result, [CGRect(x: 20, y: 30, width: 640, height: 480)])
+    }
+
     func testWindowCompositionPreservesBackToFrontPixelOrder() throws {
         let back = WindowSelectionCandidate(
             id: 10,

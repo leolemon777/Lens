@@ -18,6 +18,8 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertTrue(CaptureOverlayAction.recording.windowGuidance.contains("开始录制"))
         XCTAssertTrue(CaptureOverlayAction.recording.regionGuidance.contains("录制区域"))
         XCTAssertTrue(CaptureOverlayAction.scrollingCapture.regionGuidance.contains("滚动内容"))
+        XCTAssertTrue(CaptureOverlayAction.screenshot.regionGuidance.contains("方向键微调"))
+        XCTAssertTrue(CaptureOverlayAction.screenshot.regionGuidance.contains("Option 暂停吸附"))
     }
 
     func testActionCenterRendersRecordingAndScreenshotMenusAtPanelSize() throws {

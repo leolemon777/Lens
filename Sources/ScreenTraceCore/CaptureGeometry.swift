@@ -91,7 +91,68 @@ public struct MultiWindowCaptureLayout: Equatable, Sendable {
     }
 }
 
+public struct CaptureSnapResult: Equatable, Sendable {
+    public let point: CGPoint
+    public let snappedX: CGFloat?
+    public let snappedY: CGFloat?
+
+    public init(point: CGPoint, snappedX: CGFloat?, snappedY: CGFloat?) {
+        self.point = point
+        self.snappedX = snappedX
+        self.snappedY = snappedY
+    }
+}
+
 public enum CaptureGeometry {
+    public static func snappedPoint(
+        _ point: CGPoint,
+        to rects: [CGRect],
+        inside bounds: CGRect,
+        threshold: CGFloat = 8
+    ) -> CaptureSnapResult {
+        let normalizedBounds = bounds.standardized
+        let clippedPoint = CGPoint(
+            x: min(max(point.x, normalizedBounds.minX), normalizedBounds.maxX),
+            y: min(max(point.y, normalizedBounds.minY), normalizedBounds.maxY)
+        )
+        guard threshold.isFinite, threshold > 0 else {
+            return CaptureSnapResult(point: clippedPoint, snappedX: nil, snappedY: nil)
+        }
+
+        let visibleRects = rects.compactMap { rect -> CGRect? in
+            let intersection = rect.standardized.intersection(normalizedBounds)
+            return intersection.isNull || intersection.isEmpty ? nil : intersection
+        }
+        let xTargets = [normalizedBounds.minX, normalizedBounds.maxX]
+            + visibleRects.flatMap { [$0.minX, $0.maxX] }
+        let yTargets = [normalizedBounds.minY, normalizedBounds.maxY]
+            + visibleRects.flatMap { [$0.minY, $0.maxY] }
+        let snappedX = nearestTarget(to: clippedPoint.x, targets: xTargets, threshold: threshold)
+        let snappedY = nearestTarget(to: clippedPoint.y, targets: yTargets, threshold: threshold)
+        return CaptureSnapResult(
+            point: CGPoint(x: snappedX ?? clippedPoint.x, y: snappedY ?? clippedPoint.y),
+            snappedX: snappedX,
+            snappedY: snappedY
+        )
+    }
+
+    private static func nearestTarget(
+        to value: CGFloat,
+        targets: [CGFloat],
+        threshold: CGFloat
+    ) -> CGFloat? {
+        targets
+            .filter { $0.isFinite && abs($0 - value) <= threshold }
+            .min { lhs, rhs in
+                let lhsDistance = abs(lhs - value)
+                let rhsDistance = abs(rhs - value)
+                if lhsDistance != rhsDistance {
+                    return lhsDistance < rhsDistance
+                }
+                return lhs < rhs
+            }
+    }
+
     public static func globalRect(fromLocalRect localRect: CGRect, displayBounds: CGRect) -> CGRect {
         let local = localRect.standardized
         return CGRect(

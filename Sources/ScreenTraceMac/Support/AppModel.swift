@@ -60,6 +60,8 @@ final class AppModel: ObservableObject {
         static let frameRate = "recording.framesPerSecond"
         static let automaticallyTranscribesRecordings = "analysis.automaticallyTranscribesRecordings"
         static let transcriptionLanguage = "analysis.transcriptionLanguage"
+        static let quickScreenshotShortcut = "shortcuts.quickScreenshot"
+        static let actionCenterShortcut = "shortcuts.actionCenter"
     }
 
     private let defaults: UserDefaults
@@ -87,6 +89,12 @@ final class AppModel: ObservableObject {
     @Published var transcriptionLanguage: TranscriptionLanguage {
         didSet { defaults.set(transcriptionLanguage.rawValue, forKey: PreferenceKey.transcriptionLanguage) }
     }
+    @Published var quickScreenshotShortcut: HotKeyShortcut {
+        didSet { persistShortcut(quickScreenshotShortcut, forKey: PreferenceKey.quickScreenshotShortcut) }
+    }
+    @Published var actionCenterShortcut: HotKeyShortcut {
+        didSet { persistShortcut(actionCenterShortcut, forKey: PreferenceKey.actionCenterShortcut) }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -101,6 +109,43 @@ final class AppModel: ObservableObject {
         ) as? Bool ?? true
         transcriptionLanguage = defaults.string(forKey: PreferenceKey.transcriptionLanguage)
             .flatMap(TranscriptionLanguage.init(rawValue:)) ?? .automatic
+        let storedConfiguration = HotKeyConfiguration(
+            quickScreenshot: Self.loadShortcut(
+                from: defaults,
+                key: PreferenceKey.quickScreenshotShortcut
+            ) ?? .defaultQuickScreenshot,
+            actionCenter: Self.loadShortcut(
+                from: defaults,
+                key: PreferenceKey.actionCenterShortcut
+            ) ?? .defaultActionCenter
+        )
+        let configuration = storedConfiguration.isValid ? storedConfiguration : .default
+        quickScreenshotShortcut = configuration.quickScreenshot
+        actionCenterShortcut = configuration.actionCenter
+    }
+
+    var hotKeyConfiguration: HotKeyConfiguration {
+        HotKeyConfiguration(
+            quickScreenshot: quickScreenshotShortcut,
+            actionCenter: actionCenterShortcut
+        )
+    }
+
+    func restoreDefaultShortcuts() {
+        quickScreenshotShortcut = .defaultQuickScreenshot
+        actionCenterShortcut = .defaultActionCenter
+    }
+
+    private func persistShortcut(_ shortcut: HotKeyShortcut, forKey key: String) {
+        guard let data = try? JSONEncoder().encode(shortcut) else { return }
+        defaults.set(data, forKey: key)
+    }
+
+    private static func loadShortcut(from defaults: UserDefaults, key: String) -> HotKeyShortcut? {
+        guard let data = defaults.data(forKey: key),
+              let shortcut = try? JSONDecoder().decode(HotKeyShortcut.self, from: data),
+              shortcut.isValid else { return nil }
+        return shortcut
     }
 
     func setRecentTrace(_ savedTrace: SavedTrace, thumbnail: NSImage) {

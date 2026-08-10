@@ -5,8 +5,12 @@ import SwiftUI
 final class PermissionCenterWindowController {
     private let model = PermissionCenterModel()
     private let window: PermissionPanel
+    private let appModel: AppModel
+    private let onShortcutsChanged: () -> Void
 
-    init() {
+    init(appModel: AppModel, onShortcutsChanged: @escaping () -> Void) {
+        self.appModel = appModel
+        self.onShortcutsChanged = onShortcutsChanged
         window = PermissionPanel(
             contentRect: NSRect(x: 0, y: 0, width: 678, height: 628),
             styleMask: [.borderless, .fullSizeContentView],
@@ -42,9 +46,12 @@ final class PermissionCenterWindowController {
         window.isMovableByWindowBackground = true
         window.onEscape = { [weak self] in self?.hide() }
 
-        let root = PermissionCenterView(model: model) { [weak self] in
-            self?.hide()
-        }
+        let root = PermissionCenterView(
+            model: model,
+            appModel: appModel,
+            onShortcutsChanged: onShortcutsChanged,
+            onClose: { [weak self] in self?.hide() }
+        )
         let hostingView = NSHostingView(rootView: root)
         hostingView.frame = window.contentView?.bounds ?? .zero
         hostingView.autoresizingMask = [.width, .height]

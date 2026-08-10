@@ -295,7 +295,7 @@ struct ActionCenterView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            Label("Fn + Control  快速截图", systemImage: "command")
+            Label("\(model.quickScreenshotShortcut.displayName)  快速截图", systemImage: "command")
             Spacer()
             Button {
                 onAction(.openSettings)

@@ -15,7 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioMixdownRenderer = AudioMixdownRenderer()
     private let transcriptionService = LocalSpeechTranscriptionService()
     private let toast = ToastWindowController()
-    private let permissionCenter = PermissionCenterWindowController()
+    private lazy var permissionCenter = PermissionCenterWindowController(
+        appModel: model,
+        onShortcutsChanged: { [weak self] in self?.restartHotKeys() }
+    )
     private lazy var annotationEditor = ScreenshotAnnotationEditorWindowController(store: store)
     private lazy var traceLibrary = TraceLibraryWindowController(store: store)
     private lazy var videoEditor = VideoEditorWindowController(store: store)
@@ -172,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startHotKeys() {
-        let manager = GlobalHotKeyManager { [weak self] intent in
+        let manager = GlobalHotKeyManager(configuration: model.hotKeyConfiguration) { [weak self] intent in
             switch intent {
             case .quickScreenshot:
                 self?.actionCenter.hide()
@@ -187,8 +190,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        manager.start()
+        let report = manager.start()
         hotKeyManager = manager
+        if !report.issues.isEmpty {
+            toast.show(
+                title: "部分主快捷键被占用",
+                detail: "屏迹已启用事件监听回退；Control + Option + 1/2 备用组合仍会尝试保持可用",
+                symbol: "keyboard.badge.ellipsis"
+            )
+        }
+    }
+
+    private func restartHotKeys() {
+        hotKeyManager?.stop()
+        hotKeyManager = nil
+        startHotKeys()
+        configureStatusItem()
     }
 
     private func configureStatusItem() {
@@ -199,8 +216,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
-        menu.addItem(menuItem("打开操作中心  (fn + space)", action: #selector(toggleActionCenter)))
-        menu.addItem(menuItem("区域截图  (fn + control)", action: #selector(beginScreenshot)))
+        menu.addItem(menuItem(
+            "打开操作中心  (\(model.actionCenterShortcut.displayName))",
+            action: #selector(toggleActionCenter)
+        ))
+        menu.addItem(menuItem(
+            "区域截图  (\(model.quickScreenshotShortcut.displayName))",
+            action: #selector(beginScreenshot)
+        ))
         menu.addItem(menuItem("窗口截图", action: #selector(beginWindowScreenshot)))
         menu.addItem(menuItem("当前屏幕截图", action: #selector(beginDisplayScreenshot)))
         menu.addItem(menuItem("选区 OCR", action: #selector(beginOCR)))

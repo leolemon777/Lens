@@ -1,4 +1,5 @@
 import Foundation
+import ScreenTraceCore
 import XCTest
 @testable import ScreenTraceMac
 
@@ -16,6 +17,8 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(initial.recordingFrameRate, .fps60)
         XCTAssertTrue(initial.automaticallyTranscribesRecordings)
         XCTAssertEqual(initial.transcriptionLanguage, .automatic)
+        XCTAssertEqual(initial.quickScreenshotShortcut, .defaultQuickScreenshot)
+        XCTAssertEqual(initial.actionCenterShortcut, .defaultActionCenter)
 
         initial.capturesSystemAudio = false
         initial.capturesMicrophone = true
@@ -23,6 +26,14 @@ final class AppModelPreferencesTests: XCTestCase {
         initial.recordingFrameRate = .fps30
         initial.automaticallyTranscribesRecordings = false
         initial.transcriptionLanguage = .simplifiedChinese
+        initial.quickScreenshotShortcut = HotKeyShortcut(
+            keyCode: 8,
+            modifiers: [.command, .shift]
+        )
+        initial.actionCenterShortcut = HotKeyShortcut(
+            keyCode: 9,
+            modifiers: [.control, .option]
+        )
         let restored = AppModel(defaults: defaults)
 
         XCTAssertFalse(restored.capturesSystemAudio)
@@ -31,6 +42,14 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(restored.recordingFrameRate, .fps30)
         XCTAssertFalse(restored.automaticallyTranscribesRecordings)
         XCTAssertEqual(restored.transcriptionLanguage, .simplifiedChinese)
+        XCTAssertEqual(
+            restored.quickScreenshotShortcut,
+            HotKeyShortcut(keyCode: 8, modifiers: [.command, .shift])
+        )
+        XCTAssertEqual(
+            restored.actionCenterShortcut,
+            HotKeyShortcut(keyCode: 9, modifiers: [.control, .option])
+        )
     }
 
     func testUnsupportedStoredFrameRateFallsBackToSixtyFPS() throws {
@@ -58,5 +77,41 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(TranscriptionLanguage.japanese.localeIdentifier, "ja-JP")
         XCTAssertEqual(TranscriptionLanguage.korean.localeIdentifier, "ko-KR")
         XCTAssertFalse(TranscriptionLanguage.automatic.localeIdentifier.isEmpty)
+    }
+
+    func testCorruptOrConflictingStoredShortcutsFallBackToDefaults() throws {
+        let suiteName = "ScreenTraceAppModelTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(Data("not-json".utf8), forKey: "shortcuts.quickScreenshot")
+        defaults.set(
+            try JSONEncoder().encode(HotKeyShortcut.defaultQuickScreenshot),
+            forKey: "shortcuts.actionCenter"
+        )
+
+        let model = AppModel(defaults: defaults)
+        XCTAssertEqual(model.quickScreenshotShortcut, .defaultQuickScreenshot)
+        XCTAssertEqual(model.actionCenterShortcut, .defaultActionCenter)
+        XCTAssertTrue(model.hotKeyConfiguration.isValid)
+    }
+
+    func testRestoreDefaultShortcutsPersistsBothBindings() throws {
+        let suiteName = "ScreenTraceAppModelTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let model = AppModel(defaults: defaults)
+        model.quickScreenshotShortcut = HotKeyShortcut(
+            keyCode: 8,
+            modifiers: [.command, .shift]
+        )
+        model.actionCenterShortcut = HotKeyShortcut(
+            keyCode: 9,
+            modifiers: [.control, .option]
+        )
+
+        model.restoreDefaultShortcuts()
+        let restored = AppModel(defaults: defaults)
+        XCTAssertEqual(restored.quickScreenshotShortcut, .defaultQuickScreenshot)
+        XCTAssertEqual(restored.actionCenterShortcut, .defaultActionCenter)
     }
 }

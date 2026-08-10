@@ -1,7 +1,10 @@
+import ScreenTraceCore
 import SwiftUI
 
 struct PermissionCenterView: View {
     @ObservedObject var model: PermissionCenterModel
+    @ObservedObject var appModel: AppModel
+    let onShortcutsChanged: () -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -64,19 +67,43 @@ struct PermissionCenterView: View {
 
     private var shortcutsSection: some View {
         VStack(alignment: .leading, spacing: 11) {
-            sectionTitle("快捷启动", symbol: "keyboard")
-            HStack(spacing: 10) {
-                shortcutCard(
-                    keys: ["Fn", "Control"],
+            HStack {
+                sectionTitle("快捷启动", symbol: "keyboard")
+                Spacer()
+                Button("恢复默认") {
+                    appModel.restoreDefaultShortcuts()
+                    onShortcutsChanged()
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.cyan)
+            }
+            VStack(spacing: 8) {
+                shortcutRow(
                     title: "快速区域截图",
-                    detail: "不经过模式选择"
+                    detail: "不经过模式选择",
+                    shortcut: $appModel.quickScreenshotShortcut,
+                    forbidden: [
+                        appModel.actionCenterShortcut,
+                        .fallbackActionCenter
+                    ]
                 )
-                shortcutCard(
-                    keys: ["Fn", "Space"],
+                Divider().padding(.leading, 122).opacity(0.4)
+                shortcutRow(
                     title: "屏迹操作中心",
-                    detail: "截图、录屏与最近项目"
+                    detail: "截图、录屏与最近项目",
+                    shortcut: $appModel.actionCenterShortcut,
+                    forbidden: [
+                        appModel.quickScreenshotShortcut,
+                        .fallbackQuickScreenshot
+                    ]
                 )
             }
+            .padding(11)
+            .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            Text("无 Fn 备用：Control + Option + 1 快速截图，Control + Option + 2 打开操作中心。")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -124,30 +151,28 @@ struct PermissionCenterView: View {
             .foregroundStyle(.secondary)
     }
 
-    private func shortcutCard(keys: [String], title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 5) {
-                ForEach(keys, id: \.self) { key in
-                    Text(key)
-                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .background(.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 7)
-                                .stroke(.white.opacity(0.13), lineWidth: 1)
-                        )
-                }
+    private func shortcutRow(
+        title: String,
+        detail: String,
+        shortcut: Binding<HotKeyShortcut>,
+        forbidden: Set<HotKeyShortcut>
+    ) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 11.5, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
             }
-            Text(title)
-                .font(.system(size: 12, weight: .semibold))
-            Text(detail)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(.secondary)
+            .frame(width: 110, alignment: .leading)
+            ShortcutRecorderButton(
+                shortcut: shortcut,
+                forbidden: forbidden,
+                onChanged: onShortcutsChanged
+            )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(13)
-        .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func permissionRow(_ kind: SystemPermissionKind) -> some View {

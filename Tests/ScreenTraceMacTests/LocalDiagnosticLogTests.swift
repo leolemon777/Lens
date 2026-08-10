@@ -67,11 +67,24 @@ final class LocalDiagnosticLogTests: XCTestCase {
             build: "1",
             systemVersion: "15.0",
             architecture: "arm64",
-            permissions: ["screenCapture": "granted"]
+            permissions: ["screenCapture": "granted"],
+            crashReports: [ScreenTraceCrashSummary(
+                incidentID: UUID(uuidString: "2C592755-38C7-4147-83C8-8C6C1AB50245")!,
+                timestamp: Date(timeIntervalSince1970: 30),
+                appVersion: "0.1",
+                build: "1",
+                exceptionType: "EXC_BREAKPOINT",
+                signal: "SIGTRAP",
+                terminationNamespace: "SIGNAL",
+                terminationCode: 5,
+                faultingThread: 2
+            )]
         )
 
         XCTAssertTrue(summary.contains("transcription.failed"))
         XCTAssertTrue(summary.contains("screenCapture=granted"))
+        XCTAssertTrue(summary.contains("EXC_BREAKPOINT/SIGTRAP"))
+        XCTAssertTrue(summary.contains("2C592755-38C7-4147-83C8-8C6C1AB50245"))
         XCTAssertFalse(summary.contains("/Users/"))
         XCTAssertFalse(summary.contains("secret transcript"))
     }

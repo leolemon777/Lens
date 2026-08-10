@@ -68,6 +68,7 @@ actor LocalDiagnosticLog {
         systemVersion: String,
         architecture: String,
         permissions: [String: String],
+        crashReports: [ScreenTraceCrashSummary] = [],
         eventLimit: Int = 20
     ) -> String {
         let events = recentEvents(limit: eventLimit)
@@ -93,6 +94,21 @@ actor LocalDiagnosticLog {
                 let suffix = metadata.isEmpty ? "" : " [\(metadata)]"
                 lines.append(
                     "- \(formatter.string(from: event.timestamp)) \(event.level.rawValue) \(event.code)\(suffix)"
+                )
+            }
+        }
+        lines.append("本机崩溃指纹：")
+        if crashReports.isEmpty {
+            lines.append("- 无")
+        } else {
+            let formatter = ISO8601DateFormatter()
+            for report in crashReports {
+                lines.append(
+                    "- \(formatter.string(from: report.timestamp)) "
+                        + "\(report.exceptionType)/\(report.signal) "
+                        + "\(report.terminationNamespace):\(report.terminationCode) "
+                        + "incident=\(report.incidentID.uuidString) "
+                        + "version=\(report.appVersion)(\(report.build))"
                 )
             }
         }

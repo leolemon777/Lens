@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let toast = ToastWindowController()
     private let diagnostics = LocalDiagnosticLog()
     private let launchHealth = LaunchHealthMonitor()
+    private let crashReportScanner = ScreenTraceCrashReportScanner()
     private lazy var permissionCenter = PermissionCenterWindowController(
         appModel: model,
         onShortcutsChanged: { [weak self] in self?.restartHotKeys() },
@@ -95,6 +96,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 "app.previous_session_unclean",
                 level: .warning,
                 metadata: ["status": "detected"]
+            )
+        }
+        let crashReports = crashReportScanner.recentReports()
+        if !crashReports.isEmpty {
+            logDiagnostic(
+                "crash_reports.available",
+                level: .warning,
+                metadata: ["count": String(crashReports.count)]
             )
         }
     }
@@ -1051,7 +1060,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             build: version["build"] ?? "development",
             systemVersion: ProcessInfo.processInfo.operatingSystemVersionString,
             architecture: Self.architectureName,
-            permissions: permissions
+            permissions: permissions,
+            crashReports: crashReportScanner.recentReports()
         )
     }
 

@@ -182,6 +182,11 @@ struct ActionCenterView: View {
                 Label("单独录制摄像头", systemImage: "video")
             }
             Divider()
+            Picker("录制帧率", selection: $model.recordingFrameRate) {
+                Text("30 FPS · 省空间").tag(RecordingFrameRate.fps30)
+                Text("60 FPS · 更流畅").tag(RecordingFrameRate.fps60)
+            }
+            Divider()
             Toggle(isOn: $model.automaticallyTranscribesRecordings) {
                 Label("录完自动转写与整理", systemImage: "sparkles")
             }

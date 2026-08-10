@@ -2,6 +2,13 @@ import AppKit
 import Foundation
 import ScreenTraceCore
 
+enum RecordingFrameRate: Int, CaseIterable, Identifiable, Sendable {
+    case fps30 = 30
+    case fps60 = 60
+
+    var id: Int { rawValue }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     struct RecentTrace: Identifiable {
@@ -17,6 +24,7 @@ final class AppModel: ObservableObject {
         static let capturesSystemAudio = "recording.capturesSystemAudio"
         static let capturesMicrophone = "recording.capturesMicrophone"
         static let capturesCamera = "recording.capturesCamera"
+        static let frameRate = "recording.framesPerSecond"
         static let automaticallyTranscribesRecordings = "analysis.automaticallyTranscribesRecordings"
     }
 
@@ -30,6 +38,9 @@ final class AppModel: ObservableObject {
     }
     @Published var capturesCamera: Bool {
         didSet { defaults.set(capturesCamera, forKey: PreferenceKey.capturesCamera) }
+    }
+    @Published var recordingFrameRate: RecordingFrameRate {
+        didSet { defaults.set(recordingFrameRate.rawValue, forKey: PreferenceKey.frameRate) }
     }
     @Published var automaticallyTranscribesRecordings: Bool {
         didSet {
@@ -45,6 +56,9 @@ final class AppModel: ObservableObject {
         capturesSystemAudio = defaults.object(forKey: PreferenceKey.capturesSystemAudio) as? Bool ?? true
         capturesMicrophone = defaults.object(forKey: PreferenceKey.capturesMicrophone) as? Bool ?? false
         capturesCamera = defaults.object(forKey: PreferenceKey.capturesCamera) as? Bool ?? false
+        recordingFrameRate = RecordingFrameRate(
+            rawValue: defaults.integer(forKey: PreferenceKey.frameRate)
+        ) ?? .fps60
         automaticallyTranscribesRecordings = defaults.object(
             forKey: PreferenceKey.automaticallyTranscribesRecordings
         ) as? Bool ?? true

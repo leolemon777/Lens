@@ -104,7 +104,8 @@ final class ScreenRecordingService: NSObject {
             captureSource: TraceCaptureMetadata(
                 recordingSource: source,
                 actualCaptureBounds: prepared.captureBounds,
-                actualSourceRect: prepared.sourceRect
+                actualSourceRect: prepared.sourceRect,
+                framesPerSecond: options.framesPerSecond
             ),
             includesSystemAudio: options.capturesSystemAudio,
             includesMicrophone: options.capturesMicrophone,

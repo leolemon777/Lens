@@ -64,6 +64,23 @@ final class CaptureGeometryTests: XCTestCase {
         XCTAssertEqual(RecordingCaptureMode.allCases.map(\.rawValue), ["region", "window", "display"])
     }
 
+    func testLegacyCaptureMetadataDecodesWithoutFrameRate() throws {
+        let json = """
+        {
+          "mode": "display",
+          "displayID": 7,
+          "globalBounds": { "x": 0, "y": 0, "width": 1440, "height": 900 }
+        }
+        """
+        let metadata = try JSONDecoder().decode(
+            TraceCaptureMetadata.self,
+            from: Data(json.utf8)
+        )
+
+        XCTAssertEqual(metadata.mode, .display)
+        XCTAssertNil(metadata.framesPerSecond)
+    }
+
     func testRegionRecordingSourceClipsLocallyAndPreservesGlobalOffset() throws {
         let display = CGRect(x: 1_440, y: -120, width: 1_440, height: 900)
         let source = try XCTUnwrap(CaptureGeometry.regionRecordingSource(

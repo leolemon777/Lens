@@ -203,7 +203,7 @@ final class TraceProjectStoreTests: XCTestCase {
         let session = try store.beginRecording(
             width: 1_800,
             height: 1_200,
-            captureSource: TraceCaptureMetadata(recordingSource: source)
+            captureSource: TraceCaptureMetadata(recordingSource: source, framesPerSecond: 30)
         )
         let manifest = try store.loadManifest(from: session.packageURL)
 
@@ -212,6 +212,7 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(manifest.captureSource?.windowID, 42)
         XCTAssertEqual(manifest.captureSource?.windowTitle, "设计稿")
         XCTAssertEqual(manifest.captureSource?.applicationName, "Sketch")
+        XCTAssertEqual(manifest.captureSource?.framesPerSecond, 30)
         XCTAssertTrue(manifest.title.hasPrefix("Sketch 窗口录屏"))
         XCTAssertTrue(manifest.assets.contains {
             $0.role == .systemAudio && $0.relativePath == "raw/screen.mp4"

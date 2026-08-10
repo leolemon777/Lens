@@ -69,6 +69,7 @@ public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
     public let sourceRect: TraceRect?
     public let windowTitle: String?
     public let applicationName: String?
+    public let framesPerSecond: Int?
 
     public init(
         mode: RecordingCaptureMode,
@@ -77,7 +78,8 @@ public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
         globalBounds: TraceRect,
         sourceRect: TraceRect? = nil,
         windowTitle: String? = nil,
-        applicationName: String? = nil
+        applicationName: String? = nil,
+        framesPerSecond: Int? = nil
     ) {
         self.mode = mode
         self.displayID = displayID
@@ -86,12 +88,14 @@ public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
         self.sourceRect = sourceRect
         self.windowTitle = windowTitle
         self.applicationName = applicationName
+        self.framesPerSecond = framesPerSecond.map { max($0, 1) }
     }
 
     public init(
         recordingSource source: RecordingCaptureSource,
         actualCaptureBounds: CGRect? = nil,
-        actualSourceRect: CGRect? = nil
+        actualSourceRect: CGRect? = nil,
+        framesPerSecond: Int? = nil
     ) {
         mode = source.mode
         displayID = source.displayID
@@ -100,11 +104,12 @@ public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
         sourceRect = (actualSourceRect ?? source.sourceRect).map(TraceRect.init)
         windowTitle = source.windowTitle
         applicationName = source.applicationName
+        self.framesPerSecond = framesPerSecond.map { max($0, 1) }
     }
 }
 
 public struct TraceManifest: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.6"
+    public static let currentSchemaVersion = "0.7"
 
     public var schemaVersion: String
     public let id: UUID

@@ -710,7 +710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         toast.show(
             title: "正在准备\(source.mode.presentationTitle)",
-            detail: "60 FPS · \(audioSummary) · \(model.capturesCamera ? "摄像头分轨 · " : "")事件分轨",
+            detail: "\(model.recordingFrameRate.rawValue) FPS · \(audioSummary) · \(model.capturesCamera ? "摄像头分轨 · " : "")事件分轨",
             symbol: "record.circle"
         )
         Task { @MainActor [weak self] in
@@ -734,7 +734,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             let options = ScreenRecordingOptions(
-                framesPerSecond: 60,
+                framesPerSecond: model.recordingFrameRate.rawValue,
                 capturesSystemAudio: model.capturesSystemAudio,
                 capturesMicrophone: model.capturesMicrophone,
                 capturesCamera: model.capturesCamera
@@ -742,7 +742,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 _ = try await recordingService.start(source: source, options: options)
                 recordingControl.begin(
-                    sourceTitle: source.mode.presentationTitle,
+                    sourceTitle: "\(source.mode.presentationTitle) · \(options.framesPerSecond) FPS",
                     capturesSystemAudio: options.capturesSystemAudio,
                     capturesMicrophone: options.capturesMicrophone,
                     capturesCamera: options.capturesCamera,

@@ -38,6 +38,12 @@ fail() {
     exit 65
 }
 
+PUBLIC_FAILURES=()
+
+public_fail() {
+    PUBLIC_FAILURES+=("$1")
+}
+
 manifest_value() {
     plutil -extract "$1" raw "$MANIFEST_PATH"
 }
@@ -206,25 +212,50 @@ if [[ ! -L "$MOUNT_DIR/Applications" || "$(readlink "$MOUNT_DIR/Applications")" 
 fi
 
 if [[ "$MODE" == "public" ]]; then
-    [[ -f "$PROJECT_DIR/LICENSE" ]] || fail "public release requires a selected root LICENSE"
-    expect_value "signature kind" "$SIGNING_KIND" "developer-id"
+    [[ -f "$PROJECT_DIR/LICENSE" ]] \
+        || public_fail "selected root LICENSE is missing"
+    [[ "$SIGNING_KIND" == "developer-id" ]] \
+        || public_fail "signature kind expected=developer-id actual=$SIGNING_KIND"
     [[ -n "$TEAM_IDENTIFIER" && "$TEAM_IDENTIFIER" != "not-set" ]] \
-        || fail "public release requires a signing Team ID"
-    expect_value "App notarization status" "$APP_NOTARY_STATUS" "Accepted"
-    expect_value "DMG notarization status" "$DMG_NOTARY_STATUS" "Accepted"
+        || public_fail "signing Team ID is missing"
+    [[ "$APP_NOTARY_STATUS" == "Accepted" ]] \
+        || public_fail "App notarization status expected=Accepted actual=$APP_NOTARY_STATUS"
+    [[ "$DMG_NOTARY_STATUS" == "Accepted" ]] \
+        || public_fail "DMG notarization status expected=Accepted actual=$DMG_NOTARY_STATUS"
     [[ -n "$APP_NOTARY_ID" && "$APP_NOTARY_ID" != "not-submitted" ]] \
-        || fail "missing App notarization request ID"
+        || public_fail "App notarization request ID is missing"
     [[ -n "$DMG_NOTARY_ID" && "$DMG_NOTARY_ID" != "not-submitted" ]] \
-        || fail "missing DMG notarization request ID"
+        || public_fail "DMG notarization request ID is missing"
     SIGNATURE_DETAILS="$(codesign -dv --verbose=4 "$ARCHIVED_APP" 2>&1)"
     ACTUAL_TEAM_IDENTIFIER="$(awk -F= '/^TeamIdentifier=/{print $2; exit}' <<< "$SIGNATURE_DETAILS")"
-    expect_value "signed App Team ID" "$ACTUAL_TEAM_IDENTIFIER" "$TEAM_IDENTIFIER"
-    bash "$SCRIPT_DIR/audit-public-source.sh"
-    xcrun stapler validate "$ARCHIVED_APP"
-    xcrun stapler validate "$DMG_PATH"
-    spctl --assess --type execute --verbose=4 "$ARCHIVED_APP"
-    codesign --verify --verbose=2 "$DMG_PATH"
-    spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG_PATH"
+    if [[ -n "$TEAM_IDENTIFIER" && "$TEAM_IDENTIFIER" != "not-set" \
+        && "$ACTUAL_TEAM_IDENTIFIER" != "$TEAM_IDENTIFIER" ]]; then
+        public_fail "signed App Team ID expected=$TEAM_IDENTIFIER actual=${ACTUAL_TEAM_IDENTIFIER:-missing}"
+    fi
+    if ! bash "$SCRIPT_DIR/audit-public-source.sh" >/dev/null; then
+        public_fail "public-source audit failed"
+    fi
+    if ! xcrun stapler validate "$ARCHIVED_APP" >/dev/null 2>&1; then
+        public_fail "App staple validation failed"
+    fi
+    if ! xcrun stapler validate "$DMG_PATH" >/dev/null 2>&1; then
+        public_fail "DMG staple validation failed"
+    fi
+    if ! spctl --assess --type execute --verbose=4 "$ARCHIVED_APP" >/dev/null 2>&1; then
+        public_fail "App Gatekeeper assessment failed"
+    fi
+    if ! codesign --verify --verbose=2 "$DMG_PATH" >/dev/null 2>&1; then
+        public_fail "DMG signature verification failed"
+    fi
+    if ! spctl --assess --type open --context context:primary-signature \
+        --verbose=4 "$DMG_PATH" >/dev/null 2>&1; then
+        public_fail "DMG Gatekeeper assessment failed"
+    fi
+    if [[ "${#PUBLIC_FAILURES[@]}" -gt 0 ]]; then
+        echo "release verification failed: public qualification has ${#PUBLIC_FAILURES[@]} blocker(s):" >&2
+        printf '  - %s\n' "${PUBLIC_FAILURES[@]}" >&2
+        exit 65
+    fi
     echo "Public macOS release verification passed: $ARTIFACT_NAME"
 else
     echo "Development release structure passed: $ARTIFACT_NAME"

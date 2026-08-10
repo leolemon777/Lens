@@ -9,6 +9,39 @@ enum RecordingFrameRate: Int, CaseIterable, Identifiable, Sendable {
     var id: Int { rawValue }
 }
 
+enum TranscriptionLanguage: String, CaseIterable, Identifiable, Sendable {
+    case automatic
+    case simplifiedChinese
+    case traditionalChinese
+    case english
+    case japanese
+    case korean
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: "自动 · 跟随系统"
+        case .simplifiedChinese: "简体中文"
+        case .traditionalChinese: "繁体中文"
+        case .english: "English"
+        case .japanese: "日本語"
+        case .korean: "한국어"
+        }
+    }
+
+    var localeIdentifier: String {
+        switch self {
+        case .automatic: Locale.current.identifier
+        case .simplifiedChinese: "zh-CN"
+        case .traditionalChinese: "zh-TW"
+        case .english: "en-US"
+        case .japanese: "ja-JP"
+        case .korean: "ko-KR"
+        }
+    }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     struct RecentTrace: Identifiable {
@@ -26,6 +59,7 @@ final class AppModel: ObservableObject {
         static let capturesCamera = "recording.capturesCamera"
         static let frameRate = "recording.framesPerSecond"
         static let automaticallyTranscribesRecordings = "analysis.automaticallyTranscribesRecordings"
+        static let transcriptionLanguage = "analysis.transcriptionLanguage"
     }
 
     private let defaults: UserDefaults
@@ -50,6 +84,9 @@ final class AppModel: ObservableObject {
             )
         }
     }
+    @Published var transcriptionLanguage: TranscriptionLanguage {
+        didSet { defaults.set(transcriptionLanguage.rawValue, forKey: PreferenceKey.transcriptionLanguage) }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -62,6 +99,8 @@ final class AppModel: ObservableObject {
         automaticallyTranscribesRecordings = defaults.object(
             forKey: PreferenceKey.automaticallyTranscribesRecordings
         ) as? Bool ?? true
+        transcriptionLanguage = defaults.string(forKey: PreferenceKey.transcriptionLanguage)
+            .flatMap(TranscriptionLanguage.init(rawValue:)) ?? .automatic
     }
 
     func setRecentTrace(_ savedTrace: SavedTrace, thumbnail: NSImage) {

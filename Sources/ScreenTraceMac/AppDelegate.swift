@@ -449,7 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 let document = try await transcriptionService.transcribe(
                     audioURL: source.url,
-                    localeIdentifier: Locale.current.identifier,
+                    localeIdentifier: model.transcriptionLanguage.localeIdentifier,
                     sourceRole: source.role
                 )
                 let saved = SavedTrace(

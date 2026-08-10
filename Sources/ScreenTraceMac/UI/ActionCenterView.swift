@@ -190,6 +190,11 @@ struct ActionCenterView: View {
             Toggle(isOn: $model.automaticallyTranscribesRecordings) {
                 Label("录完自动转写与整理", systemImage: "sparkles")
             }
+            Picker("转写语言", selection: $model.transcriptionLanguage) {
+                ForEach(TranscriptionLanguage.allCases) { language in
+                    Text(language.title).tag(language)
+                }
+            }
         } label: {
             actionTileLabel(.recording)
         }

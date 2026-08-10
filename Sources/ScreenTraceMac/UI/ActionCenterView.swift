@@ -330,6 +330,8 @@ struct ActionCenterView: View {
 
 private struct TraceActionButtonStyle: ButtonStyle {
     let tint: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.traceReduceMotionOverride) private var reduceMotionOverride
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -341,7 +343,15 @@ private struct TraceActionButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(.white.opacity(configuration.isPressed ? 0.22 : 0.10), lineWidth: 1)
             )
-            .scaleEffect(configuration.isPressed ? 0.975 : 1)
-            .animation(.spring(response: 0.22, dampingFraction: 0.78), value: configuration.isPressed)
+            .scaleEffect(TraceMotionPolicy.pressedScale(
+                isPressed: configuration.isPressed,
+                reduceMotion: reduceMotionOverride ?? reduceMotion
+            ))
+            .animation(
+                TraceMotionPolicy.buttonAnimation(
+                    reduceMotion: reduceMotionOverride ?? reduceMotion
+                ),
+                value: configuration.isPressed
+            )
     }
 }

@@ -59,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.logDiagnosticFailure("scrolling_capture.failed", error: error)
             self?.toast.show(
                 title: "长截图未完成",
-                detail: error.localizedDescription,
+                detail: StorageRecoveryGuidance.detail(for: error),
                 symbol: "exclamationmark.arrow.triangle.2.circlepath"
             )
         }
@@ -151,7 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         annotationEditor.onFailure = { [weak self] error in
             self?.toast.show(
                 title: "原图与标注计划仍然安全",
-                detail: error.localizedDescription,
+                detail: StorageRecoveryGuidance.detail(for: error),
                 symbol: "exclamationmark.arrow.triangle.2.circlepath"
             )
         }
@@ -208,7 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         videoEditor.onFailure = { [weak self] error in
             self?.toast.show(
                 title: "编辑方案未保存",
-                detail: error.localizedDescription,
+                detail: StorageRecoveryGuidance.detail(for: error),
                 symbol: "exclamationmark.arrow.triangle.2.circlepath"
             )
         }
@@ -1230,7 +1230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "屏迹无法完成录屏"
-        alert.informativeText = error.localizedDescription
+        alert.informativeText = StorageRecoveryGuidance.detail(for: error)
         alert.addButton(withTitle: "好")
         alert.runModal()
     }

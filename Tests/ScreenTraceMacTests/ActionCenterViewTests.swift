@@ -75,4 +75,28 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 430)
         XCTAssertGreaterThan(png.count, 18_000)
     }
+
+    func testActionCenterRendersWithReducedTransparencyAndMotion() throws {
+        let root = ActionCenterView(model: AppModel()) { _ in }
+            .traceAccessibilityOverrides(reduceTransparency: true, reduceMotion: true)
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.frame = CGRect(x: 0, y: 0, width: 688, height: 430)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let representation = try XCTUnwrap(
+            hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds)
+        )
+        hostingView.cacheDisplay(in: hostingView.bounds, to: representation)
+        let png = try XCTUnwrap(representation.representation(using: .png, properties: [:]))
+
+        XCTAssertGreaterThanOrEqual(representation.pixelsWide, 688)
+        XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 430)
+        XCTAssertGreaterThan(png.count, 18_000)
+        XCTAssertEqual(
+            TraceMotionPolicy.pressedScale(isPressed: true, reduceMotion: true),
+            1
+        )
+        XCTAssertNil(TraceMotionPolicy.buttonAnimation(reduceMotion: true))
+        XCTAssertNil(TraceMotionPolicy.meterAnimation(reduceMotion: true))
+    }
 }

@@ -301,6 +301,8 @@ struct RecordingControlView: View {
 
 private struct AudioLevelBars: View {
     let level: Double
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.traceReduceMotionOverride) private var reduceMotionOverride
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 1.5) {
@@ -312,6 +314,11 @@ private struct AudioLevelBars: View {
             }
         }
         .frame(height: 10, alignment: .bottom)
-        .animation(.easeOut(duration: 0.08), value: level)
+        .animation(
+            TraceMotionPolicy.meterAnimation(
+                reduceMotion: reduceMotionOverride ?? reduceMotion
+            ),
+            value: level
+        )
     }
 }

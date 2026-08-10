@@ -215,6 +215,39 @@ final class VideoEditorViewTests: XCTestCase {
         XCTAssertGreaterThan(png.count, 35_000)
     }
 
+    func testUnifiedEditorRendersWithReducedTransparencyAndMotion() throws {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 18,
+            hasCameraTrack: true,
+            hasMicrophoneTrack: true,
+            transcript: nil
+        )
+        let playback = VideoEditorPlaybackController()
+        defer { playback.stop() }
+        let root = VideoEditorView(
+            model: model,
+            playback: playback,
+            title: "降低透明度与动态效果回归",
+            onSave: {},
+            onClose: {}
+        )
+        .traceAccessibilityOverrides(reduceTransparency: true, reduceMotion: true)
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.frame = CGRect(x: 0, y: 0, width: 1_260, height: 780)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let representation = try XCTUnwrap(
+            hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds)
+        )
+        hostingView.cacheDisplay(in: hostingView.bounds, to: representation)
+        let png = try XCTUnwrap(representation.representation(using: .png, properties: [:]))
+
+        XCTAssertGreaterThanOrEqual(representation.pixelsWide, 1_260)
+        XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 780)
+        XCTAssertGreaterThan(png.count, 35_000)
+    }
+
     private func firstSubview<View: NSView>(
         of type: View.Type,
         in root: NSView

@@ -148,7 +148,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             } catch {
                 windowTargets.removeAll()
                 pendingPurpose = .screenshot
-                showError(message: error.localizedDescription)
+                showError(error)
             }
         }
     }
@@ -361,7 +361,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                     break
                 }
             } catch {
-                showError(message: error.localizedDescription)
+                showError(error)
             }
         }
     }
@@ -558,6 +558,10 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         alert.informativeText = message
         alert.addButton(withTitle: "好")
         alert.runModal()
+    }
+
+    private func showError(_ error: Error) {
+        showError(message: StorageRecoveryGuidance.detail(for: error))
     }
 }
 

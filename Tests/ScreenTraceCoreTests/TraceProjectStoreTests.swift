@@ -78,6 +78,64 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
     }
 
+    func testUnwritableRootFailsWithoutLeavingPartialProjectPackage() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: root.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let store = TraceProjectStore(rootDirectory: root)
+
+        XCTAssertThrowsError(try store.saveScreenshot(
+            pngData: Data([1, 2, 3]),
+            width: 640,
+            height: 360
+        ))
+        let packages = try FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: nil
+        ).filter { $0.pathExtension == "screentrace" }
+        XCTAssertTrue(packages.isEmpty)
+    }
+
+    func testReadOnlyProjectRemainsReadableAndUnchangedWhenAnalysisWriteFails() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let rawBytes = Data([0x89, 0x50, 0x4E, 0x47])
+        let screenshot = try store.saveScreenshot(
+            pngData: rawBytes,
+            width: 800,
+            height: 500
+        )
+        let manifestURL = screenshot.packageURL.appendingPathComponent("manifest.json")
+        let manifestBefore = try Data(contentsOf: manifestURL)
+        let analysisDirectory = screenshot.packageURL
+            .appendingPathComponent("analysis", isDirectory: true)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o555],
+            ofItemAtPath: analysisDirectory.path
+        )
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755],
+                ofItemAtPath: analysisDirectory.path
+            )
+        }
+
+        XCTAssertThrowsError(try store.attachOCR(
+            OCRDocument(engine: "test", recognitionLanguages: [], blocks: []),
+            to: screenshot
+        ))
+        XCTAssertEqual(try Data(contentsOf: screenshot.rawAssetURL), rawBytes)
+        XCTAssertEqual(try Data(contentsOf: manifestURL), manifestBefore)
+        XCTAssertEqual(store.libraryEntries().map(\.manifest.id), [screenshot.manifest.id])
+    }
+
     func testOCRRoundTripAddsAnalysisAssetWithoutChangingRawScreenshot() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)

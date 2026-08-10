@@ -52,6 +52,32 @@ final class AppModelPreferencesTests: XCTestCase {
         )
     }
 
+    func testPreviousReleasePreferenceKeysLoadWithoutMigrationOrReset() throws {
+        let suiteName = "ScreenTraceAppModelTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let quick = HotKeyShortcut(keyCode: 18, modifiers: [.command, .option])
+        let center = HotKeyShortcut(keyCode: 19, modifiers: [.control, .shift])
+        defaults.set(false, forKey: "recording.capturesSystemAudio")
+        defaults.set(true, forKey: "recording.capturesMicrophone")
+        defaults.set(true, forKey: "recording.capturesCamera")
+        defaults.set(30, forKey: "recording.framesPerSecond")
+        defaults.set(false, forKey: "analysis.automaticallyTranscribesRecordings")
+        defaults.set("english", forKey: "analysis.transcriptionLanguage")
+        defaults.set(try JSONEncoder().encode(quick), forKey: "shortcuts.quickScreenshot")
+        defaults.set(try JSONEncoder().encode(center), forKey: "shortcuts.actionCenter")
+
+        let upgraded = AppModel(defaults: defaults)
+        XCTAssertFalse(upgraded.capturesSystemAudio)
+        XCTAssertTrue(upgraded.capturesMicrophone)
+        XCTAssertTrue(upgraded.capturesCamera)
+        XCTAssertEqual(upgraded.recordingFrameRate, .fps30)
+        XCTAssertFalse(upgraded.automaticallyTranscribesRecordings)
+        XCTAssertEqual(upgraded.transcriptionLanguage, .english)
+        XCTAssertEqual(upgraded.quickScreenshotShortcut, quick)
+        XCTAssertEqual(upgraded.actionCenterShortcut, center)
+    }
+
     func testUnsupportedStoredFrameRateFallsBackToSixtyFPS() throws {
         let suiteName = "ScreenTraceAppModelTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

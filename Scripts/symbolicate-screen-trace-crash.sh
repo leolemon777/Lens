@@ -70,11 +70,13 @@ fi
 FRAME_NUMBER=0
 while IFS= read -r OFFSET; do
     ADDRESS=$((LOAD_ADDRESS + OFFSET))
+    LOAD_ADDRESS_HEX="$(printf '0x%x' "$LOAD_ADDRESS")"
+    ADDRESS_HEX="$(printf '0x%x' "$ADDRESS")"
     SYMBOL="$(xcrun atos \
         -arch "$ARCHITECTURE" \
         -o "$DWARF_PATH" \
-        -l "$LOAD_ADDRESS" \
-        "$ADDRESS")"
+        -l "$LOAD_ADDRESS_HEX" \
+        "$ADDRESS_HEX")"
     printf '#%d 0x%x %s\n' "$FRAME_NUMBER" "$ADDRESS" "$SYMBOL"
     FRAME_NUMBER=$((FRAME_NUMBER + 1))
 done <<<"$IMAGE_OFFSETS"

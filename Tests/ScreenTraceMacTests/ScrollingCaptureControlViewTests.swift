@@ -21,6 +21,12 @@ final class ScrollingCaptureControlViewTests: XCTestCase {
             outputHeight: 2_280
         )
         XCTAssertTrue(model.status.contains("慢一点"))
+        model.update(
+            disposition: .stabilizing(frameDifference: 0.2),
+            acceptedFrames: 4,
+            outputHeight: 2_280
+        )
+        XCTAssertTrue(model.status.contains("动态画面"))
 
         let root = ScrollingCaptureControlView(model: model, onCancel: {}, onFinish: {})
         let hostingView = NSHostingView(rootView: root)
@@ -100,6 +106,51 @@ final class ScrollingCaptureControlViewTests: XCTestCase {
         XCTAssertFalse(controller.isActive)
     }
 
+    func testSessionWaitsForAStableViewportBeforeAppendingScrolledContent() async throws {
+        let first = try patternedImage(width: 240, height: 160, verticalOffset: 0)
+        let scrolled = try patternedImage(width: 240, height: 160, verticalOffset: 72)
+        let controller = ScrollingCaptureSessionController()
+        let completed = expectation(description: "stable scrolling capture completed")
+        var captureCount = 0
+        controller.onCompleted = { result, warning in
+            XCTAssertNil(warning)
+            XCTAssertEqual(result.frames.count, 2)
+            XCTAssertGreaterThan(result.image.height, 160)
+            completed.fulfill()
+        }
+
+        controller.begin {
+            captureCount += 1
+            return captureCount == 1 ? first : scrolled
+        }
+        try await Task.sleep(for: .milliseconds(1_180))
+        controller.finish()
+        await fulfillment(of: [completed], timeout: 2)
+    }
+
+    func testSessionDoesNotAppendContinuouslyMovingAnimationFrames() async throws {
+        let frames = try (0..<5).map {
+            try patternedImage(width: 240, height: 160, verticalOffset: $0 * 18)
+        }
+        let controller = ScrollingCaptureSessionController()
+        let completed = expectation(description: "animated capture completed")
+        var captureCount = 0
+        controller.onCompleted = { result, warning in
+            XCTAssertNil(warning)
+            XCTAssertEqual(result.frames.count, 1)
+            XCTAssertEqual(result.image.height, 160)
+            completed.fulfill()
+        }
+
+        controller.begin {
+            defer { captureCount += 1 }
+            return frames[captureCount % frames.count]
+        }
+        try await Task.sleep(for: .milliseconds(1_180))
+        controller.finish()
+        await fulfillment(of: [completed], timeout: 2)
+    }
+
     private func solidImage(width: Int, height: Int) throws -> CGImage {
         guard let context = CGContext(
             data: nil,
@@ -117,6 +168,43 @@ final class ScrollingCaptureControlViewTests: XCTestCase {
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         guard let image = context.makeImage() else {
             throw XCTSkip("Unable to create scrolling session image")
+        }
+        return image
+    }
+
+    private func patternedImage(
+        width: Int,
+        height: Int,
+        verticalOffset: Int
+    ) throws -> CGImage {
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                let documentY = y + verticalOffset
+                let index = (y * width + x) * 4
+                bytes[index] = UInt8((x * 13 + documentY * 7) % 251)
+                bytes[index + 1] = UInt8((x * 3 + documentY * 17) % 241)
+                bytes[index + 2] = UInt8((x * 19 + documentY * 5) % 239)
+                bytes[index + 3] = 255
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+              let image = CGImage(
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 32,
+                  bytesPerRow: width * 4,
+                  space: CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGBitmapInfo.byteOrder32Big.union(
+                      CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+                  ),
+                  provider: provider,
+                  decode: nil,
+                  shouldInterpolate: false,
+                  intent: .defaultIntent
+              ) else {
+            throw XCTSkip("Unable to create patterned scrolling image")
         }
         return image
     }

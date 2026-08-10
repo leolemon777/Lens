@@ -7,6 +7,7 @@ enum ScrollingFrameAppendDisposition: Equatable {
     case first
     case appended(deltaPixels: Int, overlapDifference: Double)
     case duplicate(overlapDifference: Double)
+    case stabilizing(frameDifference: Double)
     case rejected(bestDifference: Double)
     case limitReached
 }
@@ -213,7 +214,9 @@ final class VerticalScrollingCaptureAssembler {
     }
 }
 
-private struct FrameSignature {
+struct FrameSignature {
+    static let stableDifferenceThreshold = 0.018
+
     struct Estimate {
         let deltaRows: Int?
         let bestDifference: Double
@@ -259,13 +262,8 @@ private struct FrameSignature {
         }
         let insetY = max(Int(Double(height) * 0.12), 2)
         let insetX = max(Int(Double(width) * 0.06), 1)
-        let sameDifference = difference(
-            to: current,
-            deltaRows: 0,
-            insetX: insetX,
-            insetY: insetY
-        )
-        if sameDifference <= 0.018 {
+        let sameDifference = sameFrameDifference(to: current)
+        if sameDifference <= Self.stableDifferenceThreshold {
             return Estimate(
                 deltaRows: nil,
                 bestDifference: sameDifference,
@@ -306,6 +304,16 @@ private struct FrameSignature {
             bestDifference: bestDifference.isFinite ? bestDifference : 1,
             sameFrameDifference: sameDifference,
             isDuplicate: false
+        )
+    }
+
+    func sameFrameDifference(to current: FrameSignature) -> Double {
+        guard current.width == width, current.height == height else { return 1 }
+        return difference(
+            to: current,
+            deltaRows: 0,
+            insetX: max(Int(Double(width) * 0.06), 1),
+            insetY: max(Int(Double(height) * 0.12), 2)
         )
     }
 

@@ -27,6 +27,8 @@ final class ScrollingCaptureControlModel: ObservableObject {
             status = "缓慢向下滚动，屏迹会自动去重并拼接"
         case .duplicate:
             status = "画面已对齐，继续向下滚动"
+        case .stabilizing:
+            status = "检测到动态画面，等待稳定后再拼接"
         case .rejected:
             status = "暂未找到稳定重叠，请慢一点滚动"
         case .limitReached:
@@ -104,6 +106,7 @@ final class ScrollingCaptureSessionController {
     private var captureOperation: (() async throws -> CGImage)?
     private var captureTask: Task<Void, Never>?
     private var finalizationTask: Task<Void, Never>?
+    private var lastObservedSignature: FrameSignature?
     private var generation = 0
 
     var onCompleted: ((ScrollingCaptureAssembly, Error?) -> Void)?
@@ -128,6 +131,7 @@ final class ScrollingCaptureSessionController {
         let generation = generation
         assembler = VerticalScrollingCaptureAssembler()
         captureOperation = capture
+        lastObservedSignature = nil
         model.reset()
         positionPanel()
         panel.orderFrontRegardless()
@@ -177,7 +181,7 @@ final class ScrollingCaptureSessionController {
         let image = try await captureOperation()
         try Task.checkCancellation()
         guard self.generation == generation else { throw CancellationError() }
-        let disposition = try assembler.append(image)
+        let disposition = try appendStableFrame(image, to: assembler)
         model.update(
             disposition: disposition,
             acceptedFrames: assembler.acceptedFrameCount,
@@ -204,7 +208,7 @@ final class ScrollingCaptureSessionController {
             if finalCapture, let captureOperation {
                 do {
                     let finalImage = try await captureOperation()
-                    let disposition = try assembler.append(finalImage)
+                    let disposition = try appendStableFrame(finalImage, to: assembler)
                     model.update(
                         disposition: disposition,
                         acceptedFrames: assembler.acceptedFrameCount,
@@ -233,6 +237,26 @@ final class ScrollingCaptureSessionController {
         failure?(error)
     }
 
+    private func appendStableFrame(
+        _ image: CGImage,
+        to assembler: VerticalScrollingCaptureAssembler
+    ) throws -> ScrollingFrameAppendDisposition {
+        let signature = try FrameSignature(image: image)
+        defer { lastObservedSignature = signature }
+
+        guard assembler.acceptedFrameCount > 0 else {
+            return try assembler.append(image)
+        }
+        guard let previous = lastObservedSignature else {
+            return .stabilizing(frameDifference: 1)
+        }
+        let difference = previous.sameFrameDifference(to: signature)
+        guard difference <= FrameSignature.stableDifferenceThreshold else {
+            return .stabilizing(frameDifference: difference)
+        }
+        return try assembler.append(image)
+    }
+
     private func cancel(notify: Bool) {
         let wasActive = isActive
         let cancellation = onCancelled
@@ -243,6 +267,7 @@ final class ScrollingCaptureSessionController {
         finalizationTask = nil
         assembler = nil
         captureOperation = nil
+        lastObservedSignature = nil
         panel.orderOut(nil)
         model.reset()
         if notify, wasActive { cancellation?() }
@@ -255,6 +280,7 @@ final class ScrollingCaptureSessionController {
         finalizationTask = nil
         assembler = nil
         captureOperation = nil
+        lastObservedSignature = nil
         panel.orderOut(nil)
         model.reset()
     }

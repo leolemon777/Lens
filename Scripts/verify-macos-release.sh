@@ -228,6 +228,9 @@ if [[ "$MODE" == "public" ]]; then
         || public_fail "DMG notarization request ID is missing"
     SIGNATURE_DETAILS="$(codesign -dv --verbose=4 "$ARCHIVED_APP" 2>&1)"
     ACTUAL_TEAM_IDENTIFIER="$(awk -F= '/^TeamIdentifier=/{print $2; exit}' <<< "$SIGNATURE_DETAILS")"
+    ACTUAL_SIGNING_AUTHORITY="$(awk -F= '/^Authority=/{print substr($0, index($0, "=") + 1); exit}' <<< "$SIGNATURE_DETAILS")"
+    [[ "$ACTUAL_SIGNING_AUTHORITY" == "Developer ID Application:"* ]] \
+        || public_fail "App signing Authority is not Developer ID Application: ${ACTUAL_SIGNING_AUTHORITY:-missing}"
     if [[ -n "$TEAM_IDENTIFIER" && "$TEAM_IDENTIFIER" != "not-set" \
         && "$ACTUAL_TEAM_IDENTIFIER" != "$TEAM_IDENTIFIER" ]]; then
         public_fail "signed App Team ID expected=$TEAM_IDENTIFIER actual=${ACTUAL_TEAM_IDENTIFIER:-missing}"

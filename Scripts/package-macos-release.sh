@@ -148,15 +148,20 @@ else
 fi
 SIGNATURE_DETAILS="$(codesign -dv --verbose=4 "$APP_DIR" 2>&1)"
 TEAM_IDENTIFIER="$(awk -F= '/^TeamIdentifier=/{print $2; exit}' <<< "$SIGNATURE_DETAILS")"
+SIGNING_AUTHORITY="$(awk -F= '/^Authority=/{print substr($0, index($0, "=") + 1); exit}' <<< "$SIGNATURE_DETAILS")"
 if [[ -z "$TEAM_IDENTIFIER" || "$TEAM_IDENTIFIER" == "not set" ]]; then
     TEAM_IDENTIFIER="not-set"
 fi
-if [[ "$SIGNING_IDENTITY" == "-" ]]; then
+if grep -q '^Signature=adhoc$' <<< "$SIGNATURE_DETAILS"; then
     SIGNATURE_KIND="ad-hoc"
     RECORDED_SIGNING_IDENTITY="ad-hoc"
-else
+elif [[ "$SIGNING_AUTHORITY" == "Developer ID Application:"* \
+    && "$TEAM_IDENTIFIER" != "not-set" ]]; then
     SIGNATURE_KIND="developer-id"
-    RECORDED_SIGNING_IDENTITY="$SIGNING_IDENTITY"
+    RECORDED_SIGNING_IDENTITY="$SIGNING_AUTHORITY"
+else
+    SIGNATURE_KIND="local"
+    RECORDED_SIGNING_IDENTITY="${SIGNING_AUTHORITY:-$SIGNING_IDENTITY}"
 fi
 
 DMG_SHA256="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"

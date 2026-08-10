@@ -60,6 +60,8 @@ open Build/ScreenTrace.app
 
 发布候选包应使用 `bash Scripts/build-release-artifacts.sh`；脚本会生成 Release App、严格校验签名结构，并在 `Build/Symbols/` 生成与 Mach-O UUID 一致的 dSYM 及 zip 归档。
 
+离线崩溃符号化使用 `Scripts/symbolicate-screen-trace-crash.sh <ScreenTrace.ips> <ScreenTrace.dSYM>`。脚本会先校验 Bundle ID 和 UUID，不一致时拒绝继续；仅符号化故障线程中 ScreenTrace 自身镜像的帧。
+
 首次真实截图或录屏时，需要在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”中授权 ScreenTrace。自动化工具无法代替用户授予该系统隐私权限；物理 `Fn` 组合键也需要手动验收。
 
 ## 项目资料

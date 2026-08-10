@@ -3,6 +3,10 @@ import SwiftUI
 import XCTest
 @testable import ScreenTraceMac
 
+private final class ApplicationMenuTarget: NSObject {
+    @objc func quit() {}
+}
+
 @MainActor
 final class ActionCenterViewTests: XCTestCase {
     func testActionRoutingIncludesAllThreeRecordingSources() {
@@ -20,6 +24,20 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertTrue(CaptureOverlayAction.scrollingCapture.regionGuidance.contains("滚动内容"))
         XCTAssertTrue(CaptureOverlayAction.screenshot.regionGuidance.contains("方向键微调"))
         XCTAssertTrue(CaptureOverlayAction.screenshot.regionGuidance.contains("Option 暂停吸附"))
+    }
+
+    func testAccessoryApplicationMenuProvidesStandardCommandQQuitItem() throws {
+        let target = ApplicationMenuTarget()
+        let mainMenu = AppDelegate.makeApplicationMainMenu(target: target)
+        let applicationMenu = try XCTUnwrap(mainMenu.items.first?.submenu)
+        let quitItem = try XCTUnwrap(applicationMenu.items.first {
+            $0.action == #selector(ApplicationMenuTarget.quit)
+        })
+
+        XCTAssertEqual(quitItem.title, "退出屏迹")
+        XCTAssertEqual(quitItem.keyEquivalent, "q")
+        XCTAssertEqual(quitItem.keyEquivalentModifierMask, [.command])
+        XCTAssertTrue(quitItem.target === target)
     }
 
     func testActionCenterRendersRecordingAndScreenshotMenusAtPanelSize() throws {

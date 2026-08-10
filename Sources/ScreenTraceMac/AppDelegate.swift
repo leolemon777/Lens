@@ -85,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appVersion: version["appVersion"] ?? "development",
             build: version["build"] ?? "development"
         )
+        configureApplicationMenu()
         configureStatusItem()
         wireControllers()
         recoverInterruptedRecordings()
@@ -298,6 +299,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(menuItem("退出屏迹", action: #selector(quit), keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    private func configureApplicationMenu() {
+        NSApp.mainMenu = Self.makeApplicationMainMenu(target: self)
+    }
+
+    static func makeApplicationMainMenu(target: AnyObject) -> NSMenu {
+        let mainMenu = NSMenu(title: "屏迹")
+        let applicationMenuItem = NSMenuItem(title: "屏迹", action: nil, keyEquivalent: "")
+        let applicationMenu = NSMenu(title: "屏迹")
+
+        let aboutItem = NSMenuItem(
+            title: "关于屏迹",
+            action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+            keyEquivalent: ""
+        )
+        aboutItem.target = NSApp
+        applicationMenu.addItem(aboutItem)
+        applicationMenu.addItem(.separator())
+
+        let hideItem = NSMenuItem(
+            title: "隐藏屏迹",
+            action: #selector(NSApplication.hide(_:)),
+            keyEquivalent: "h"
+        )
+        hideItem.target = NSApp
+        applicationMenu.addItem(hideItem)
+
+        let hideOthersItem = NSMenuItem(
+            title: "隐藏其他应用",
+            action: #selector(NSApplication.hideOtherApplications(_:)),
+            keyEquivalent: "h"
+        )
+        hideOthersItem.keyEquivalentModifierMask = [.command, .option]
+        hideOthersItem.target = NSApp
+        applicationMenu.addItem(hideOthersItem)
+
+        let showAllItem = NSMenuItem(
+            title: "显示全部",
+            action: #selector(NSApplication.unhideAllApplications(_:)),
+            keyEquivalent: ""
+        )
+        showAllItem.target = NSApp
+        applicationMenu.addItem(showAllItem)
+        applicationMenu.addItem(.separator())
+
+        let quitItem = NSMenuItem(
+            title: "退出屏迹",
+            action: #selector(quit),
+            keyEquivalent: "q"
+        )
+        quitItem.target = target
+        applicationMenu.addItem(quitItem)
+
+        applicationMenuItem.submenu = applicationMenu
+        mainMenu.addItem(applicationMenuItem)
+        return mainMenu
     }
 
     private func menuItem(

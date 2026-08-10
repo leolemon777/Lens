@@ -68,15 +68,36 @@ final class VideoEditorViewTests: XCTestCase {
         }
         model.selectVideoAnnotation(annotationID)
         let playback = VideoEditorPlaybackController()
+        let inspectorSnapshotPath = ProcessInfo.processInfo.environment[
+            "SCREENTRACE_VIDEO_EDITOR_INSPECTOR_SNAPSHOT"
+        ]
         let root = VideoEditorView(
             model: model,
             playback: playback,
             title: "Safari 产品演示",
+            initialInspectorSection: inspectorSnapshotPath == nil ? nil : .captions,
             onSave: {},
             onClose: {}
         )
         let hostingView = NSHostingView(rootView: root)
         hostingView.frame = CGRect(x: 0, y: 0, width: 1_260, height: 780)
+        let snapshotWindow: NSWindow? = if inspectorSnapshotPath == nil {
+            nil
+        } else {
+            NSWindow(
+                contentRect: hostingView.frame,
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+        }
+        if let snapshotWindow {
+            snapshotWindow.contentView = hostingView
+            snapshotWindow.setFrameOrigin(NSPoint(x: -2_000, y: -2_000))
+            snapshotWindow.orderFront(nil)
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.08))
+        }
+        defer { snapshotWindow?.orderOut(nil) }
         hostingView.layoutSubtreeIfNeeded()
 
         guard let representation = hostingView.bitmapImageRepForCachingDisplay(
@@ -90,6 +111,26 @@ final class VideoEditorViewTests: XCTestCase {
             "SCREENTRACE_VIDEO_EDITOR_SNAPSHOT"
         ], let png {
             try png.write(to: URL(fileURLWithPath: snapshotPath), options: .atomic)
+        }
+        if let inspectorSnapshotPath {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.08))
+            hostingView.layoutSubtreeIfNeeded()
+            hostingView.displayIfNeeded()
+            let inspectorRepresentation = try XCTUnwrap(
+                hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds)
+            )
+            hostingView.cacheDisplay(
+                in: hostingView.bounds,
+                to: inspectorRepresentation
+            )
+            let inspectorPNG = try XCTUnwrap(inspectorRepresentation.representation(
+                using: .png,
+                properties: [:]
+            ))
+            try inspectorPNG.write(
+                to: URL(fileURLWithPath: inspectorSnapshotPath),
+                options: .atomic
+            )
         }
 
         XCTAssertGreaterThanOrEqual(representation.pixelsWide, 1_260)

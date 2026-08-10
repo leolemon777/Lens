@@ -78,7 +78,7 @@ public struct ClickEvent: Codable, Equatable, Sendable {
 }
 
 public struct AutoEditPlan: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.7"
+    public static let currentSchemaVersion = "0.8"
 
     public struct ClickPulse: Codable, Equatable, Sendable {
         public let time: Double
@@ -509,6 +509,22 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         }
     }
 
+    /// Reproducible delivery intent. The platform renderer decides the concrete
+    /// codec while preserving this small, portable set of quality tiers.
+    public struct Export: Codable, Equatable, Sendable {
+        public enum Preset: String, Codable, CaseIterable, Sendable {
+            case source
+            case balanced
+            case compact
+        }
+
+        public var preset: Preset
+
+        public init(preset: Preset = .balanced) {
+            self.preset = preset
+        }
+    }
+
     public var schemaVersion: String
     public var preset: String
     public var cursor: Cursor
@@ -520,6 +536,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     public var timeline: VideoEditTimeline?
     public var captions: Captions?
     public var videoAnnotations: [VideoAnnotation]?
+    public var export: Export?
 
     public init(
         schemaVersion: String = AutoEditPlan.currentSchemaVersion,
@@ -532,7 +549,8 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         interaction: Interaction? = Interaction(),
         timeline: VideoEditTimeline? = nil,
         captions: Captions? = Captions(),
-        videoAnnotations: [VideoAnnotation]? = []
+        videoAnnotations: [VideoAnnotation]? = [],
+        export: Export? = Export()
     ) {
         self.schemaVersion = schemaVersion
         self.preset = preset
@@ -545,5 +563,6 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         self.timeline = timeline
         self.captions = captions
         self.videoAnnotations = videoAnnotations
+        self.export = export
     }
 }

@@ -41,14 +41,16 @@ final class AudioMixdownRenderer: @unchecked Sendable {
         microphoneURL: URL,
         outputURL: URL,
         plan: AutoEditPlan.Audio,
-        timeline: VideoEditTimeline? = nil
+        timeline: VideoEditTimeline? = nil,
+        export: AutoEditPlan.Export? = nil
     ) async throws -> URL {
         try await renderWithReport(
             inputURL: inputURL,
             microphoneURL: microphoneURL,
             outputURL: outputURL,
             plan: plan,
-            timeline: timeline
+            timeline: timeline,
+            export: export
         ).outputURL
     }
 
@@ -57,7 +59,8 @@ final class AudioMixdownRenderer: @unchecked Sendable {
         microphoneURL: URL,
         outputURL: URL,
         plan: AutoEditPlan.Audio,
-        timeline: VideoEditTimeline? = nil
+        timeline: VideoEditTimeline? = nil,
+        export: AutoEditPlan.Export? = nil
     ) async throws -> AudioMixdownRenderReport {
         var voiceProcessingErrorDescription: String?
         var voiceProcessingResult: VoiceAudioProcessingResult?
@@ -236,9 +239,10 @@ final class AudioMixdownRenderer: @unchecked Sendable {
 
         let audioMix = AVMutableAudioMix()
         audioMix.inputParameters = parameters
+        let exportProfile = VideoExportProfile(export)
         guard let exporter = AVAssetExportSession(
             asset: composition,
-            presetName: AVAssetExportPresetHighestQuality
+            presetName: exportProfile.assetExportPresetName
         ) else {
             throw AudioMixdownRendererError.exportSessionUnavailable
         }

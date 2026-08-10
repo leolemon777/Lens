@@ -118,6 +118,7 @@ final class AutoPreviewRenderer {
                 cameraURL: cameraURL,
                 outputURL: outputURL,
                 layout: presenter,
+                export: plan.export,
                 timeline: plan.timeline,
                 cameraKeyframes: presenterAvoidanceKeyframes,
                 captions: captionRenderer == nil ? nil : plan.captions,
@@ -155,9 +156,10 @@ final class AutoPreviewRenderer {
         }
         let cursorImage = try systemCursorImage()
         let clickRingImage = try clickRingImage()
+        let exportProfile = VideoExportProfile(plan.export)
         let composition = try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<AVVideoComposition, Error>) in
-            AVVideoComposition.videoComposition(
+            (continuation: CheckedContinuation<AVMutableVideoComposition, Error>) in
+            AVMutableVideoComposition.videoComposition(
                 with: asset,
                 applyingCIFiltersWithHandler: { request in
                 let time = request.compositionTime.seconds
@@ -183,10 +185,17 @@ final class AutoPreviewRenderer {
                 }
             )
         }
+        let limitedFrameDuration = exportProfile.limitedFrameDuration(
+            composition.frameDuration
+        )
+        if limitedFrameDuration != composition.frameDuration {
+            composition.sourceTrackIDForFrameTiming = kCMPersistentTrackID_Invalid
+            composition.frameDuration = limitedFrameDuration
+        }
 
         guard let exporter = AVAssetExportSession(
             asset: asset,
-            presetName: AVAssetExportPresetHighestQuality
+            presetName: exportProfile.assetExportPresetName
         ) else {
             throw AutoPreviewRendererError.exportSessionUnavailable
         }

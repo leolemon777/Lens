@@ -93,7 +93,8 @@ final class AudioMixdownRendererTests: XCTestCase {
             inputURL: inputURL,
             microphoneURL: microphoneURL,
             outputURL: outputURL,
-            plan: plan
+            plan: plan,
+            export: .init(preset: .compact)
         )
 
         let output = AVURLAsset(url: outputURL)

@@ -908,7 +908,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         microphoneURL: microphoneURL,
                         outputURL: mixedURL,
                         plan: audioPlan,
-                        timeline: plan.timeline
+                        timeline: plan.timeline,
+                        export: plan.export
                     )
                     voiceProcessingFellBack = mixReport
                         .voiceProcessingErrorDescription != nil

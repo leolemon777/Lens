@@ -124,6 +124,12 @@ public struct TraceProjectStore: Sendable {
             plan.videoAnnotations = plan.videoAnnotations?.compactMap {
                 $0.normalized(sourceDurationSeconds: duration)
             }
+            if let customCues = plan.captions?.customCues {
+                plan.captions?.customCues = CaptionCueEditor.normalized(
+                    customCues,
+                    sourceDurationSeconds: duration
+                )
+            }
         }
         return plan
     }
@@ -145,6 +151,12 @@ public struct TraceProjectStore: Sendable {
             )).normalized(sourceDurationSeconds: duration)
             plan.videoAnnotations = plan.videoAnnotations?.compactMap {
                 $0.normalized(sourceDurationSeconds: duration)
+            }
+            if let customCues = plan.captions?.customCues {
+                plan.captions?.customCues = CaptionCueEditor.normalized(
+                    customCues,
+                    sourceDurationSeconds: duration
+                )
             }
         }
 
@@ -781,6 +793,12 @@ public struct TraceProjectStore: Sendable {
         )).normalized(sourceDurationSeconds: durationSeconds)
         plan.videoAnnotations = plan.videoAnnotations?.compactMap {
             $0.normalized(sourceDurationSeconds: durationSeconds)
+        }
+        if let customCues = plan.captions?.customCues {
+            plan.captions?.customCues = CaptionCueEditor.normalized(
+                customCues,
+                sourceDurationSeconds: durationSeconds
+            )
         }
         plan.cursor.keyframes = CursorPathPlanner().plan(events: pointerEvents)
         plan.interaction?.clickPulses = clicks.compactMap { click in

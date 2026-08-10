@@ -424,6 +424,7 @@ final class AutoPreviewRendererTests: XCTestCase {
             style: .greenCamera
         )
         var plan = AutoEditPlan()
+        plan.export = .init(preset: .compact)
         plan.presenterCamera = AutoEditPlan.PresenterCamera(
             isEnabled: true,
             shape: .circle,
@@ -639,6 +640,55 @@ final class AutoPreviewRendererTests: XCTestCase {
                 as? NSNumber)?.int64Value ?? 0,
             1_000
         )
+    }
+
+    @MainActor
+    func testCompactExportCreatesPlayableH264AndCapsSixtyFPSInput() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ScreenTraceCompactExportTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inputURL = directory.appendingPathComponent("input-60fps.mp4")
+        let outputURL = directory.appendingPathComponent("compact.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: inputURL,
+            frameCount: 120,
+            framesPerSecond: 60
+        )
+        var plan = AutoEditPlan(export: .init(preset: .compact))
+        plan.camera.mode = "off"
+        plan.cursor.isEnabled = false
+        plan.interaction?.showsClickPulse = false
+        plan.canvas?.isEnabled = false
+        plan.presenterCamera?.isEnabled = false
+
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: inputURL,
+            outputURL: outputURL,
+            plan: plan
+        )
+
+        let asset = AVURLAsset(url: outputURL)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let formatDescriptions = try await track.load(.formatDescriptions)
+        let format = try XCTUnwrap(formatDescriptions.first)
+        XCTAssertEqual(CMFormatDescriptionGetMediaSubType(format), kCMVideoCodecType_H264)
+        let nominalFrameRate = try await track.load(.nominalFrameRate)
+        XCTAssertLessThanOrEqual(nominalFrameRate, 24.5)
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+        XCTAssertTrue(reader.canAdd(output))
+        reader.add(output)
+        XCTAssertTrue(reader.startReading())
+        var frameCount = 0
+        while output.copyNextSampleBuffer() != nil { frameCount += 1 }
+        XCTAssertEqual(reader.status, .completed)
+        XCTAssertGreaterThan(frameCount, 35)
+        XCTAssertLessThanOrEqual(frameCount, 55)
     }
 
     @MainActor

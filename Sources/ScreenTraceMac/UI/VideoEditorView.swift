@@ -3,21 +3,49 @@ import Combine
 import ScreenTraceCore
 import SwiftUI
 
+enum VideoEditorInspectorSection: Hashable {
+    case captions
+    case export
+}
+
 struct VideoEditorView: View {
     @ObservedObject var model: VideoEditorModel
     @ObservedObject var playback: VideoEditorPlaybackController
     let title: String
+    let initialInspectorSection: VideoEditorInspectorSection?
     let onSave: () -> Void
     let onClose: () -> Void
 
     @State private var presenterDragStart: PresenterCameraFrameState?
     @State private var presenterResizeStart: PresenterCameraFrameState?
+    @State private var inspectorScrollPosition: VideoEditorInspectorSection?
+    @State private var isCaptionCueEditorExpanded: Bool
 
     private let playbackTimer = Timer.publish(
         every: 0.1,
         on: .main,
         in: .common
     ).autoconnect()
+
+    init(
+        model: VideoEditorModel,
+        playback: VideoEditorPlaybackController,
+        title: String,
+        initialInspectorSection: VideoEditorInspectorSection? = nil,
+        onSave: @escaping () -> Void,
+        onClose: @escaping () -> Void
+    ) {
+        self.model = model
+        self.playback = playback
+        self.title = title
+        self.initialInspectorSection = initialInspectorSection
+        self.onSave = onSave
+        self.onClose = onClose
+        _inspectorScrollPosition = State(initialValue: initialInspectorSection)
+        _isCaptionCueEditorExpanded = State(
+            initialValue: initialInspectorSection == .captions
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1067,24 +1095,77 @@ struct VideoEditorView: View {
                             ),
                             range: 0.75...1.5
                         )
-                        Text("保存后会按当前剪辑时间线重新对齐并烧录。")
+                        Text("时码基于原始录屏；剪切、变速、重排后会自动映射到成片。")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(.secondary)
 
-                        DisclosureGroup {
+                        DisclosureGroup(isExpanded: $isCaptionCueEditorExpanded) {
                             LazyVStack(spacing: 8) {
                                 ForEach(
                                     Array(model.captionSourceCues.enumerated()),
                                     id: \.offset
                                 ) { index, cue in
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(String(
-                                            format: "%@ – %@",
-                                            captionTimeText(cue.sourceStartSeconds),
-                                            captionTimeText(cue.sourceEndSeconds)
-                                        ))
-                                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                                        .foregroundStyle(.secondary)
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        HStack(spacing: 5) {
+                                            Button {
+                                                model.selectCaptionCue(at: index)
+                                                if let time = model.primaryCaptionOutputTime(at: index) {
+                                                    playback.seek(to: time)
+                                                }
+                                            } label: {
+                                                HStack(spacing: 4) {
+                                                    Image(systemName: "play.fill")
+                                                        .font(.system(size: 6, weight: .bold))
+                                                    Text(String(
+                                                        format: "%@ – %@",
+                                                        captionTimeText(cue.sourceStartSeconds),
+                                                        captionTimeText(cue.sourceEndSeconds)
+                                                    ))
+                                                    .font(.system(
+                                                        size: 8,
+                                                        weight: .semibold,
+                                                        design: .monospaced
+                                                    ))
+                                                }
+                                            }
+                                            .buttonStyle(.plain)
+                                            .foregroundStyle(
+                                                model.selectedCaptionCueIndex == index
+                                                    ? Color.cyan
+                                                    : Color.secondary
+                                            )
+                                            Spacer(minLength: 2)
+                                            Text("入")
+                                                .font(.system(size: 7.5, weight: .medium))
+                                                .foregroundStyle(.tertiary)
+                                            TextField("", value: Binding(
+                                                get: {
+                                                    let cues = model.captionSourceCues
+                                                    return cues.indices.contains(index)
+                                                        ? cues[index].sourceStartSeconds
+                                                        : 0
+                                                },
+                                                set: { model.setCaptionCueStart($0, at: index) }
+                                            ), format: .number.precision(.fractionLength(2)))
+                                            .multilineTextAlignment(.trailing)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(width: 45)
+                                            Text("出")
+                                                .font(.system(size: 7.5, weight: .medium))
+                                                .foregroundStyle(.tertiary)
+                                            TextField("", value: Binding(
+                                                get: {
+                                                    let cues = model.captionSourceCues
+                                                    return cues.indices.contains(index)
+                                                        ? cues[index].sourceEndSeconds
+                                                        : 0
+                                                },
+                                                set: { model.setCaptionCueEnd($0, at: index) }
+                                            ), format: .number.precision(.fractionLength(2)))
+                                            .multilineTextAlignment(.trailing)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(width: 45)
+                                        }
                                         TextField("留空可隐藏这条字幕", text: Binding(
                                             get: {
                                                 let cues = model.captionSourceCues
@@ -1095,7 +1176,52 @@ struct VideoEditorView: View {
                                             set: { model.setCaptionCueText($0, at: index) }
                                         ))
                                         .textFieldStyle(.roundedBorder)
+                                        HStack(spacing: 10) {
+                                            Button("在播放头分割") {
+                                                model.selectCaptionCue(at: index)
+                                                model.splitCaptionCue(
+                                                    at: index,
+                                                    atOutputTime: playback.currentTimeSeconds
+                                                )
+                                            }
+                                            .disabled(!model.canSplitCaptionCue(
+                                                at: index,
+                                                atOutputTime: playback.currentTimeSeconds
+                                            ))
+                                            Button("与下一条合并") {
+                                                model.selectCaptionCue(at: index)
+                                                model.mergeCaptionCueWithNext(at: index)
+                                            }
+                                            .disabled(index + 1 >= model.captionSourceCues.count)
+                                            Spacer()
+                                            Button(role: .destructive) {
+                                                model.deleteCaptionCue(at: index)
+                                            } label: {
+                                                Image(systemName: "trash")
+                                            }
+                                            .help("删除这条自定义字幕；原始转写仍会保留")
+                                        }
+                                        .font(.system(size: 8.5, weight: .semibold))
+                                        .buttonStyle(.borderless)
                                     }
+                                    .padding(7)
+                                    .background(
+                                        model.selectedCaptionCueIndex == index
+                                            ? Color.cyan.opacity(0.08)
+                                            : Color.primary.opacity(0.035),
+                                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    )
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                            .stroke(
+                                                model.selectedCaptionCueIndex == index
+                                                    ? Color.cyan.opacity(0.35)
+                                                    : Color.primary.opacity(0.045),
+                                                lineWidth: 0.7
+                                            )
+                                    }
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { model.selectCaptionCue(at: index) }
                                 }
                             }
                             .padding(.top, 6)
@@ -1113,13 +1239,40 @@ struct VideoEditorView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                .id(VideoEditorInspectorSection.captions)
+
+                inspectorSection("导出", symbol: "square.and.arrow.up") {
+                    Picker("质量预设", selection: Binding(
+                        get: { model.exportPreset },
+                        set: { model.setExportPreset($0) }
+                    )) {
+                        Text("原画").tag(AutoEditPlan.Export.Preset.source)
+                        Text("平衡").tag(AutoEditPlan.Export.Preset.balanced)
+                        Text("轻量").tag(AutoEditPlan.Export.Preset.compact)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    Text(exportPresetDescription)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Label(
+                        "MP4 · H.264 · 适合即时分享",
+                        systemImage: "checkmark.seal.fill"
+                    )
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(.cyan)
+                }
+                .id(VideoEditorInspectorSection.export)
 
                 Button("恢复到打开时的方案", action: model.resetToAutomaticPlan)
                     .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
             }
             .padding(14)
+            .scrollTargetLayout()
         }
+        .scrollPosition(id: $inspectorScrollPosition, anchor: .top)
+        .defaultScrollAnchor(initialInspectorSection == nil ? .top : .bottom)
         .frame(width: 292)
         .background(.thinMaterial)
     }
@@ -1247,6 +1400,17 @@ struct VideoEditorView: View {
         let value = max(seconds.isFinite ? seconds : 0, 0)
         let minutes = Int(value / 60)
         return String(format: "%d:%04.1f", minutes, value - Double(minutes * 60))
+    }
+
+    private var exportPresetDescription: String {
+        switch model.exportPreset {
+        case .source:
+            "保留源帧率与最高画质，适合归档和二次剪辑。"
+        case .balanced:
+            "最高 30 fps，在清晰度、生成速度和文件体积之间取平衡。"
+        case .compact:
+            "最高 24 fps 并压缩体积，适合消息与网页快速发送。"
+        }
     }
 }
 

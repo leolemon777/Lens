@@ -78,4 +78,22 @@ final class AutoEditPlanTests: XCTestCase {
 
         XCTAssertNil(decoded.captions)
     }
+
+    func testExportPresetRoundTripsAndLegacyPlanPreservesSourceQuality() throws {
+        let plan = AutoEditPlan(export: .init(preset: .compact))
+        let encoded = try JSONEncoder().encode(plan)
+        let decoded = try JSONDecoder().decode(AutoEditPlan.self, from: encoded)
+
+        XCTAssertEqual(decoded.export?.preset, .compact)
+        XCTAssertEqual(decoded.schemaVersion, "0.8")
+
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object.removeValue(forKey: "export")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+        let legacy = try JSONDecoder().decode(AutoEditPlan.self, from: legacyData)
+
+        XCTAssertNil(legacy.export)
+    }
 }

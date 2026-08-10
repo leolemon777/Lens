@@ -25,6 +25,7 @@ final class VideoEditorModel: ObservableObject {
     @Published var selectedVideoAnnotationColor: TraceColor = .red
     @Published var videoAnnotationTextDraft = "重点"
     @Published var defaultVideoAnnotationDurationSeconds = 2.0
+    @Published private(set) var selectedCaptionCueIndex: Int?
 
     let sourceDurationSeconds: Double
     let hasCameraTrack: Bool
@@ -76,11 +77,11 @@ final class VideoEditorModel: ObservableObject {
         plan.videoAnnotations = (plan.videoAnnotations ?? []).compactMap {
             $0.normalized(sourceDurationSeconds: duration)
         }
-        plan.captions?.customCues?.sort {
-            if $0.sourceStartSeconds != $1.sourceStartSeconds {
-                return $0.sourceStartSeconds < $1.sourceStartSeconds
-            }
-            return $0.sourceEndSeconds < $1.sourceEndSeconds
+        if let customCues = plan.captions?.customCues {
+            plan.captions?.customCues = CaptionCueEditor.normalized(
+                customCues,
+                sourceDurationSeconds: duration
+            )
         }
         let automaticCaptionSourceCues = transcript.map {
             CaptionCuePlanner.sourceCues(
@@ -160,8 +161,20 @@ final class VideoEditorModel: ObservableObject {
     }
     var hasTranscript: Bool { transcript?.segments.isEmpty == false }
     var captionsEnabled: Bool { plan.captions?.isEnabled == true }
+    var exportPreset: AutoEditPlan.Export.Preset {
+        plan.export?.preset ?? .source
+    }
     var captionSourceCues: [CaptionSourceCue] {
         plan.captions?.customCues ?? automaticCaptionSourceCues
+    }
+    var selectedCaptionCue: CaptionSourceCue? {
+        guard let selectedCaptionCueIndex,
+              captionSourceCues.indices.contains(selectedCaptionCueIndex) else { return nil }
+        return captionSourceCues[selectedCaptionCueIndex]
+    }
+    var canMergeSelectedCaptionCueWithNext: Bool {
+        guard let selectedCaptionCueIndex else { return false }
+        return captionSourceCues.indices.contains(selectedCaptionCueIndex + 1)
     }
     var videoAnnotations: [VideoAnnotation] { plan.videoAnnotations ?? [] }
     var selectedVideoAnnotation: VideoAnnotation? {
@@ -971,28 +984,126 @@ final class VideoEditorModel: ObservableObject {
         }
     }
 
-    func setCaptionCueText(_ text: String, at index: Int) {
-        guard transcript != nil else { return }
-        let displayedCues = captionSourceCues
-        guard displayedCues.indices.contains(index) else { return }
-        let displayedCue = displayedCues[index]
+    func setExportPreset(_ preset: AutoEditPlan.Export.Preset) {
         mutate { plan in
-            if plan.captions == nil { plan.captions = .init() }
-            guard var captions = plan.captions else { return }
-            if captions.customCues == nil {
-                captions.customCues = automaticCaptionSourceCues
-            }
-            guard let customIndex = captions.customCues?.firstIndex(of: displayedCue) else {
-                return
-            }
-            captions.customCues?[customIndex].text = text
-            plan.captions = captions
+            if plan.export == nil { plan.export = .init(preset: .source) }
+            plan.export?.preset = preset
         }
+    }
+
+    func setCaptionCueText(_ text: String, at index: Int) {
+        mutateCaptionCues { cues in
+            guard cues.indices.contains(index), cues[index].text != text else { return nil }
+            var updated = cues
+            updated[index].text = text
+            return updated
+        }
+    }
+
+    func selectCaptionCue(at index: Int?) {
+        guard let index else {
+            selectedCaptionCueIndex = nil
+            return
+        }
+        guard captionSourceCues.indices.contains(index) else { return }
+        selectedCaptionCueIndex = index
+    }
+
+    func captionOutputRanges(at index: Int) -> [VideoEditTimeRange] {
+        let cues = captionSourceCues
+        guard cues.indices.contains(index) else { return [] }
+        let cue = cues[index]
+        return timeline.outputRanges(forSourceRange: VideoEditTimeRange(
+            startSeconds: cue.sourceStartSeconds,
+            endSeconds: cue.sourceEndSeconds
+        ))
+    }
+
+    func primaryCaptionOutputTime(at index: Int) -> Double? {
+        captionOutputRanges(at: index).first?.startSeconds
+    }
+
+    func setCaptionCueStart(_ seconds: Double, at index: Int) {
+        mutateCaptionCues { cues in
+            CaptionCueEditor.retimed(
+                cues,
+                at: index,
+                sourceStartSeconds: seconds,
+                sourceDurationSeconds: sourceDurationSeconds
+            )
+        }
+    }
+
+    func setCaptionCueEnd(_ seconds: Double, at index: Int) {
+        mutateCaptionCues { cues in
+            CaptionCueEditor.retimed(
+                cues,
+                at: index,
+                sourceEndSeconds: seconds,
+                sourceDurationSeconds: sourceDurationSeconds
+            )
+        }
+    }
+
+    func canSplitCaptionCue(at index: Int, atOutputTime outputTime: Double) -> Bool {
+        let cues = captionSourceCues
+        guard cues.indices.contains(index),
+              let sourceTime = timeline.position(atOutputTime: outputTime)?.sourceTimeSeconds else {
+            return false
+        }
+        return CaptionCueEditor.split(
+            cues,
+            at: index,
+            sourceTimeSeconds: sourceTime
+        ) != nil
+    }
+
+    @discardableResult
+    func splitCaptionCue(at index: Int, atOutputTime outputTime: Double) -> Bool {
+        guard let sourceTime = timeline.position(atOutputTime: outputTime)?.sourceTimeSeconds else {
+            return false
+        }
+        let changed = mutateCaptionCues { cues in
+            CaptionCueEditor.split(
+                cues,
+                at: index,
+                sourceTimeSeconds: sourceTime
+            )
+        }
+        if changed { selectedCaptionCueIndex = index + 1 }
+        return changed
+    }
+
+    @discardableResult
+    func mergeCaptionCueWithNext(at index: Int) -> Bool {
+        let changed = mutateCaptionCues { cues in
+            CaptionCueEditor.mergedWithNext(
+                cues,
+                at: index,
+                localeIdentifier: transcript?.localeIdentifier ?? "und"
+            )
+        }
+        if changed { selectedCaptionCueIndex = index }
+        return changed
+    }
+
+    func deleteCaptionCue(at index: Int) {
+        let changed = mutateCaptionCues { cues in
+            guard cues.indices.contains(index) else { return nil }
+            var updated = cues
+            updated.remove(at: index)
+            return updated
+        }
+        guard changed else { return }
+        selectedCaptionCueIndex = captionSourceCues.isEmpty
+            ? nil
+            : min(index, captionSourceCues.count - 1)
     }
 
     func restoreAutomaticCaptionText() {
         guard plan.captions?.customCues != nil else { return }
         mutate { $0.captions?.customCues = nil }
+        selectedCaptionCueIndex = nil
     }
 
     func undo() {
@@ -1072,6 +1183,37 @@ final class VideoEditorModel: ObservableObject {
            !videoAnnotations.contains(where: { $0.id == selectedVideoAnnotationID }) {
             self.selectedVideoAnnotationID = nil
         }
+        if let selectedCaptionCueIndex {
+            self.selectedCaptionCueIndex = captionSourceCues.isEmpty
+                ? nil
+                : min(max(selectedCaptionCueIndex, 0), captionSourceCues.count - 1)
+        }
+    }
+
+    @discardableResult
+    private func mutateCaptionCues(
+        _ mutation: ([CaptionSourceCue]) -> [CaptionSourceCue]?
+    ) -> Bool {
+        guard transcript != nil else { return false }
+        var changed = false
+        mutate { plan in
+            if plan.captions == nil { plan.captions = .init() }
+            guard var captions = plan.captions else { return }
+            let cues = CaptionCueEditor.normalized(
+                captions.customCues ?? automaticCaptionSourceCues,
+                sourceDurationSeconds: sourceDurationSeconds
+            )
+            guard let edited = mutation(cues) else { return }
+            let normalized = CaptionCueEditor.normalized(
+                edited,
+                sourceDurationSeconds: sourceDurationSeconds
+            )
+            guard normalized != cues || captions.customCues == nil else { return }
+            captions.customCues = normalized
+            plan.captions = captions
+            changed = true
+        }
+        return changed
     }
 
     private func sourceTime(atOutputTime outputTime: Double) -> Double {

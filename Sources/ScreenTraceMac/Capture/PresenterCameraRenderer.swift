@@ -32,11 +32,13 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         cameraURL: URL,
         outputURL: URL,
         layout: AutoEditPlan.PresenterCamera,
+        export: AutoEditPlan.Export? = nil,
         timeline: VideoEditTimeline? = nil,
         cameraKeyframes: [AutoEditPlan.CameraKeyframe] = [],
         captions: AutoEditPlan.Captions? = nil,
         captionCues: [CaptionCue]? = nil
     ) async throws -> URL {
+        let exportProfile = VideoExportProfile(export)
         let screenAsset = AVURLAsset(url: screenURL)
         let transitionedCameraURL: URL? = if timeline?.hasActiveTransitions == true {
             outputURL.deletingLastPathComponent().appendingPathComponent(
@@ -126,7 +128,10 @@ final class PresenterCameraRenderer: @unchecked Sendable {
                 AVVideoWidthKey: Int(outputSize.width.rounded()),
                 AVVideoHeightKey: Int(outputSize.height.rounded()),
                 AVVideoCompressionPropertiesKey: [
-                    AVVideoAverageBitRateKey: Self.videoBitRate(for: outputSize),
+                    AVVideoAverageBitRateKey: Self.videoBitRate(
+                        for: outputSize,
+                        scale: exportProfile.presenterBitRateScale
+                    ),
                     AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
                 ]
             ]
@@ -387,9 +392,13 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         return CGSize(width: abs(rect.width).rounded(), height: abs(rect.height).rounded())
     }
 
-    private nonisolated static func videoBitRate(for size: CGSize) -> Int {
+    private nonisolated static func videoBitRate(
+        for size: CGSize,
+        scale: Double
+    ) -> Int {
         let pixels = max(size.width * size.height, 1)
-        return Int(min(max(pixels * 8, 4_000_000), 28_000_000))
+        let safeScale = min(max(scale.isFinite ? scale : 1, 0.2), 1)
+        return Int(min(max(pixels * 8 * safeScale, 1_500_000), 28_000_000))
     }
 
     private nonisolated static func attachAudio(

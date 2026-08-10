@@ -289,6 +289,73 @@ final class VideoEditorModelTests: XCTestCase {
         XCTAssertFalse(model.isDirty)
     }
 
+    func testCaptionTimingSplitMergeDeleteAndExportPresetAreUndoable() throws {
+        let transcript = TranscriptDocument(
+            engine: "test",
+            generatedAt: Date(timeIntervalSince1970: 0),
+            localeIdentifier: "zh-Hans",
+            isOnDevice: true,
+            sourceRole: .microphone,
+            segments: [TranscriptSegment(
+                startSeconds: 0,
+                endSeconds: 3,
+                text: "原始转写不会改变",
+                confidence: 1
+            )]
+        )
+        var plan = AutoEditPlan(timeline: VideoEditTimeline(
+            sourceDurationSeconds: 4,
+            segments: [VideoEditSegment(
+                sourceStartSeconds: 0,
+                sourceEndSeconds: 4,
+                playbackRate: 2
+            )]
+        ))
+        plan.captions?.customCues = [
+            CaptionSourceCue(
+                sourceStartSeconds: 0,
+                sourceEndSeconds: 2,
+                text: "先录制，然后整理"
+            ),
+            CaptionSourceCue(
+                sourceStartSeconds: 2,
+                sourceEndSeconds: 3,
+                text: "完成"
+            )
+        ]
+        let model = VideoEditorModel(
+            plan: plan,
+            sourceDurationSeconds: 4,
+            hasCameraTrack: false,
+            transcript: transcript
+        )
+
+        model.selectCaptionCue(at: 0)
+        XCTAssertEqual(model.primaryCaptionOutputTime(at: 0), 0)
+        XCTAssertTrue(model.canSplitCaptionCue(at: 0, atOutputTime: 0.5))
+        XCTAssertTrue(model.splitCaptionCue(at: 0, atOutputTime: 0.5))
+        XCTAssertEqual(model.captionSourceCues.count, 3)
+        XCTAssertEqual(model.selectedCaptionCueIndex, 1)
+        XCTAssertEqual(model.captionSourceCues[0].sourceEndSeconds, 1)
+        XCTAssertEqual(model.captionSourceCues[1].sourceStartSeconds, 1)
+
+        XCTAssertTrue(model.mergeCaptionCueWithNext(at: 0))
+        XCTAssertEqual(model.captionSourceCues.count, 2)
+        XCTAssertEqual(model.captionSourceCues[0].text, "先录制，然后整理")
+        model.setCaptionCueEnd(1.6, at: 0)
+        XCTAssertEqual(model.captionSourceCues[0].sourceEndSeconds, 1.6)
+        model.deleteCaptionCue(at: 1)
+        XCTAssertEqual(model.captionSourceCues.count, 1)
+
+        model.setExportPreset(.compact)
+        XCTAssertEqual(model.exportPreset, .compact)
+        model.undo()
+        XCTAssertEqual(model.exportPreset, .balanced)
+        model.undo()
+        XCTAssertEqual(model.captionSourceCues.count, 2)
+        XCTAssertEqual(transcript.fullText, "原始转写不会改变")
+    }
+
     func testPresenterDragAndResizeCommitAsOneUndoableInteraction() throws {
         var plan = AutoEditPlan()
         plan.presenterCamera = .init(

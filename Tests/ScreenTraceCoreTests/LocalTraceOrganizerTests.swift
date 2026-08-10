@@ -161,7 +161,7 @@ final class LocalTraceOrganizerTests: XCTestCase {
     }
 
     func testSensitiveCaptureMetadataCannotLeakThroughTitleOrTags() throws {
-        let accessKey = "AKIA1234567890ABCDEF"
+        let syntheticCredential = "api_key: synthetic-private-value"
         let email = "owner@example.com"
         let manifest = TraceManifest(
             kind: .screenshot,
@@ -172,7 +172,7 @@ final class LocalTraceOrganizerTests: XCTestCase {
                 windowID: 1,
                 globalBounds: TraceRect(x: 0, y: 0, width: 100, height: 100),
                 windowTitle: "Account \(email)",
-                applicationName: accessKey
+                applicationName: syntheticCredential
             ),
             assets: []
         )
@@ -183,7 +183,7 @@ final class LocalTraceOrganizerTests: XCTestCase {
         )
         let encoded = String(decoding: try JSONEncoder().encode(insights), as: UTF8.self)
 
-        XCTAssertFalse(encoded.contains(accessKey))
+        XCTAssertFalse(encoded.contains(syntheticCredential))
         XCTAssertFalse(encoded.contains(email))
         XCTAssertEqual(
             Set(insights.sensitiveFindings.map(\.kind)),

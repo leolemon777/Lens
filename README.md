@@ -67,6 +67,8 @@ open Build/ScreenTrace.app
 
 本地可安装 DMG、App zip、dSYM 与 SHA-256 清单使用 `bash Scripts/package-macos-release.sh`，输出到 `Build/Releases/`。默认仍是 ad-hoc 签名且跳过公证；发布环境需通过 `SCREENTRACE_SIGNING_IDENTITY`、`SCREENTRACE_NOTARY_PROFILE`、`SCREENTRACE_VERSION` 和 `SCREENTRACE_BUILD_NUMBER` 显式提供签名/公证与版本信息。公证凭据只通过 `notarytool` 钥匙串 profile 读取，不写入仓库或命令行。
 
+公开源码前执行 `bash Scripts/audit-public-source.sh`；它会拒绝被 Git 跟踪的媒体、项目包、崩溃报告、发布/签名文件、超大或非文本文件，以及常见私钥和访问令牌格式。脚本通过不代表已经选定许可证。
+
 离线崩溃符号化使用 `Scripts/symbolicate-screen-trace-crash.sh <ScreenTrace.ips> <ScreenTrace.dSYM>`。脚本会先校验 Bundle ID 和 UUID，不一致时拒绝继续；仅符号化故障线程中 ScreenTrace 自身镜像的帧。
 
 首次真实截图或录屏时，需要在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”中授权 ScreenTrace。自动化工具无法代替用户授予该系统隐私权限；物理 `Fn` 组合键也需要手动验收。
@@ -79,6 +81,7 @@ open Build/ScreenTrace.app
 - [当前测试记录](docs/测试记录-2026-08-09.md)
 - [核心工作进程协议 v0.1](docs/屏迹核心工作进程协议-v0.1.md)
 - [macOS 发布检查清单](docs/发布检查清单.md)
+- [第三方依赖与素材清单](docs/第三方依赖与素材清单.md)
 - [安装、权限、升级与卸载](docs/安装与权限指南.md)
 - [隐私说明](PRIVACY.md)
 - [贡献指南](CONTRIBUTING.md)

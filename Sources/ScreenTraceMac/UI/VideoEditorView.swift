@@ -172,7 +172,7 @@ struct VideoEditorView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.68))
             } else {
-                VideoPlayer(player: playback.player)
+                VideoEditorPlayerView(player: playback.player)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .padding(8)
             }
@@ -1452,6 +1452,30 @@ struct VideoEditorView: View {
         case .compact:
             "最高 24 fps 并压缩体积，适合消息与网页快速发送。"
         }
+    }
+}
+
+struct VideoEditorPlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .none
+        view.videoGravity = .resizeAspect
+        view.setAccessibilityElement(false)
+        view.setAccessibilityHidden(true)
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player {
+            view.player = player
+        }
+    }
+
+    static func dismantleNSView(_ view: AVPlayerView, coordinator: Void) {
+        view.player = nil
     }
 }
 

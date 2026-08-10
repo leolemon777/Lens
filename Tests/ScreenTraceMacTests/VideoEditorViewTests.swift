@@ -1,4 +1,5 @@
 import AppKit
+import AVKit
 import ScreenTraceCore
 import SwiftUI
 import XCTest
@@ -6,6 +7,48 @@ import XCTest
 
 @MainActor
 final class VideoEditorViewTests: XCTestCase {
+    func testLoadedPlayerUsesNativeAVPlayerViewWithoutSwiftUIVideoPlayerMetadata() throws {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 2,
+            hasCameraTrack: false,
+            hasMicrophoneTrack: false,
+            transcript: nil
+        )
+        let playback = VideoEditorPlaybackController()
+        playback.player.replaceCurrentItem(with: AVPlayerItem(asset: AVMutableComposition()))
+        let hostingView = NSHostingView(rootView: VideoEditorView(
+            model: model,
+            playback: playback,
+            title: "已加载播放器回归",
+            onSave: {},
+            onClose: {}
+        ))
+        hostingView.frame = CGRect(x: 0, y: 0, width: 1_260, height: 780)
+        let window = NSWindow(
+            contentRect: hostingView.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.setFrameOrigin(NSPoint(x: -2_000, y: -2_000))
+        window.orderFront(nil)
+        defer {
+            playback.stop()
+            window.orderOut(nil)
+        }
+
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.12))
+        hostingView.layoutSubtreeIfNeeded()
+
+        let playerView = try XCTUnwrap(firstSubview(of: AVPlayerView.self, in: hostingView))
+        XCTAssertTrue(playerView.player === playback.player)
+        XCTAssertEqual(playerView.controlsStyle, .none)
+        XCTAssertFalse(playerView.isAccessibilityElement())
+        XCTAssertTrue(playerView.isAccessibilityHidden())
+    }
+
     func testUnifiedEditorRendersPreviewTimelineAndInspectorAtDesktopSize() throws {
         var plan = AutoEditPlan()
         let annotationID = UUID()
@@ -136,5 +179,20 @@ final class VideoEditorViewTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(representation.pixelsWide, 1_260)
         XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 780)
         XCTAssertGreaterThan(png?.count ?? 0, 35_000)
+    }
+
+    private func firstSubview<View: NSView>(
+        of type: View.Type,
+        in root: NSView
+    ) -> View? {
+        if let match = root as? View {
+            return match
+        }
+        for subview in root.subviews {
+            if let match = firstSubview(of: type, in: subview) {
+                return match
+            }
+        }
+        return nil
     }
 }

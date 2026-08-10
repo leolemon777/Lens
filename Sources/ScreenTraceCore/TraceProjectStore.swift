@@ -869,6 +869,49 @@ public struct TraceProjectStore: Sendable {
         return recovered
     }
 
+    /// Returns projects that still need media-level recovery. Keeping this separate from
+    /// `recoverInterruptedRecordings()` lets launch recovery be retried if the app itself exits
+    /// after the manifest was marked interrupted but before preview generation completed.
+    public func interruptedRecordingCandidates() -> [RecordingRecoveryCandidate] {
+        tracePackageURLs(in: rootDirectory).compactMap { url in
+            guard let manifest = try? loadManifest(from: url),
+                  manifest.kind == .recording,
+                  manifest.state == .interrupted,
+                  manifest.durationSeconds == nil else {
+                return nil
+            }
+            return RecordingRecoveryCandidate(
+                packageURL: url,
+                videoURL: url.appendingPathComponent("raw/screen.mp4"),
+                manifest: manifest
+            )
+        }
+    }
+
+    /// Projects can be left in processing if the app exits after the raw recording was finalized
+    /// but before preview generation or the final manifest write completes.
+    public func recordingsPendingProcessing() -> [SavedTrace] {
+        tracePackageURLs(in: rootDirectory).compactMap { url in
+            guard let manifest = try? loadManifest(from: url),
+                  manifest.kind == .recording,
+                  manifest.state == .processing,
+                  manifest.durationSeconds != nil,
+                  let screenAsset = manifest.assets.first(where: { $0.role == .screenVideo }) else {
+                return nil
+            }
+            let rawAssetURL = url.appendingPathComponent(screenAsset.relativePath)
+            let rawSize = (try? FileManager.default.attributesOfItem(
+                atPath: rawAssetURL.path
+            )[.size] as? NSNumber)?.int64Value ?? 0
+            guard rawSize > 0 else { return nil }
+            return SavedTrace(
+                packageURL: url,
+                rawAssetURL: rawAssetURL,
+                manifest: manifest
+            )
+        }
+    }
+
     public func completeProcessing(
         packageURL: URL,
         renderedVideoURL: URL

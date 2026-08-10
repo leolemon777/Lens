@@ -215,18 +215,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func recoverInterruptedRecordings() {
-        let recovered = store.recoverInterruptedRecordings()
-        guard !recovered.isEmpty else { return }
-        logDiagnostic(
-            "recording.recovered",
-            level: .warning,
-            metadata: ["count": String(recovered.count)]
-        )
-        toast.show(
-            title: "发现并保留了 \(recovered.count) 条中断录屏",
-            detail: "原始分片未被删除，可在屏迹目录中恢复",
-            symbol: "arrow.counterclockwise.circle.fill"
-        )
+        _ = store.recoverInterruptedRecordings()
+        let recovered = store.interruptedRecordingCandidates()
+        let pendingProcessing = store.recordingsPendingProcessing()
+        guard !recovered.isEmpty || !pendingProcessing.isEmpty else { return }
+        if !recovered.isEmpty {
+            logDiagnostic(
+                "recording.recovery_detected",
+                level: .warning,
+                metadata: ["count": String(recovered.count)]
+            )
+        }
+        if !pendingProcessing.isEmpty {
+            logDiagnostic(
+                "recording.processing_resume_detected",
+                level: .warning,
+                metadata: ["count": String(pendingProcessing.count)]
+            )
+        }
+        if !recovered.isEmpty {
+            toast.show(
+                title: "正在恢复 \(recovered.count) 条中断录屏",
+                detail: "正在校验原始分片并生成可编辑预览",
+                symbol: "arrow.counterclockwise.circle.fill"
+            )
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var completedCount = 0
+            for candidate in recovered {
+                do {
+                    let saved = try await recordingService.recoverInterruptedRecording(candidate)
+                    completedCount += 1
+                    await processRecording(saved)
+                } catch {
+                    logDiagnosticFailure(
+                        "recording.recovery_failed",
+                        error: error,
+                        metadata: ["phase": "interrupted"]
+                    )
+                }
+            }
+            for saved in pendingProcessing {
+                let outputURL = saved.packageURL.appendingPathComponent("previews/auto.mp4")
+                do {
+                    let outputSize = (try? FileManager.default.attributesOfItem(
+                        atPath: outputURL.path
+                    )[.size] as? NSNumber)?.int64Value ?? 0
+                    if outputSize > 0 {
+                        _ = try store.completeProcessing(
+                            packageURL: saved.packageURL,
+                            renderedVideoURL: outputURL
+                        )
+                        traceLibrary.reloadIfVisible()
+                    } else {
+                        await processRecording(saved)
+                    }
+                } catch {
+                    logDiagnosticFailure(
+                        "recording.processing_resume_failed",
+                        error: error,
+                        metadata: ["phase": "processing"]
+                    )
+                }
+            }
+            traceLibrary.reloadIfVisible()
+            if !recovered.isEmpty, completedCount == recovered.count {
+                toast.show(
+                    title: "中断录屏已恢复",
+                    detail: "\(completedCount) 条原始录屏已恢复为可编辑项目",
+                    symbol: "checkmark.circle.fill"
+                )
+            } else if !recovered.isEmpty {
+                toast.show(
+                    title: "部分中断录屏仍需保留",
+                    detail: "已恢复 \(completedCount) 条；无法校验的原始分片没有被删除",
+                    symbol: "exclamationmark.arrow.triangle.2.circlepath"
+                )
+            }
+        }
     }
 
     private func startHotKeys() {

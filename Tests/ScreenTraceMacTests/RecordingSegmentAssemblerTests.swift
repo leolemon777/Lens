@@ -144,6 +144,69 @@ final class RecordingSegmentAssemblerTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testInterruptedSegmentsRecoverIntoProcessableJoinedRecording() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceRecoveryTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let session = try store.beginRecording(width: 640, height: 360)
+        try await SyntheticVideoFactory.makeVideo(
+            at: session.videoURL,
+            frameCount: 12,
+            framesPerSecond: 24
+        )
+        let segmentsDirectory = session.packageURL
+            .appendingPathComponent("raw/segments", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: segmentsDirectory,
+            withIntermediateDirectories: true
+        )
+        let resumedURL = segmentsDirectory.appendingPathComponent("screen-001.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: resumedURL,
+            frameCount: 18,
+            framesPerSecond: 24
+        )
+        try store.appendRecordingSegment(
+            RecordingSegment(
+                index: 1,
+                timelineStartSeconds: 0.5,
+                screenRelativePath: "raw/segments/screen-001.mp4"
+            ),
+            to: session
+        )
+        try store.markRecordingInterrupted(session)
+        let interruptedManifest = try store.loadManifest(from: session.packageURL)
+        let service = ScreenRecordingService(
+            store: store,
+            pointerRecorder: PointerEventRecorder()
+        )
+
+        let saved = try await service.recoverInterruptedRecording(
+            RecordingRecoveryCandidate(
+                packageURL: session.packageURL,
+                videoURL: session.videoURL,
+                manifest: interruptedManifest
+            )
+        )
+
+        let recoveredManifest = try store.loadManifest(from: session.packageURL)
+        let recoveredIndex = try store.loadRecordingSegmentIndex(from: session.packageURL)
+        let joinedDuration = try await duration(of: session.videoURL)
+        XCTAssertEqual(saved.manifest.state, .processing)
+        XCTAssertEqual(recoveredManifest.state, .processing)
+        XCTAssertEqual(recoveredIndex.segments.count, 2)
+        XCTAssertTrue(recoveredIndex.segments.allSatisfy { ($0.durationSeconds ?? 0) > 0 })
+        XCTAssertEqual(
+            recoveredIndex.segments.first?.screenRelativePath,
+            "raw/segments/screen-000.mp4"
+        )
+        XCTAssertEqual(joinedDuration, recoveredManifest.durationSeconds ?? 0, accuracy: 0.05)
+        XCTAssertGreaterThan(joinedDuration, 1.1)
+        XCTAssertNotNil(try store.loadAutoEditPlan(from: session.packageURL).timeline)
+    }
+
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTraceSegmentTests-\(UUID().uuidString)", isDirectory: true)

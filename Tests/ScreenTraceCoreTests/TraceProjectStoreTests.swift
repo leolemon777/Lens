@@ -610,6 +610,29 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(recovered[0].manifest.state, .interrupted)
         XCTAssertEqual(try Data(contentsOf: session.videoURL), partialBytes)
         XCTAssertTrue(store.recoverInterruptedRecordings().isEmpty)
+        XCTAssertEqual(
+            store.interruptedRecordingCandidates().map(\.manifest.id),
+            [session.manifest.id]
+        )
+    }
+
+    func testProcessingRecordingRemainsDiscoverableForLaunchResume() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let session = try store.beginRecording(width: 1920, height: 1080)
+        try Data([1, 2, 3, 4]).write(to: session.videoURL)
+        let saved = try store.finalizeRecording(session, durationSeconds: 4.25)
+
+        let pending = store.recordingsPendingProcessing()
+
+        XCTAssertEqual(pending.map(\.manifest.id), [saved.manifest.id])
+        XCTAssertEqual(
+            pending.first?.rawAssetURL.resolvingSymlinksInPath(),
+            session.videoURL.resolvingSymlinksInPath()
+        )
+        XCTAssertEqual(pending.first?.manifest.durationSeconds, 4.25)
     }
 
     func testScrollingCaptureArchivesEverySourceFrameAndAssemblyPlan() throws {

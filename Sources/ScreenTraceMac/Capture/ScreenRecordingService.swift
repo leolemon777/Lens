@@ -278,6 +278,54 @@ final class ScreenRecordingService: NSObject {
         }
     }
 
+    /// Turns media left behind by an unclean process exit into the same processable project
+    /// produced by a normal stop. Every screen segment is validated before the manifest is
+    /// advanced, so an unreadable partial file remains visibly interrupted instead of being
+    /// presented as a completed recording.
+    func recoverInterruptedRecording(
+        _ candidate: RecordingRecoveryCandidate
+    ) async throws -> SavedTrace {
+        let manifest = try store.loadManifest(from: candidate.packageURL)
+        let session = recoverySession(
+            packageURL: candidate.packageURL,
+            videoURL: candidate.videoURL,
+            manifest: manifest
+        )
+        let index = try store.loadRecordingSegmentIndex(from: candidate.packageURL)
+        var completedSegments: [RecordingSegment] = []
+        for var segment in index.segments.sorted(by: { $0.index < $1.index }) {
+            let segmentURL = candidate.packageURL.appendingPathComponent(
+                segment.screenRelativePath
+            )
+            guard let duration = try? await playableVideoDuration(at: segmentURL),
+                  duration >= VideoEditTimeline.minimumSegmentDurationSeconds else {
+                continue
+            }
+            segment.durationSeconds = duration
+            _ = try store.completeRecordingSegment(
+                index: segment.index,
+                durationSeconds: duration,
+                in: session
+            )
+            completedSegments.append(segment)
+        }
+        guard !completedSegments.isEmpty else {
+            throw ScreenRecordingError.recordingDidNotFinalize
+        }
+
+        completedSegments = try archiveFirstSegmentsIfNeeded(
+            completedSegments,
+            session: session
+        )
+        try await assembleScreenSegments(completedSegments, session: session)
+        await assembleOptionalTracks(completedSegments, session: session)
+        let duration = completedSegments.reduce(0) {
+            $0 + ($1.durationSeconds ?? 0)
+        }
+        _ = try? store.writeAutoEditPlan(for: session, durationSeconds: duration)
+        return try store.finalizeRecording(session, durationSeconds: duration)
+    }
+
     private func startActiveSegment(
         session: RecordingTraceSession,
         source: RecordingCaptureSource,
@@ -319,6 +367,53 @@ final class ScreenRecordingService: NSObject {
             removeEmptyOptionalTracks(paths: paths, session: session)
             throw error
         }
+    }
+
+    private func recoverySession(
+        packageURL: URL,
+        videoURL: URL,
+        manifest: TraceManifest
+    ) -> RecordingTraceSession {
+        func assetURL(for role: TraceAsset.Role) -> URL? {
+            manifest.assets.first(where: { $0.role == role }).map {
+                packageURL.appendingPathComponent($0.relativePath)
+            }
+        }
+        return RecordingTraceSession(
+            packageURL: packageURL,
+            videoURL: videoURL,
+            pointerEventsURL: assetURL(for: .pointerEvents)
+                ?? packageURL.appendingPathComponent("events/pointer.jsonl"),
+            clickEventsURL: assetURL(for: .clickEvents)
+                ?? packageURL.appendingPathComponent("events/clicks.jsonl"),
+            keyboardEventsURL: assetURL(for: .keyboardEvents)
+                ?? packageURL.appendingPathComponent("events/keyboard.jsonl"),
+            windowEventsURL: assetURL(for: .windowEvents)
+                ?? packageURL.appendingPathComponent("events/windows.jsonl"),
+            segmentIndexURL: assetURL(for: .recordingSegments)
+                ?? packageURL.appendingPathComponent("events/segments.json"),
+            editPlanURL: assetURL(for: .editPlan)
+                ?? packageURL.appendingPathComponent("edits/edit-plan.json"),
+            microphoneURL: assetURL(for: .microphone),
+            cameraURL: assetURL(for: .camera),
+            manifest: manifest
+        )
+    }
+
+    private func playableVideoDuration(at url: URL) async throws -> Double {
+        guard url.isNonemptyFile else {
+            throw TraceProjectStoreError.emptyRawRecording
+        }
+        let asset = AVURLAsset(url: url)
+        guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
+            throw RecordingSegmentAssemblerError.missingVideoTrack(url.lastPathComponent)
+        }
+        let timeRange = try await videoTrack.load(.timeRange)
+        let seconds = timeRange.duration.seconds
+        guard timeRange.duration.isNumeric, seconds.isFinite, seconds > 0 else {
+            throw RecordingSegmentAssemblerError.missingVideoTrack(url.lastPathComponent)
+        }
+        return seconds
     }
 
     private func finishActiveSegment(session: RecordingTraceSession) async throws {

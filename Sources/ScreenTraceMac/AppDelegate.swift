@@ -119,7 +119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func wireControllers() {
         quickAccess.onPinRequested = { [weak self] trace, image in
             self?.pinnedImages.pin(trace: trace, image: image)
-            self?.toast.show(title: "已贴在桌面", detail: "双击或按 Esc 关闭贴图", symbol: "pin.fill")
+            self?.toast.show(
+                title: "已贴在桌面",
+                detail: "移入显示工具栏，右键查看更多操作，Esc 关闭",
+                symbol: "pin.fill"
+            )
         }
         quickAccess.onAnnotateRequested = { [weak self] trace, image in
             self?.annotationEditor.show(trace: trace, fallbackImage: image)

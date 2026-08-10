@@ -34,6 +34,38 @@ final class MicrophoneTrackRecorderTests: XCTestCase {
         )
     }
 
+    @MainActor
+    func testTapHandlerCanRunOnAudioQueue() throws {
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceMicrophoneTapTests-\(UUID().uuidString).caf")
+        defer { try? FileManager.default.removeItem(at: outputURL) }
+        let format = try XCTUnwrap(
+            AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)
+        )
+        let buffer = try XCTUnwrap(
+            AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800)
+        )
+        buffer.frameLength = 4_800
+        let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+        for index in 0..<Int(buffer.frameLength) {
+            channel[index] = sin(Float(index) * 0.04) * 0.18
+        }
+
+        let writer = try makeWriter(url: outputURL, format: format)
+        let meter = AudioLevelMeter()
+        let invocation = MicrophoneTapInvocation(
+            tap: MicrophoneTrackRecorder.makeTap(writer: writer, levelMeter: meter),
+            buffer: buffer
+        )
+
+        DispatchQueue(label: "app.screentrace.tests.microphone-tap").sync {
+            invocation.run()
+        }
+
+        XCTAssertNil(writer.failure)
+        XCTAssertGreaterThan(meter.level, 0)
+    }
+
     private func makeWriter(url: URL, format: AVAudioFormat) throws -> MicrophoneFileWriter {
         let file = try AVAudioFile(
             forWriting: url,
@@ -42,5 +74,19 @@ final class MicrophoneTrackRecorderTests: XCTestCase {
             interleaved: format.isInterleaved
         )
         return MicrophoneFileWriter(file: file)
+    }
+}
+
+private final class MicrophoneTapInvocation: @unchecked Sendable {
+    private let tap: AVAudioNodeTapBlock
+    private let buffer: AVAudioPCMBuffer
+
+    init(tap: @escaping AVAudioNodeTapBlock, buffer: AVAudioPCMBuffer) {
+        self.tap = tap
+        self.buffer = buffer
+    }
+
+    func run() {
+        tap(buffer, AVAudioTime(hostTime: 0))
     }
 }

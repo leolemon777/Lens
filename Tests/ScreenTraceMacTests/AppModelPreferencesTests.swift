@@ -79,6 +79,17 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertFalse(TranscriptionLanguage.automatic.localeIdentifier.isEmpty)
     }
 
+    func testAutomaticTranscriptionLocaleNormalizesChineseScriptWithoutUsingUSRegion() {
+        XCTAssertEqual(
+            TranscriptionLanguage.automaticLocaleIdentifier(for: "zh-Hans-US"),
+            "zh-CN"
+        )
+        XCTAssertEqual(
+            TranscriptionLanguage.automaticLocaleIdentifier(for: "zh-Hant-US"),
+            "zh-TW"
+        )
+    }
+
     func testCorruptOrConflictingStoredShortcutsFallBackToDefaults() throws {
         let suiteName = "ScreenTraceAppModelTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

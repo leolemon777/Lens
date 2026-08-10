@@ -51,11 +51,8 @@ final class MicrophoneTrackRecorder {
             interleaved: format.isInterleaved
         )
         let writer = MicrophoneFileWriter(file: file)
-        let levelMeter = levelMeter
-        input.installTap(onBus: 0, bufferSize: 4_096, format: format) { buffer, _ in
-            writer.write(buffer)
-            levelMeter.update(buffer: buffer)
-        }
+        let tap = Self.makeTap(writer: writer, levelMeter: levelMeter)
+        input.installTap(onBus: 0, bufferSize: 4_096, format: format, block: tap)
         engine.prepare()
         do {
             try engine.start()
@@ -104,6 +101,16 @@ final class MicrophoneTrackRecorder {
         self.engine = nil
         writer = nil
         outputURL = nil
+    }
+
+    nonisolated static func makeTap(
+        writer: MicrophoneFileWriter,
+        levelMeter: AudioLevelMeter
+    ) -> AVAudioNodeTapBlock {
+        { buffer, _ in
+            writer.write(buffer)
+            levelMeter.update(buffer: buffer)
+        }
     }
 }
 

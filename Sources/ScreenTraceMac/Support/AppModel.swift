@@ -32,12 +32,33 @@ enum TranscriptionLanguage: String, CaseIterable, Identifiable, Sendable {
 
     var localeIdentifier: String {
         switch self {
-        case .automatic: Locale.current.identifier
+        case .automatic:
+            Self.automaticLocaleIdentifier(
+                for: Locale.preferredLanguages.first ?? Locale.current.identifier
+            )
         case .simplifiedChinese: "zh-CN"
         case .traditionalChinese: "zh-TW"
         case .english: "en-US"
         case .japanese: "ja-JP"
         case .korean: "ko-KR"
+        }
+    }
+
+    static func automaticLocaleIdentifier(for preferredLanguageIdentifier: String) -> String {
+        let locale = Locale(identifier: preferredLanguageIdentifier)
+        switch locale.language.languageCode?.identifier {
+        case "zh":
+            let script = locale.language.script?.identifier
+            let region = locale.region?.identifier
+            return script == "Hant" || ["HK", "MO", "TW"].contains(region) ? "zh-TW" : "zh-CN"
+        case "en":
+            return "en-US"
+        case "ja":
+            return "ja-JP"
+        case "ko":
+            return "ko-KR"
+        default:
+            return locale.identifier.replacingOccurrences(of: "_", with: "-")
         }
     }
 }

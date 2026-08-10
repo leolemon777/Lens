@@ -13,6 +13,7 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ICON_SOURCE="$PROJECT_DIR/Assets/AppIcon.png"
+ENTITLEMENTS_PATH="$PROJECT_DIR/Config/ScreenTrace.entitlements"
 ICON_TEMP_ROOT=""
 
 cleanup() {
@@ -48,6 +49,10 @@ cp "$BIN_DIR/ScreenTrace" "$MACOS_DIR/ScreenTrace"
 
 if [[ ! -f "$ICON_SOURCE" ]]; then
     echo "Missing app icon source: $ICON_SOURCE" >&2
+    exit 66
+fi
+if [[ ! -f "$ENTITLEMENTS_PATH" ]]; then
+    echo "Missing app entitlements: $ENTITLEMENTS_PATH" >&2
     exit 66
 fi
 ICON_TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ScreenTrace-icon.XXXXXX")"
@@ -94,11 +99,17 @@ PLIST_PATH="$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :NSSpeechRecognitionUsageDescription string 屏迹在你开启本地自动整理或主动生成字幕时使用设备端语音识别。" "$PLIST_PATH"
 
 if [[ "$SIGNING_IDENTITY" == "-" ]]; then
-    codesign --force --deep --sign - "$APP_DIR"
+    codesign \
+        --force \
+        --deep \
+        --entitlements "$ENTITLEMENTS_PATH" \
+        --sign - \
+        "$APP_DIR"
 else
     codesign \
         --force \
         --deep \
+        --entitlements "$ENTITLEMENTS_PATH" \
         --options runtime \
         --timestamp \
         --sign "$SIGNING_IDENTITY" \

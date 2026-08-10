@@ -4,6 +4,17 @@ import XCTest
 @testable import ScreenTraceMac
 
 final class LocalSpeechTranscriptionServiceTests: XCTestCase {
+    func testAuthorizationContinuationCanResumeFromBackgroundExecutor() async {
+        let status = await withCheckedContinuation { continuation in
+            let callback = LocalSpeechTranscriptionService.authorizationCallback(continuation)
+            DispatchQueue.global().async {
+                callback(.authorized)
+            }
+        }
+
+        XCTAssertEqual(status, .authorized)
+    }
+
     func testAppleSpeechSegmentsMapIntoPortableOnDeviceDocument() {
         let generatedAt = Date(timeIntervalSince1970: 500.9)
         let document = LocalSpeechTranscriptionService.makeDocument(
@@ -35,6 +46,19 @@ final class LocalSpeechTranscriptionServiceTests: XCTestCase {
         XCTAssertEqual(document.segments[0].startSeconds, 0.25, accuracy: 0.001)
         XCTAssertEqual(document.segments[0].endSeconds, 0.65, accuracy: 0.001)
         XCTAssertEqual(document.segments[1].endSeconds, 1.3, accuracy: 0.001)
+    }
+
+    func testEmptyFinalRecognitionIsRejectedInsteadOfBeingMarkedComplete() throws {
+        let document = LocalSpeechTranscriptionService.makeDocument(
+            fullText: "   \n",
+            segments: [],
+            localeIdentifier: "zh-CN",
+            sourceRole: .screenVideo
+        )
+
+        XCTAssertThrowsError(try LocalSpeechTranscriptionService.validatedDocument(document)) {
+            XCTAssertEqual($0 as? LocalSpeechTranscriptionError, .noFinalResult)
+        }
     }
 
     @MainActor

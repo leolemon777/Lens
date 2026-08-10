@@ -47,11 +47,19 @@ final class LocalSpeechTranscriptionService {
         SFSpeechRecognizer.authorizationStatus()
     }
 
-    static func requestAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
+    nonisolated static func requestAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
         await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status)
-            }
+            SFSpeechRecognizer.requestAuthorization(
+                authorizationCallback(continuation)
+            )
+        }
+    }
+
+    nonisolated static func authorizationCallback(
+        _ continuation: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>
+    ) -> @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void {
+        { @Sendable status in
+            continuation.resume(returning: status)
         }
     }
 
@@ -136,17 +144,20 @@ final class LocalSpeechTranscriptionService {
             ))
             progress?(chunk.index + 1, chunks.count)
         }
-        if chunks.count == 1, let document = chunkDocuments.first?.document {
-            return document
+        let document: TranscriptDocument
+        if chunks.count == 1, let singleDocument = chunkDocuments.first?.document {
+            document = singleDocument
+        } else {
+            document = TranscriptChunkMerger.merge(
+                chunkDocuments,
+                engine: "apple-speech",
+                generatedAt: generatedAt,
+                localeIdentifier: localeIdentifier,
+                isOnDevice: true,
+                sourceRole: sourceRole
+            )
         }
-        return TranscriptChunkMerger.merge(
-            chunkDocuments,
-            engine: "apple-speech",
-            generatedAt: generatedAt,
-            localeIdentifier: localeIdentifier,
-            isOnDevice: true,
-            sourceRole: sourceRole
-        )
+        return try Self.validatedDocument(document)
     }
 
     private func recognize(
@@ -236,6 +247,16 @@ final class LocalSpeechTranscriptionService {
                 )
             }
         )
+    }
+
+    nonisolated static func validatedDocument(
+        _ document: TranscriptDocument
+    ) throws -> TranscriptDocument {
+        let hasText = !document.fullText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard hasText || !document.segments.isEmpty else {
+            throw LocalSpeechTranscriptionError.noFinalResult
+        }
+        return document
     }
 }
 

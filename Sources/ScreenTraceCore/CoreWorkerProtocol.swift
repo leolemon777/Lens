@@ -54,7 +54,7 @@ public struct CoreWorkerHandshakeResponse: Codable, Equatable, Sendable {
     }
 }
 
-public enum CoreWorkerErrorCode: String, Codable, Sendable {
+public enum CoreWorkerErrorCode: String, Codable, Equatable, Sendable {
     case incompatibleProtocol
     case malformedFrame
     case unsupportedCapability

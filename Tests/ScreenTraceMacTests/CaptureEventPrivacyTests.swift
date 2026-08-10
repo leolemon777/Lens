@@ -86,6 +86,38 @@ final class CaptureEventPrivacyTests: XCTestCase {
         })
     }
 
+    func testRecorderBridgesBackgroundMonitorEventsAndRejectsStoppedGeneration() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceEventBridge-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let session = try store.beginRecording(width: 1280, height: 720)
+        var globalHandler: PointerEventRecorder.GlobalMonitorHandler?
+        var removedMonitorCount = 0
+        let recorder = PointerEventRecorder(
+            addGlobalMonitorOverride: { _, handler in
+                globalHandler = handler
+                return NSObject()
+            },
+            removeMonitorOverride: { _ in removedMonitorCount += 1 }
+        )
+        try recorder.start(
+            session: session,
+            captureBounds: CGRect(x: 0, y: 0, width: 1280, height: 720)
+        )
+        let callback = try XCTUnwrap(globalHandler)
+
+        await Self.invokeOnBackground(callback)
+        await flushMainQueue()
+        await recorder.stop()
+        await Self.invokeOnBackground(callback)
+        await flushMainQueue()
+
+        let keys = try TraceEventReader.read(KeyboardEvent.self, from: session.keyboardEventsURL)
+        XCTAssertEqual(keys.map(\.label), ["S"])
+        XCTAssertEqual(removedMonitorCount, 1)
+    }
+
     private func keyEvent(
         characters: String,
         modifiers: NSEvent.ModifierFlags,
@@ -103,5 +135,39 @@ final class CaptureEventPrivacyTests: XCTestCase {
             isARepeat: false,
             keyCode: keyCode
         ))
+    }
+
+    nonisolated private static func invokeOnBackground(
+        _ callback: @escaping PointerEventRecorder.GlobalMonitorHandler
+    ) async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                callback(shortcutEvent())
+                continuation.resume()
+            }
+        }
+    }
+
+    nonisolated private static func shortcutEvent() -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "s",
+            charactersIgnoringModifiers: "s",
+            isARepeat: false,
+            keyCode: 1
+        )!
+    }
+
+    private func flushMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
     }
 }

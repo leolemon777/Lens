@@ -22,12 +22,27 @@ struct HotKeyRegistrationReport: Equatable {
 final class GlobalHotKeyManager {
     private static let signature: OSType = 0x53545243 // STRC
 
+    typealias GlobalMonitorHandler = @Sendable (NSEvent) -> Void
+    typealias LocalMonitorHandler = (NSEvent) -> NSEvent?
+    typealias GlobalMonitorInstaller = (
+        NSEvent.EventTypeMask,
+        @escaping GlobalMonitorHandler
+    ) -> Any?
+    typealias LocalMonitorInstaller = (
+        NSEvent.EventTypeMask,
+        @escaping LocalMonitorHandler
+    ) -> Any?
+
     private let configuration: HotKeyConfiguration
     private let handler: (HotKeyIntent) -> Void
     private let installEventHandlerOverride: (() -> Bool)?
     private let registerOverride: ((HotKeyBinding, UInt32) -> OSStatus)?
+    private let addGlobalMonitorOverride: GlobalMonitorInstaller?
+    private let addLocalMonitorOverride: LocalMonitorInstaller?
+    private let removeMonitorOverride: ((Any) -> Void)?
     private var stateMachine = HotKeyStateMachine(bindings: [])
     private var started = false
+    private var monitorGeneration: UInt64 = 0
     private var intentByIdentifier: [UInt32: HotKeyIntent] = [:]
     nonisolated(unsafe) private var registeredHotKeys: [EventHotKeyRef] = []
     nonisolated(unsafe) private var globalMonitor: Any?
@@ -38,11 +53,17 @@ final class GlobalHotKeyManager {
         configuration: HotKeyConfiguration = .default,
         installEventHandlerOverride: (() -> Bool)? = nil,
         registerOverride: ((HotKeyBinding, UInt32) -> OSStatus)? = nil,
+        addGlobalMonitorOverride: GlobalMonitorInstaller? = nil,
+        addLocalMonitorOverride: LocalMonitorInstaller? = nil,
+        removeMonitorOverride: ((Any) -> Void)? = nil,
         handler: @escaping (HotKeyIntent) -> Void
     ) {
         self.configuration = configuration.isValid ? configuration : .default
         self.installEventHandlerOverride = installEventHandlerOverride
         self.registerOverride = registerOverride
+        self.addGlobalMonitorOverride = addGlobalMonitorOverride
+        self.addLocalMonitorOverride = addLocalMonitorOverride
+        self.removeMonitorOverride = removeMonitorOverride
         self.handler = handler
     }
 
@@ -93,6 +114,7 @@ final class GlobalHotKeyManager {
     func stop() {
         guard started else { return }
         started = false
+        monitorGeneration &+= 1
         for hotKey in registeredHotKeys {
             UnregisterEventHotKey(hotKey)
         }
@@ -103,11 +125,11 @@ final class GlobalHotKeyManager {
             self.eventHandler = nil
         }
         if let globalMonitor {
-            NSEvent.removeMonitor(globalMonitor)
+            removeMonitor(globalMonitor)
             self.globalMonitor = nil
         }
         if let localMonitor {
-            NSEvent.removeMonitor(localMonitor)
+            removeMonitor(localMonitor)
             self.localMonitor = nil
         }
         stateMachine = HotKeyStateMachine(bindings: [])
@@ -148,7 +170,10 @@ final class GlobalHotKeyManager {
                 }
                 let manager = Unmanaged<GlobalHotKeyManager>
                     .fromOpaque(userData).takeUnretainedValue()
-                Task { @MainActor in manager.handleNativeHotKey(identifier: hotKeyID.id) }
+                let identifier = hotKeyID.id
+                DispatchQueue.main.async { @MainActor in
+                    manager.handleNativeHotKey(identifier: identifier)
+                }
                 return noErr
             },
             1,
@@ -182,6 +207,8 @@ final class GlobalHotKeyManager {
 
     private func startEventMonitors(for bindings: [HotKeyBinding]) {
         guard !bindings.isEmpty else { return }
+        monitorGeneration &+= 1
+        let generation = monitorGeneration
         stateMachine = HotKeyStateMachine(bindings: bindings)
         var mask: NSEvent.EventTypeMask = []
         if bindings.contains(where: { $0.shortcut.keyCode == nil }) {
@@ -190,31 +217,65 @@ final class GlobalHotKeyManager {
         if bindings.contains(where: { $0.shortcut.keyCode != nil }) {
             mask.insert(.keyDown)
         }
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
-            Task { @MainActor in self?.handleMonitoredEvent(event) }
+        let deliver: @MainActor @Sendable (HotKeyInput, UInt64) -> Void = {
+            [weak self] input, deliveredGeneration in
+            self?.handleMonitoredInput(input, generation: deliveredGeneration)
         }
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
-            self?.handleMonitoredEvent(event)
+        let globalHandler = Self.makeGlobalMonitorHandler(
+            generation: generation,
+            deliver: deliver
+        )
+        globalMonitor = addGlobalMonitorOverride?(mask, globalHandler)
+            ?? NSEvent.addGlobalMonitorForEvents(matching: mask, handler: globalHandler)
+        let localHandler: LocalMonitorHandler = { [weak self] event in
+            self?.handleMonitoredInput(
+                Self.monitoredInput(from: event),
+                generation: generation
+            )
             return event
         }
+        localMonitor = addLocalMonitorOverride?(mask, localHandler)
+            ?? NSEvent.addLocalMonitorForEvents(matching: mask, handler: localHandler)
     }
 
     private func handleNativeHotKey(identifier: UInt32) {
+        guard started else { return }
         guard let intent = intentByIdentifier[identifier] else { return }
         handler(intent)
     }
 
-    private func handleMonitoredEvent(_ event: NSEvent) {
-        let kind: HotKeyEventKind = event.type == .flagsChanged ? .flagsChanged : .keyDown
-        let input = HotKeyInput(
-            kind: kind,
-            keyCode: event.keyCode,
-            modifiers: Self.modifiers(from: event.modifierFlags),
-            isRepeat: event.isARepeat
-        )
+    private func handleMonitoredInput(_ input: HotKeyInput, generation: UInt64) {
+        guard started, generation == monitorGeneration else { return }
         if let intent = stateMachine.handle(input) {
             handler(intent)
         }
+    }
+
+    nonisolated static func monitoredInput(from event: NSEvent) -> HotKeyInput {
+        let isKeyDown = event.type == .keyDown
+        let kind: HotKeyEventKind = isKeyDown ? .keyDown : .flagsChanged
+        return HotKeyInput(
+            kind: kind,
+            keyCode: event.keyCode,
+            modifiers: Self.modifiers(from: event.modifierFlags),
+            isRepeat: isKeyDown && event.isARepeat
+        )
+    }
+
+    nonisolated static func makeGlobalMonitorHandler(
+        generation: UInt64,
+        deliver: @escaping @MainActor @Sendable (HotKeyInput, UInt64) -> Void
+    ) -> GlobalMonitorHandler {
+        { @Sendable event in
+            let input = monitoredInput(from: event)
+            DispatchQueue.main.async { @MainActor in
+                deliver(input, generation)
+            }
+        }
+    }
+
+    private func removeMonitor(_ monitor: Any) {
+        removeMonitorOverride?(monitor) ?? NSEvent.removeMonitor(monitor)
     }
 
     static func carbonModifiers(_ modifiers: HotKeyModifiers) -> UInt32 {
@@ -227,7 +288,7 @@ final class GlobalHotKeyManager {
         return result
     }
 
-    static func modifiers(from flags: NSEvent.ModifierFlags) -> HotKeyModifiers {
+    nonisolated static func modifiers(from flags: NSEvent.ModifierFlags) -> HotKeyModifiers {
         let flags = flags.intersection(.deviceIndependentFlagsMask)
         var result: HotKeyModifiers = []
         if flags.contains(.function) { result.insert(.function) }

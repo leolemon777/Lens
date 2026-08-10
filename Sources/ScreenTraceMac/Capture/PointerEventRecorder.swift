@@ -4,7 +4,40 @@ import ScreenTraceCore
 
 @MainActor
 final class PointerEventRecorder {
+    typealias GlobalMonitorHandler = @Sendable (NSEvent) -> Void
+    typealias GlobalMonitorInstaller = (
+        NSEvent.EventTypeMask,
+        @escaping GlobalMonitorHandler
+    ) -> Any?
+
+    private struct MonitoredInput: Sendable {
+        enum Kind: Sendable {
+            case moved
+            case dragged
+            case leftMouseDown
+            case leftMouseUp
+            case rightMouseDown
+            case rightMouseUp
+            case otherMouseDown
+            case otherMouseUp
+            case keyDown
+            case unsupported
+        }
+
+        let kind: Kind
+        let locationX: Double
+        let locationY: Double
+        let buttonNumber: Int
+        let clickCount: Int
+        let keyCode: UInt16
+        let modifierFlags: UInt
+        let charactersIgnoringModifiers: String?
+        let isRepeat: Bool
+    }
+
     nonisolated(unsafe) private var monitor: Any?
+    private let addGlobalMonitorOverride: GlobalMonitorInstaller?
+    private let removeMonitorOverride: ((Any) -> Void)?
     private var pointerWriter: JSONLinesWriter<PointerEvent>?
     private var clickWriter: JSONLinesWriter<ClickEvent>?
     private var keyboardWriter: JSONLinesWriter<KeyboardEvent>?
@@ -17,7 +50,16 @@ final class PointerEventRecorder {
     private var captureBounds: CGRect?
     private var trackedWindowID: CGWindowID?
     private var lastWindowBoundsRefresh: TimeInterval = 0
+    private var monitorGeneration: UInt64 = 0
     private let minimumMoveInterval: TimeInterval = 1.0 / 60.0
+
+    init(
+        addGlobalMonitorOverride: GlobalMonitorInstaller? = nil,
+        removeMonitorOverride: ((Any) -> Void)? = nil
+    ) {
+        self.addGlobalMonitorOverride = addGlobalMonitorOverride
+        self.removeMonitorOverride = removeMonitorOverride
+    }
 
     func start(
         session: RecordingTraceSession,
@@ -50,11 +92,17 @@ final class PointerEventRecorder {
             .otherMouseUp,
             .keyDown
         ]
-        monitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] event in
-            Task { @MainActor in
-                self?.handle(event)
-            }
+        let generation = monitorGeneration
+        let deliver: @MainActor @Sendable (MonitoredInput, UInt64) -> Void = {
+            [weak self] input, deliveredGeneration in
+            self?.handle(input, generation: deliveredGeneration)
         }
+        let globalHandler = Self.makeGlobalMonitorHandler(
+            generation: generation,
+            deliver: deliver
+        )
+        monitor = addGlobalMonitorOverride?(mask, globalHandler)
+            ?? NSEvent.addGlobalMonitorForEvents(matching: mask, handler: globalHandler)
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
@@ -95,8 +143,9 @@ final class PointerEventRecorder {
     }
 
     private func stopMonitoring() {
+        monitorGeneration &+= 1
         if let monitor {
-            NSEvent.removeMonitor(monitor)
+            removeMonitorOverride?(monitor) ?? NSEvent.removeMonitor(monitor)
             self.monitor = nil
         }
         if let activationObserver {
@@ -106,17 +155,22 @@ final class PointerEventRecorder {
     }
 
     func handle(_ event: NSEvent) {
+        handle(Self.monitoredInput(from: event), generation: monitorGeneration)
+    }
+
+    private func handle(_ input: MonitoredInput, generation: UInt64) {
+        guard generation == monitorGeneration else { return }
         let now = ProcessInfo.processInfo.systemUptime
-        let location = event.cgEvent?.location ?? NSEvent.mouseLocation
+        let location = CGPoint(x: input.locationX, y: input.locationY)
         let point = TracePoint(x: location.x, y: location.y)
         let normalizedLocation = normalizedPoint(for: location)
         let elapsed = timelineOffset + max(0, now - startedAtUptime)
 
-        switch event.type {
-        case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+        switch input.kind {
+        case .moved, .dragged:
             guard now - lastMoveAtUptime >= minimumMoveInterval else { return }
             lastMoveAtUptime = now
-            let kind: PointerEventKind = event.type == .mouseMoved ? .moved : .dragged
+            let kind: PointerEventKind = input.kind == .moved ? .moved : .dragged
             let pointerEvent = PointerEvent(
                 time: elapsed,
                 kind: kind,
@@ -133,19 +187,19 @@ final class PointerEventRecorder {
              .otherMouseDown, .otherMouseUp:
             let click = ClickEvent(
                 time: elapsed,
-                button: Self.button(for: event),
-                phase: Self.phase(for: event),
+                button: Self.button(for: input),
+                phase: Self.phase(for: input),
                 location: point,
                 normalizedLocation: normalizedLocation,
                 displayID: Self.displayID(at: location),
-                clickCount: max(event.clickCount, 1)
+                clickCount: max(input.clickCount, 1)
             )
             if let clickWriter {
                 enqueueWrite { try? await clickWriter.append(click) }
             }
 
         case .keyDown:
-            guard let keyboardEvent = Self.sanitizedKeyboardEvent(from: event, time: elapsed),
+            guard let keyboardEvent = Self.sanitizedKeyboardEvent(from: input, time: elapsed),
                   let keyboardWriter else { return }
             enqueueWrite { try? await keyboardWriter.append(keyboardEvent) }
 
@@ -183,13 +237,21 @@ final class PointerEventRecorder {
     }
 
     static func sanitizedKeyboardEvent(from event: NSEvent, time: Double) -> KeyboardEvent? {
-        guard event.type == .keyDown else { return nil }
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        sanitizedKeyboardEvent(from: monitoredInput(from: event), time: time)
+    }
+
+    private static func sanitizedKeyboardEvent(
+        from input: MonitoredInput,
+        time: Double
+    ) -> KeyboardEvent? {
+        guard input.kind == .keyDown else { return nil }
+        let flags = NSEvent.ModifierFlags(rawValue: input.modifierFlags)
         let isShortcut = flags.contains(.command) || flags.contains(.control)
-        let specialLabel = specialKeyLabels[event.keyCode]
+        let specialLabel = specialKeyLabels[input.keyCode]
         guard isShortcut || specialLabel != nil else { return nil }
 
-        let label: String? = specialLabel ?? shortcutLabel(from: event.charactersIgnoringModifiers)
+        let label: String? = specialLabel
+            ?? shortcutLabel(from: input.charactersIgnoringModifiers)
         let modifiers: [KeyboardModifier] = [
             flags.contains(.command) ? .command : nil,
             flags.contains(.control) ? .control : nil,
@@ -200,11 +262,74 @@ final class PointerEventRecorder {
         ].compactMap { $0 }
         return KeyboardEvent(
             time: time,
-            keyCode: Int(event.keyCode),
+            keyCode: Int(input.keyCode),
             label: label,
             modifiers: modifiers,
-            isRepeat: event.isARepeat
+            isRepeat: input.isRepeat
         )
+    }
+
+    nonisolated private static func monitoredInput(from event: NSEvent) -> MonitoredInput {
+        let kind = monitoredKind(from: event.type)
+        let location: CGPoint
+        switch kind {
+        case .moved, .dragged,
+             .leftMouseDown, .leftMouseUp,
+             .rightMouseDown, .rightMouseUp,
+             .otherMouseDown, .otherMouseUp:
+            location = event.cgEvent?.location ?? NSEvent.mouseLocation
+        case .keyDown, .unsupported:
+            location = .zero
+        }
+        let isButtonEvent: Bool
+        switch kind {
+        case .leftMouseDown, .leftMouseUp,
+             .rightMouseDown, .rightMouseUp,
+             .otherMouseDown, .otherMouseUp:
+            isButtonEvent = true
+        default:
+            isButtonEvent = false
+        }
+        let isKeyEvent = kind == .keyDown
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return MonitoredInput(
+            kind: kind,
+            locationX: location.x,
+            locationY: location.y,
+            buttonNumber: isButtonEvent ? event.buttonNumber : 0,
+            clickCount: isButtonEvent ? event.clickCount : 0,
+            keyCode: isKeyEvent ? event.keyCode : 0,
+            modifierFlags: flags.rawValue,
+            charactersIgnoringModifiers: isKeyEvent ? event.charactersIgnoringModifiers : nil,
+            isRepeat: isKeyEvent && event.isARepeat
+        )
+    }
+
+    nonisolated private static func monitoredKind(from type: NSEvent.EventType) -> MonitoredInput.Kind {
+        switch type {
+        case .mouseMoved: .moved
+        case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged: .dragged
+        case .leftMouseDown: .leftMouseDown
+        case .leftMouseUp: .leftMouseUp
+        case .rightMouseDown: .rightMouseDown
+        case .rightMouseUp: .rightMouseUp
+        case .otherMouseDown: .otherMouseDown
+        case .otherMouseUp: .otherMouseUp
+        case .keyDown: .keyDown
+        default: .unsupported
+        }
+    }
+
+    nonisolated private static func makeGlobalMonitorHandler(
+        generation: UInt64,
+        deliver: @escaping @MainActor @Sendable (MonitoredInput, UInt64) -> Void
+    ) -> GlobalMonitorHandler {
+        { @Sendable event in
+            let input = monitoredInput(from: event)
+            DispatchQueue.main.async { @MainActor in
+                deliver(input, generation)
+            }
+        }
     }
 
     private static func shortcutLabel(from characters: String?) -> String? {
@@ -259,18 +384,18 @@ final class PointerEventRecorder {
         }
     }
 
-    private static func button(for event: NSEvent) -> PointerButton {
-        switch event.type {
+    private static func button(for input: MonitoredInput) -> PointerButton {
+        switch input.kind {
         case .leftMouseDown, .leftMouseUp: .left
         case .rightMouseDown, .rightMouseUp: .right
         case .otherMouseDown, .otherMouseUp:
-            event.buttonNumber == 2 ? .middle : .other
+            input.buttonNumber == 2 ? .middle : .other
         default: .other
         }
     }
 
-    private static func phase(for event: NSEvent) -> ClickPhase {
-        switch event.type {
+    private static func phase(for input: MonitoredInput) -> ClickPhase {
+        switch input.kind {
         case .leftMouseDown, .rightMouseDown, .otherMouseDown: .down
         default: .up
         }

@@ -163,6 +163,8 @@ public struct RecordingTraceSession: Equatable, Sendable {
     public let videoURL: URL
     public let pointerEventsURL: URL
     public let clickEventsURL: URL
+    public let keyboardEventsURL: URL
+    public let windowEventsURL: URL
     public let segmentIndexURL: URL
     public let editPlanURL: URL
     public let microphoneURL: URL?
@@ -174,6 +176,8 @@ public struct RecordingTraceSession: Equatable, Sendable {
         videoURL: URL,
         pointerEventsURL: URL,
         clickEventsURL: URL,
+        keyboardEventsURL: URL,
+        windowEventsURL: URL,
         segmentIndexURL: URL,
         editPlanURL: URL,
         microphoneURL: URL? = nil,
@@ -184,6 +188,8 @@ public struct RecordingTraceSession: Equatable, Sendable {
         self.videoURL = videoURL
         self.pointerEventsURL = pointerEventsURL
         self.clickEventsURL = clickEventsURL
+        self.keyboardEventsURL = keyboardEventsURL
+        self.windowEventsURL = windowEventsURL
         self.segmentIndexURL = segmentIndexURL
         self.editPlanURL = editPlanURL
         self.microphoneURL = microphoneURL

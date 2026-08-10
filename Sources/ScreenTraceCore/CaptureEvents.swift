@@ -77,6 +77,62 @@ public struct ClickEvent: Codable, Equatable, Sendable {
     }
 }
 
+public enum KeyboardModifier: String, Codable, CaseIterable, Sendable {
+    case command
+    case control
+    case option
+    case shift
+    case function
+    case capsLock
+}
+
+/// A privacy-reduced keyboard interaction. Plain text input is never represented by this type;
+/// platform recorders should only emit shortcuts and non-text navigation/control keys.
+public struct KeyboardEvent: Codable, Equatable, Sendable {
+    public let time: Double
+    public let keyCode: Int
+    public let label: String?
+    public let modifiers: [KeyboardModifier]
+    public let isRepeat: Bool
+
+    public init(
+        time: Double,
+        keyCode: Int,
+        label: String? = nil,
+        modifiers: [KeyboardModifier] = [],
+        isRepeat: Bool = false
+    ) {
+        self.time = max(time.isFinite ? time : 0, 0)
+        self.keyCode = max(keyCode, 0)
+        self.label = label?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.modifiers = KeyboardModifier.allCases.filter(modifiers.contains)
+        self.isRepeat = isRepeat
+    }
+}
+
+/// Records application focus changes without window titles or document names.
+public struct WindowEvent: Codable, Equatable, Sendable {
+    public let time: Double
+    public let applicationName: String?
+    public let bundleIdentifier: String?
+
+    public init(
+        time: Double,
+        applicationName: String? = nil,
+        bundleIdentifier: String? = nil
+    ) {
+        self.time = max(time.isFinite ? time : 0, 0)
+        self.applicationName = applicationName?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+        self.bundleIdentifier = bundleIdentifier?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
 public struct AutoEditPlan: Codable, Equatable, Sendable {
     public static let currentSchemaVersion = "0.8"
 

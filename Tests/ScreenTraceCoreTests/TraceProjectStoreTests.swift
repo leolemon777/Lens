@@ -175,6 +175,10 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(session.manifest.state, .capturing)
         XCTAssertTrue(FileManager.default.fileExists(atPath: session.pointerEventsURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: session.clickEventsURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: session.keyboardEventsURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: session.windowEventsURL.path))
+        XCTAssertTrue(session.manifest.assets.contains { $0.role == .keyboardEvents })
+        XCTAssertTrue(session.manifest.assets.contains { $0.role == .windowEvents })
         XCTAssertTrue(FileManager.default.fileExists(atPath: session.editPlanURL.path))
         try Data([0, 1, 2, 3]).write(to: session.videoURL)
 

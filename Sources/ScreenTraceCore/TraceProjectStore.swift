@@ -542,9 +542,11 @@ public struct TraceProjectStore: Sendable {
         let editsDirectory = packageURL.appendingPathComponent("edits", isDirectory: true)
         let previewsDirectory = packageURL.appendingPathComponent("previews", isDirectory: true)
         let videoURL = rawDirectory.appendingPathComponent("screen.mp4")
-        let pointerURL = eventsDirectory.appendingPathComponent("pointer.jsonl")
-        let clicksURL = eventsDirectory.appendingPathComponent("clicks.jsonl")
-        let segmentIndexURL = eventsDirectory.appendingPathComponent("segments.json")
+            let pointerURL = eventsDirectory.appendingPathComponent("pointer.jsonl")
+            let clicksURL = eventsDirectory.appendingPathComponent("clicks.jsonl")
+            let keyboardURL = eventsDirectory.appendingPathComponent("keyboard.jsonl")
+            let windowsURL = eventsDirectory.appendingPathComponent("windows.jsonl")
+            let segmentIndexURL = eventsDirectory.appendingPathComponent("segments.json")
         let editPlanURL = editsDirectory.appendingPathComponent("edit-plan.json")
         let microphoneURL = includesMicrophone
             ? rawDirectory.appendingPathComponent("microphone.caf")
@@ -559,6 +561,8 @@ public struct TraceProjectStore: Sendable {
             }
             FileManager.default.createFile(atPath: pointerURL.path, contents: nil)
             FileManager.default.createFile(atPath: clicksURL.path, contents: nil)
+            FileManager.default.createFile(atPath: keyboardURL.path, contents: nil)
+            FileManager.default.createFile(atPath: windowsURL.path, contents: nil)
             let firstSegment = RecordingSegment(
                 index: 0,
                 timelineStartSeconds: 0,
@@ -587,6 +591,8 @@ public struct TraceProjectStore: Sendable {
                 TraceAsset(role: .screenVideo, relativePath: "raw/screen.mp4"),
                 TraceAsset(role: .pointerEvents, relativePath: "events/pointer.jsonl"),
                 TraceAsset(role: .clickEvents, relativePath: "events/clicks.jsonl"),
+                TraceAsset(role: .keyboardEvents, relativePath: "events/keyboard.jsonl"),
+                TraceAsset(role: .windowEvents, relativePath: "events/windows.jsonl"),
                 TraceAsset(role: .recordingSegments, relativePath: "events/segments.json"),
                 TraceAsset(role: .editPlan, relativePath: "edits/edit-plan.json")
             ]
@@ -621,6 +627,8 @@ public struct TraceProjectStore: Sendable {
                 videoURL: videoURL,
                 pointerEventsURL: pointerURL,
                 clickEventsURL: clicksURL,
+                keyboardEventsURL: keyboardURL,
+                windowEventsURL: windowsURL,
                 segmentIndexURL: segmentIndexURL,
                 editPlanURL: editPlanURL,
                 microphoneURL: microphoneURL,

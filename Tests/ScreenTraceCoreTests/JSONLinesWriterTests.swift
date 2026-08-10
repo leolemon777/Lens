@@ -30,4 +30,37 @@ final class JSONLinesWriterTests: XCTestCase {
         let decoded = try lines.map { try decoder.decode(PointerEvent.self, from: Data($0.utf8)) }
         XCTAssertEqual(decoded.map(\.kind), [.moved, .dragged])
     }
+
+    func testPrivacyReducedKeyboardAndWindowTracksRoundTrip() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceEvents-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let keyboardURL = directory.appendingPathComponent("keyboard.jsonl")
+        let windowsURL = directory.appendingPathComponent("windows.jsonl")
+
+        let keyboard = KeyboardEvent(
+            time: 1.25,
+            keyCode: 8,
+            label: "C",
+            modifiers: [.command]
+        )
+        let window = WindowEvent(
+            time: 2.5,
+            applicationName: "Safari",
+            bundleIdentifier: "com.apple.Safari"
+        )
+        let keyboardWriter = try JSONLinesWriter<KeyboardEvent>(url: keyboardURL)
+        let windowWriter = try JSONLinesWriter<WindowEvent>(url: windowsURL)
+        try await keyboardWriter.append(keyboard)
+        try await windowWriter.append(window)
+        try await keyboardWriter.close()
+        try await windowWriter.close()
+
+        XCTAssertEqual(try TraceEventReader.read(KeyboardEvent.self, from: keyboardURL), [keyboard])
+        XCTAssertEqual(try TraceEventReader.read(WindowEvent.self, from: windowsURL), [window])
+        XCTAssertFalse(
+            try String(contentsOf: windowsURL, encoding: .utf8).contains("windowTitle")
+        )
+    }
 }

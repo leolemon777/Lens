@@ -56,4 +56,23 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 430)
         XCTAssertGreaterThan(png?.count ?? 0, 18_000)
     }
+
+    func testActionCenterRendersDarkHighContrastAppearanceVariant() throws {
+        let root = ActionCenterView(model: AppModel()) { _ in }
+            .environment(\.colorScheme, .dark)
+        let hostingView = NSHostingView(rootView: root)
+        hostingView.appearance = NSAppearance(named: .accessibilityHighContrastDarkAqua)
+        hostingView.frame = CGRect(x: 0, y: 0, width: 688, height: 430)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let representation = try XCTUnwrap(
+            hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds)
+        )
+        hostingView.cacheDisplay(in: hostingView.bounds, to: representation)
+        let png = try XCTUnwrap(representation.representation(using: .png, properties: [:]))
+
+        XCTAssertGreaterThanOrEqual(representation.pixelsWide, 688)
+        XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 430)
+        XCTAssertGreaterThan(png.count, 18_000)
+    }
 }

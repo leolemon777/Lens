@@ -527,7 +527,7 @@ struct VideoEditorView: View {
                         }
                         .buttonStyle(.plain)
                         .frame(width: width, height: 6)
-                        .offset(x: start, y: 49)
+                        .offset(x: start, y: 23)
                         .zIndex(5)
                         .help("视频标注 · \(captionTimeText(band.range.startSeconds))")
                         .accessibilityLabel("视频标注")
@@ -569,6 +569,7 @@ struct VideoEditorView: View {
                 }
             }
             .frame(height: 58)
+            .clipped()
 
             if let selected = model.selectedSegment {
                 VStack(spacing: 8) {

@@ -1,0 +1,78 @@
+name: Bug 报告
+description: 报告可复现的截图、录屏、编辑、整理或导出问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请勿上传包含个人屏幕、声音、人脸、转写、项目路径、窗口标题、密钥或未脱敏崩溃报告的附件。安全漏洞请按 SECURITY.md 使用私密通道。
+  - type: input
+    id: version
+    attributes:
+      label: ScreenTrace 版本 / commit
+      placeholder: 0.1.0 (1) / abc1234
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 环境
+      description: macOS 版本、Mac 型号、显示器数量及缩放比例
+      placeholder: macOS 15.x, Apple silicon, 内建 Retina + 1 台外接显示器
+    validations:
+      required: true
+  - type: checkboxes
+    id: permissions
+    attributes:
+      label: 已授权的系统权限
+      options:
+        - label: 屏幕与系统音频录制
+        - label: 麦克风
+        - label: 摄像头
+        - label: 语音识别
+        - label: 辅助功能
+  - type: dropdown
+    id: feature
+    attributes:
+      label: 功能区域
+      options:
+        - 快捷键 / 操作中心
+        - 截图 / OCR / 长截图
+        - 贴图 / 标注 / 背景导出
+        - 录屏 / 音频 / 摄像头
+        - 自动运镜 / 光标 / 画中画
+        - 编辑器 / 转场 / 字幕 / 导出
+        - 屏迹库 / 转写 / 整理 / 搜索
+        - 安装 / 权限 / 恢复
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 脱敏诊断摘要（可选）
+      description: 只粘贴应用内“复制诊断摘要”生成的文本，不粘贴原始 .ips。

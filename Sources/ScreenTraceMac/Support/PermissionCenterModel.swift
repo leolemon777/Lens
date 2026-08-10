@@ -177,9 +177,11 @@ final class PermissionCenterModel: ObservableObject {
             handleMediaPermission(.video, currentState: state, settingsPane: "Privacy_Camera")
         case .speechRecognition:
             if state == .notDetermined {
-                SFSpeechRecognizer.requestAuthorization { [weak self] _ in
-                    Task { @MainActor in self?.refresh() }
-                }
+                SFSpeechRecognizer.requestAuthorization(
+                    Self.speechAuthorizationCallback { [weak self] in
+                        self?.refresh()
+                    }
+                )
             } else if state != .granted {
                 openPrivacyPane("Privacy_SpeechRecognition")
             }
@@ -217,6 +219,14 @@ final class PermissionCenterModel: ObservableObject {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
             self?.refresh()
+        }
+    }
+
+    nonisolated static func speechAuthorizationCallback(
+        refresh: @escaping @MainActor @Sendable () -> Void
+    ) -> @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void {
+        { @Sendable _ in
+            Task { @MainActor in refresh() }
         }
     }
 }

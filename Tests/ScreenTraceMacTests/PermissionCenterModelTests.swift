@@ -5,6 +5,20 @@ import XCTest
 
 final class PermissionCenterModelTests: XCTestCase {
     @MainActor
+    func testSpeechAuthorizationCallbackCanEnterFromBackgroundExecutor() async {
+        let refreshed = expectation(description: "refresh returned to main actor")
+        let callback = PermissionCenterModel.speechAuthorizationCallback {
+            MainActor.assertIsolated()
+            refreshed.fulfill()
+        }
+
+        await Task.detached {
+            callback(.authorized)
+        }.value
+        await fulfillment(of: [refreshed], timeout: 1)
+    }
+
+    @MainActor
     func testDiagnosticSummaryCopyReportsSuccessWithoutChangingItsContents() async {
         let copied = expectation(description: "diagnostic summary copied")
         var receivedSummary: String?

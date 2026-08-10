@@ -7,6 +7,7 @@ APP_DIR="$PROJECT_DIR/Build/ScreenTrace.app"
 PLIST_PATH="$APP_DIR/Contents/Info.plist"
 SIGNING_IDENTITY="${SCREENTRACE_SIGNING_IDENTITY:--}"
 NOTARY_PROFILE="${SCREENTRACE_NOTARY_PROFILE:-}"
+RELEASE_CHANNEL="${SCREENTRACE_RELEASE_CHANNEL:-beta}"
 APP_NOTARY_REQUEST_ID="not-submitted"
 APP_NOTARY_STATUS="not-submitted"
 DMG_NOTARY_REQUEST_ID="not-submitted"
@@ -16,6 +17,10 @@ if [[ -n "$NOTARY_PROFILE" && "$SIGNING_IDENTITY" == "-" ]]; then
     echo "SCREENTRACE_NOTARY_PROFILE requires a Developer ID signing identity." >&2
     exit 64
 fi
+case "$RELEASE_CHANNEL" in
+    alpha|beta|stable) ;;
+    *) echo "SCREENTRACE_RELEASE_CHANNEL must be alpha, beta, or stable." >&2; exit 64 ;;
+esac
 
 "$SCRIPT_DIR/build-release-artifacts.sh"
 
@@ -29,6 +34,7 @@ DMG_PATH="$RELEASES_DIR/$ARTIFACT_NAME.dmg"
 RELEASE_SYMBOLS="$RELEASES_DIR/$ARTIFACT_NAME.dSYM.zip"
 CHECKSUMS_PATH="$RELEASES_DIR/$ARTIFACT_NAME-SHA256SUMS.txt"
 RELEASE_MANIFEST_PATH="$RELEASES_DIR/$ARTIFACT_NAME-release.json"
+RELEASE_NOTES_PATH="$RELEASES_DIR/$ARTIFACT_NAME-RELEASE_NOTES.md"
 TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ScreenTrace-release.XXXXXX")"
 STAGING_DIR="$TEMP_ROOT/staging"
 MOUNT_DIR="$TEMP_ROOT/mount"
@@ -177,6 +183,7 @@ plutil -insert product -string "ScreenTrace" "$RELEASE_MANIFEST_PLIST"
 plutil -insert bundleIdentifier -string "$APP_BUNDLE_ID" "$RELEASE_MANIFEST_PLIST"
 plutil -insert version -string "$APP_VERSION" "$RELEASE_MANIFEST_PLIST"
 plutil -insert buildNumber -string "$BUILD_VERSION" "$RELEASE_MANIFEST_PLIST"
+plutil -insert releaseChannel -string "$RELEASE_CHANNEL" "$RELEASE_MANIFEST_PLIST"
 plutil -insert minimumMacOS -string "$MINIMUM_MACOS" "$RELEASE_MANIFEST_PLIST"
 plutil -insert git -dictionary "$RELEASE_MANIFEST_PLIST"
 plutil -insert git.commit -string "$GIT_COMMIT" "$RELEASE_MANIFEST_PLIST"
@@ -227,6 +234,7 @@ verify_manifest_value "schemaVersion" "1"
 verify_manifest_value "bundleIdentifier" "$APP_BUNDLE_ID"
 verify_manifest_value "version" "$APP_VERSION"
 verify_manifest_value "buildNumber" "$BUILD_VERSION"
+verify_manifest_value "releaseChannel" "$RELEASE_CHANNEL"
 verify_manifest_value "binary.machOUUID" "$MACHO_UUID"
 verify_manifest_value "artifacts.0.sha256" "$DMG_SHA256"
 verify_manifest_value "artifacts.1.sha256" "$APP_ARCHIVE_SHA256"
@@ -241,9 +249,22 @@ verify_manifest_value "artifacts.2.sha256" "$DSYM_ARCHIVE_SHA256"
         "$(basename "$RELEASE_MANIFEST_PATH")"
 ) > "$CHECKSUMS_PATH"
 
+generated_release_notes="$("$SCRIPT_DIR/generate-release-notes.sh" \
+    "$RELEASE_MANIFEST_PATH" \
+    "$CHECKSUMS_PATH")"
+if [[ "$generated_release_notes" != "$RELEASE_NOTES_PATH" || ! -s "$RELEASE_NOTES_PATH" ]]; then
+    echo "Release notes were not generated at the expected path." >&2
+    exit 65
+fi
+(
+    cd "$RELEASES_DIR"
+    shasum -a 256 "$(basename "$RELEASE_NOTES_PATH")"
+) >> "$CHECKSUMS_PATH"
+
 echo "DMG: $DMG_PATH"
 echo "App archive: $APP_ARCHIVE"
 echo "dSYM archive: $RELEASE_SYMBOLS"
 echo "Release manifest: $RELEASE_MANIFEST_PATH"
+echo "Release notes: $RELEASE_NOTES_PATH"
 echo "Checksums: $CHECKSUMS_PATH"
 cat "$CHECKSUMS_PATH"

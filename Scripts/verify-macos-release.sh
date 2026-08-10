@@ -115,6 +115,7 @@ expect_value "release product" "$(manifest_value product)" "ScreenTrace"
 BUNDLE_IDENTIFIER="$(manifest_value bundleIdentifier)"
 APP_VERSION="$(manifest_value version)"
 BUILD_NUMBER="$(manifest_value buildNumber)"
+RELEASE_CHANNEL="$(manifest_value releaseChannel)"
 MINIMUM_MACOS="$(manifest_value minimumMacOS)"
 MACHO_UUID="$(manifest_value binary.machOUUID)"
 GIT_COMMIT="$(manifest_value git.commit)"
@@ -129,6 +130,10 @@ DMG_NOTARY_STATUS="$(manifest_value notarization.dmg.status)"
 expect_value "bundle identifier" "$BUNDLE_IDENTIFIER" "app.screentrace.mac"
 [[ "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || fail "invalid version: $APP_VERSION"
 [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || fail "invalid build number: $BUILD_NUMBER"
+case "$RELEASE_CHANNEL" in
+    alpha|beta|stable) ;;
+    *) fail "invalid release channel: $RELEASE_CHANNEL" ;;
+esac
 [[ -n "$MINIMUM_MACOS" && -n "$MACHO_UUID" ]] || fail "missing platform or UUID metadata"
 expect_value "release worktree state" "$GIT_WORKTREE" "clean"
 expect_value "release Git commit" "$GIT_COMMIT" "$(git -C "$PROJECT_DIR" rev-parse HEAD)"
@@ -142,21 +147,25 @@ DMG_FILENAME="$ARTIFACT_NAME.dmg"
 APP_ARCHIVE_FILENAME="$ARTIFACT_NAME.app.zip"
 DSYM_ARCHIVE_FILENAME="$ARTIFACT_NAME.dSYM.zip"
 CHECKSUMS_FILENAME="$ARTIFACT_NAME-SHA256SUMS.txt"
+RELEASE_NOTES_FILENAME="$ARTIFACT_NAME-RELEASE_NOTES.md"
 DMG_PATH="$MANIFEST_DIR/$DMG_FILENAME"
 APP_ARCHIVE_PATH="$MANIFEST_DIR/$APP_ARCHIVE_FILENAME"
 DSYM_ARCHIVE_PATH="$MANIFEST_DIR/$DSYM_ARCHIVE_FILENAME"
 CHECKSUMS_PATH="$MANIFEST_DIR/$CHECKSUMS_FILENAME"
+RELEASE_NOTES_PATH="$MANIFEST_DIR/$RELEASE_NOTES_FILENAME"
 
 verify_recorded_artifact 0 "dmg" "$DMG_FILENAME"
 verify_recorded_artifact 1 "app-zip" "$APP_ARCHIVE_FILENAME"
 verify_recorded_artifact 2 "dsym-zip" "$DSYM_ARCHIVE_FILENAME"
 [[ -f "$CHECKSUMS_PATH" ]] || fail "missing checksums file: $CHECKSUMS_PATH"
+[[ -f "$RELEASE_NOTES_PATH" ]] || fail "missing release notes: $RELEASE_NOTES_PATH"
 
 checksum_count=0
 dmg_checksum_count=0
 app_checksum_count=0
 dsym_checksum_count=0
 manifest_checksum_count=0
+release_notes_checksum_count=0
 while read -r checksum filename trailing; do
     [[ -n "$checksum" && -n "$filename" && -z "${trailing:-}" ]] \
         || fail "malformed checksum line in $CHECKSUMS_FILENAME"
@@ -173,21 +182,46 @@ while read -r checksum filename trailing; do
         "$(basename "$MANIFEST_PATH")")
             manifest_checksum_count=$((manifest_checksum_count + 1))
             ;;
+        "$RELEASE_NOTES_FILENAME")
+            release_notes_checksum_count=$((release_notes_checksum_count + 1))
+            ;;
         *)
             fail "unexpected file in checksum list: $filename"
             ;;
     esac
     checksum_count=$((checksum_count + 1))
 done < "$CHECKSUMS_PATH"
-expect_value "checksum entry count" "$checksum_count" "4"
+expect_value "checksum entry count" "$checksum_count" "5"
 expect_value "DMG checksum entry count" "$dmg_checksum_count" "1"
 expect_value "App checksum entry count" "$app_checksum_count" "1"
 expect_value "dSYM checksum entry count" "$dsym_checksum_count" "1"
 expect_value "manifest checksum entry count" "$manifest_checksum_count" "1"
+expect_value "release notes checksum entry count" "$release_notes_checksum_count" "1"
 (
     cd "$MANIFEST_DIR"
     shasum -a 256 -c "$CHECKSUMS_FILENAME"
 )
+
+grep -Fqx -- "- 发布级别: $RELEASE_CHANNEL" "$RELEASE_NOTES_PATH" \
+    || fail "release notes channel does not match manifest"
+grep -Fqx -- "- Bundle ID: $BUNDLE_IDENTIFIER" "$RELEASE_NOTES_PATH" \
+    || fail "release notes Bundle ID does not match manifest"
+grep -Fqx -- "- 最低系统: macOS $MINIMUM_MACOS 或更高" "$RELEASE_NOTES_PATH" \
+    || fail "release notes minimum macOS does not match manifest"
+grep -Fqx -- "- Git commit: $GIT_COMMIT" "$RELEASE_NOTES_PATH" \
+    || fail "release notes Git commit does not match manifest"
+grep -Fqx -- "- Mach-O UUID: $MACHO_UUID" "$RELEASE_NOTES_PATH" \
+    || fail "release notes Mach-O UUID does not match manifest"
+for required_heading in "## 权限与数据" "## 已知限制" "## SHA-256"; do
+    grep -Fqx -- "$required_heading" "$RELEASE_NOTES_PATH" \
+        || fail "release notes missing required section: $required_heading"
+done
+while read -r checksum filename trailing; do
+    if [[ "$filename" != "$RELEASE_NOTES_FILENAME" ]]; then
+        grep -Fqx -- "$checksum  $filename" "$RELEASE_NOTES_PATH" \
+            || fail "release notes missing checksum for $filename"
+    fi
+done < "$CHECKSUMS_PATH"
 
 unzip -tq "$APP_ARCHIVE_PATH"
 unzip -tq "$DSYM_ARCHIVE_PATH"

@@ -6,13 +6,17 @@ final class RecordingControlWindowController {
     private let model = RecordingControlModel()
     private let panel: RecordingPanel
     private var levelTimer: Timer?
+    private var storageTimer: Timer?
     private var levelProvider: (() -> (system: Double, microphone: Double))?
+    private var storageURL: URL?
+    private var didReportCriticalStorage = false
     var onStop: (() -> Void)?
     var onPauseToggle: (() -> Void)?
+    var onCriticalStorage: ((Int64?) -> Void)?
 
     init() {
         panel = RecordingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 470, height: 98),
+            contentRect: NSRect(x: 0, y: 0, width: 550, height: 98),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -25,6 +29,7 @@ final class RecordingControlWindowController {
         capturesSystemAudio: Bool,
         capturesMicrophone: Bool,
         capturesCamera: Bool,
+        storageURL: URL,
         levelProvider: @escaping () -> (system: Double, microphone: Double)
     ) {
         model.reset(
@@ -34,12 +39,16 @@ final class RecordingControlWindowController {
             capturesCamera: capturesCamera
         )
         self.levelProvider = levelProvider
+        self.storageURL = storageURL
+        didReportCriticalStorage = false
         startLevelUpdates()
+        startStorageUpdates()
         showExisting()
     }
 
     func showExisting() {
         startLevelUpdates()
+        startStorageUpdates()
         positionPanel()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
@@ -48,6 +57,8 @@ final class RecordingControlWindowController {
     func hide() {
         levelTimer?.invalidate()
         levelTimer = nil
+        storageTimer?.invalidate()
+        storageTimer = nil
         panel.orderOut(nil)
     }
 
@@ -99,6 +110,57 @@ final class RecordingControlWindowController {
         }
         RunLoop.main.add(timer, forMode: .common)
         levelTimer = timer
+    }
+
+    private func startStorageUpdates() {
+        guard storageTimer == nil, storageURL != nil else { return }
+        updateStorageStatus()
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.updateStorageStatus() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        storageTimer = timer
+    }
+
+    private func updateStorageStatus() {
+        let availableBytes = storageURL.flatMap(Self.availableStorageBytes(at:))
+        applyAvailableStorageBytes(availableBytes)
+    }
+
+    func applyAvailableStorageBytes(_ availableBytes: Int64?) {
+        let level = model.updateAvailableStorageBytes(availableBytes)
+        guard level == .critical, !didReportCriticalStorage else { return }
+        didReportCriticalStorage = true
+        model.isTransitioning = true
+        onCriticalStorage?(availableBytes)
+    }
+
+    nonisolated static func availableStorageBytes(at requestedURL: URL) -> Int64? {
+        var probeURL = requestedURL.standardizedFileURL
+        while !FileManager.default.fileExists(atPath: probeURL.path),
+              probeURL.pathComponents.count > 1 {
+            probeURL.deleteLastPathComponent()
+        }
+        do {
+            let values = try probeURL.resourceValues(forKeys: [
+                .volumeAvailableCapacityForImportantUsageKey,
+                .volumeAvailableCapacityKey
+            ])
+            let importantCapacity = values.volumeAvailableCapacityForImportantUsage
+            let immediateCapacity = values.volumeAvailableCapacity.map(Int64.init)
+            switch (importantCapacity, immediateCapacity) {
+            case let (important?, immediate?):
+                return max(min(important, immediate), 0)
+            case let (important?, nil):
+                return max(important, 0)
+            case let (nil, immediate?):
+                return max(immediate, 0)
+            case (nil, nil):
+                return nil
+            }
+        } catch {
+            return nil
+        }
     }
 
     private func stop() {

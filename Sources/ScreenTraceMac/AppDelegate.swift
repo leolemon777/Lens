@@ -113,6 +113,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordingControl.onPauseToggle = { [weak self] in
             self?.toggleRecordingPause()
         }
+        recordingControl.onCriticalStorage = { [weak self] availableBytes in
+            guard let self, recordingService.isRecording else { return }
+            let remaining = availableBytes.map {
+                ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+            } ?? "不足 1 GB"
+            recordingControl.hide()
+            stopRecording(
+                startTitle: "磁盘空间不足，正在安全停止",
+                startDetail: "当前可用 \(remaining)；已写入的媒体分片会继续保留"
+            )
+        }
         traceLibrary.onAnnotateRequested = { [weak self] trace, image in
             self?.annotationEditor.show(trace: trace, fallbackImage: image)
         }
@@ -735,6 +746,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     capturesSystemAudio: options.capturesSystemAudio,
                     capturesMicrophone: options.capturesMicrophone,
                     capturesCamera: options.capturesCamera,
+                    storageURL: store.rootDirectory,
                     levelProvider: { [weak self] in
                         self?.recordingService.audioLevels ?? (0, 0)
                     }
@@ -746,9 +758,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func stopRecording() {
+    private func stopRecording(
+        startTitle: String = "正在完成原始视频",
+        startDetail: String = "事件轨道同时写入"
+    ) {
         guard recordingService.isRecording else { return }
-        toast.show(title: "正在完成原始视频", detail: "事件轨道同时写入", symbol: "hourglass")
+        toast.show(title: startTitle, detail: startDetail, symbol: "hourglass")
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -777,6 +792,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 if recordingService.isRecording {
+                    recordingControl.setTransitioning(false)
                     recordingControl.showExisting()
                 } else {
                     recordingControl.hide()

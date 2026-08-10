@@ -1,4 +1,12 @@
+import Foundation
 import SwiftUI
+
+enum RecordingStorageLevel: Equatable {
+    case unknown
+    case healthy
+    case warning
+    case critical
+}
 
 @MainActor
 final class RecordingControlModel: ObservableObject {
@@ -13,6 +21,11 @@ final class RecordingControlModel: ObservableObject {
     @Published var isTransitioning = false
     @Published var systemAudioLevel: Double = 0
     @Published var microphoneAudioLevel: Double = 0
+    @Published private(set) var availableStorageBytes: Int64?
+    @Published private(set) var storageLevel: RecordingStorageLevel = .unknown
+
+    static let warningStorageBytes: Int64 = 5 * 1_024 * 1_024 * 1_024
+    static let criticalStorageBytes: Int64 = 1 * 1_024 * 1_024 * 1_024
 
     func reset(
         sourceTitle: String = "屏幕录制",
@@ -31,12 +44,56 @@ final class RecordingControlModel: ObservableObject {
         isTransitioning = false
         systemAudioLevel = 0
         microphoneAudioLevel = 0
+        availableStorageBytes = nil
+        storageLevel = .unknown
     }
 
     func updateAudioLevels(system: Double, microphone: Double) {
         systemAudioLevel = min(max(system, 0), 1)
         microphoneAudioLevel = min(max(microphone, 0), 1)
     }
+
+    @discardableResult
+    func updateAvailableStorageBytes(_ bytes: Int64?) -> RecordingStorageLevel {
+        let normalized = bytes.map { max($0, 0) }
+        availableStorageBytes = normalized
+        storageLevel = Self.storageLevel(for: normalized)
+        return storageLevel
+    }
+
+    static func storageLevel(for availableBytes: Int64?) -> RecordingStorageLevel {
+        guard let availableBytes else { return .unknown }
+        if availableBytes <= criticalStorageBytes { return .critical }
+        if availableBytes <= warningStorageBytes { return .warning }
+        return .healthy
+    }
+
+    var storageLabel: String {
+        guard let availableStorageBytes else { return "磁盘 --" }
+        return "磁盘 \(Self.byteFormatter.string(fromByteCount: availableStorageBytes))"
+    }
+
+    var storageHelp: String {
+        switch storageLevel {
+        case .unknown:
+            "暂时无法读取项目磁盘的可用空间"
+        case .healthy:
+            "项目磁盘可用空间充足"
+        case .warning:
+            "项目磁盘可用空间不足 5 GB，请尽快结束录制"
+        case .critical:
+            "项目磁盘可用空间不足 1 GB，屏迹将安全停止录制"
+        }
+    }
+
+    private static let byteFormatter: ByteCountFormatter = {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useGB, .useMB]
+        formatter.countStyle = .file
+        formatter.includesUnit = true
+        formatter.isAdaptive = true
+        return formatter
+    }()
 
     func setPaused(_ paused: Bool, at date: Date = Date()) {
         guard paused != isPaused else { return }
@@ -107,6 +164,17 @@ struct RecordingControlView: View {
                     .help("摄像头正在单独分轨录制")
             }
 
+            HStack(spacing: 4) {
+                Image(systemName: storageSymbol)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(model.storageLabel)
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(storageColor)
+            .frame(minWidth: 68)
+            .help(model.storageHelp)
+
             Button {
                 onPauseToggle()
             } label: {
@@ -144,6 +212,23 @@ struct RecordingControlView: View {
     private static func format(_ interval: TimeInterval) -> String {
         let seconds = max(0, Int(interval))
         return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private var storageColor: Color {
+        switch model.storageLevel {
+        case .unknown: .secondary
+        case .healthy: .green
+        case .warning: .orange
+        case .critical: .red
+        }
+    }
+
+    private var storageSymbol: String {
+        switch model.storageLevel {
+        case .unknown, .healthy: "internaldrive.fill"
+        case .warning: "internaldrive.fill.trianglebadge.exclamationmark"
+        case .critical: "externaldrive.fill.badge.exclamationmark"
+        }
     }
 }
 

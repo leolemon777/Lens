@@ -12,11 +12,12 @@ final class RecordingControlWindowController {
     private var didReportCriticalStorage = false
     var onStop: (() -> Void)?
     var onPauseToggle: (() -> Void)?
+    var onDiscardAndRestart: (() -> Void)?
     var onCriticalStorage: ((Int64?) -> Void)?
 
     init() {
         panel = RecordingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 550, height: 98),
+            contentRect: NSRect(x: 0, y: 0, width: 590, height: 98),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -70,6 +71,11 @@ final class RecordingControlWindowController {
         model.isTransitioning = transitioning
     }
 
+    func requestDiscardAndRestart() {
+        guard !model.isTransitioning else { return }
+        onDiscardAndRestart?()
+    }
+
     private func configurePanel() {
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -81,6 +87,7 @@ final class RecordingControlWindowController {
         let root = RecordingControlView(
             model: model,
             onPauseToggle: { [weak self] in self?.onPauseToggle?() },
+            onDiscardAndRestart: { [weak self] in self?.requestDiscardAndRestart() },
             onStop: { [weak self] in self?.stop() }
         )
         panel.contentView = NSHostingView(rootView: root)

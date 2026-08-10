@@ -35,11 +35,16 @@ final class RecordingControlViewTests: XCTestCase {
 
         let root = ZStack {
             Color(red: 0.55, green: 0.55, blue: 0.55)
-            RecordingControlView(model: model, onPauseToggle: {}, onStop: {})
+            RecordingControlView(
+                model: model,
+                onPauseToggle: {},
+                onDiscardAndRestart: {},
+                onStop: {}
+            )
         }
         .environment(\.colorScheme, .light)
         let hostingView = NSHostingView(rootView: root)
-        hostingView.frame = CGRect(x: 0, y: 0, width: 550, height: 98)
+        hostingView.frame = CGRect(x: 0, y: 0, width: 590, height: 98)
         let snapshotWindow = NSWindow(
             contentRect: hostingView.frame,
             styleMask: [.borderless],
@@ -63,7 +68,7 @@ final class RecordingControlViewTests: XCTestCase {
             try png.write(to: URL(fileURLWithPath: snapshotPath), options: .atomic)
         }
 
-        XCTAssertGreaterThanOrEqual(representation.pixelsWide, 550)
+        XCTAssertGreaterThanOrEqual(representation.pixelsWide, 590)
         XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 98)
         XCTAssertGreaterThan(png?.count ?? 0, 4_000)
     }
@@ -94,5 +99,19 @@ final class RecordingControlViewTests: XCTestCase {
         controller.applyAvailableStorageBytes(gibibyte / 2)
         XCTAssertEqual(criticalReports.count, 1)
         XCTAssertEqual(criticalReports[0], gibibyte)
+    }
+
+    func testDiscardAndRestartIsBlockedDuringRecordingTransitions() {
+        let controller = RecordingControlWindowController()
+        var requestCount = 0
+        controller.onDiscardAndRestart = { requestCount += 1 }
+
+        controller.setTransitioning(true)
+        controller.requestDiscardAndRestart()
+        XCTAssertEqual(requestCount, 0)
+
+        controller.setTransitioning(false)
+        controller.requestDiscardAndRestart()
+        XCTAssertEqual(requestCount, 1)
     }
 }

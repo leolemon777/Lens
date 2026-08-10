@@ -118,6 +118,7 @@ final class RecordingControlModel: ObservableObject {
 struct RecordingControlView: View {
     @ObservedObject var model: RecordingControlModel
     let onPauseToggle: () -> Void
+    let onDiscardAndRestart: () -> Void
     let onStop: () -> Void
 
     var body: some View {
@@ -186,6 +187,18 @@ struct RecordingControlView: View {
             .disabled(model.isTransitioning)
             .opacity(model.isTransitioning ? 0.38 : 1)
             .help(model.isPaused ? "继续并写入新分片" : "暂停并安全完成当前分片")
+
+            Button(action: onDiscardAndRestart) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.red)
+                    .frame(width: 28, height: 28)
+                    .background(.primary.opacity(0.07), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isTransitioning)
+            .opacity(model.isTransitioning ? 0.38 : 1)
+            .help("丢弃并重新录制")
 
             Button(action: onStop) {
                 Image(systemName: "stop.fill")

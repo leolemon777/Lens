@@ -113,6 +113,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recordingControl.onPauseToggle = { [weak self] in
             self?.toggleRecordingPause()
         }
+        recordingControl.onDiscardAndRestart = { [weak self] in
+            self?.requestDiscardAndRestart()
+        }
         recordingControl.onCriticalStorage = { [weak self] availableBytes in
             guard let self, recordingService.isRecording else { return }
             let remaining = availableBytes.map {
@@ -830,6 +833,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 recordingControl.setPaused(recordingService.isPaused)
                 showRecordingError(error)
+            }
+        }
+    }
+
+    private func requestDiscardAndRestart() {
+        guard recordingService.isRecording else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "丢弃并重新录制？"
+        alert.informativeText = "屏迹会先安全停止当前录制，再把整个项目移入废纸篓。文件不会被永久删除。"
+        alert.addButton(withTitle: "移到废纸篓并重录")
+        alert.addButton(withTitle: "继续录制")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        recordingControl.setTransitioning(true)
+        toast.show(
+            title: "正在安全丢弃当前录制",
+            detail: "完成所有媒体分片后会移入废纸篓",
+            symbol: "trash.circle"
+        )
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let discarded = try await recordingService.stopForDiscard()
+                recordingControl.hide()
+                try FileManager.default.trashItem(
+                    at: discarded.packageURL,
+                    resultingItemURL: nil
+                )
+                traceLibrary.reloadIfVisible()
+                toast.show(
+                    title: "旧录制已移到废纸篓",
+                    detail: "正在按相同来源重新准备录制",
+                    symbol: "arrow.counterclockwise.circle.fill"
+                )
+                startRecording(source: discarded.source)
+            } catch {
+                recordingControl.hide()
+                traceLibrary.reloadIfVisible()
+                toast.show(
+                    title: "没有删除录制项目",
+                    detail: "录制已停止并尽量保留为可恢复项目：\(error.localizedDescription)",
+                    symbol: "exclamationmark.arrow.triangle.2.circlepath"
+                )
             }
         }
     }

@@ -39,6 +39,11 @@ struct ScreenRecordingOptions: Sendable {
     var capturesCamera = false
 }
 
+struct DiscardedRecording: Sendable {
+    let packageURL: URL
+    let source: RecordingCaptureSource
+}
+
 @MainActor
 final class ScreenRecordingService: NSObject {
     private let store: TraceProjectStore
@@ -233,6 +238,36 @@ final class ScreenRecordingService: NSObject {
             let saved = try store.finalizeRecording(session, durationSeconds: duration)
             clearSession()
             return saved
+        } catch {
+            await pointerRecorder.stop()
+            await cameraRecorder.cancel()
+            microphoneRecorder.cancel()
+            try? store.markRecordingInterrupted(session)
+            clearSession()
+            throw error
+        }
+    }
+
+    /// Stops every active writer without finalizing a playable project. The package remains on
+    /// disk as an interrupted, recoverable capture until the caller successfully moves it to Trash.
+    func stopForDiscard() async throws -> DiscardedRecording {
+        guard let session, let source else { throw ScreenRecordingError.notRecording }
+        guard !isTransitioning else { throw ScreenRecordingError.transitionInProgress }
+        isTransitioning = true
+        defer { isTransitioning = false }
+
+        do {
+            if stream != nil {
+                try await finishActiveSegment(session: session)
+            } else {
+                await pointerRecorder.stop()
+                await cameraRecorder.cancel()
+                microphoneRecorder.cancel()
+            }
+            try store.markRecordingInterrupted(session)
+            let discarded = DiscardedRecording(packageURL: session.packageURL, source: source)
+            clearSession()
+            return discarded
         } catch {
             await pointerRecorder.stop()
             await cameraRecorder.cancel()

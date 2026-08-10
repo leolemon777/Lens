@@ -229,11 +229,14 @@ struct FrameSignature {
     let pixels: [UInt8]
 
     init(image: CGImage) throws {
-        width = min(max(image.width, 1), 96)
+        // A wider signature keeps text, card borders, and other sparse page details
+        // measurable. At 96 px, large flat web layouts can make a short false
+        // offset score better than the real scroll distance.
+        width = min(max(image.width, 1), 256)
         let proportionalHeight = Int(
             (Double(image.height) / Double(max(image.width, 1)) * Double(width)).rounded()
         )
-        height = min(max(proportionalHeight, 64), 180)
+        height = min(max(proportionalHeight, 96), 240)
         var pixels = [UInt8](repeating: 0, count: width * height)
         guard let context = CGContext(
             data: &pixels,
@@ -260,7 +263,11 @@ struct FrameSignature {
                 isDuplicate: false
             )
         }
-        let insetY = max(Int(Double(height) * 0.12), 2)
+        // Keep enough of a narrow overlap to support larger wheel/trackpad steps.
+        // Six percent still excludes ordinary browser sticky headers, while a
+        // twelve-percent inset made scrolls above roughly two-thirds of a viewport
+        // mathematically impossible to match.
+        let insetY = max(Int(Double(height) * 0.06), 2)
         let insetX = max(Int(Double(width) * 0.06), 1)
         let sameDifference = sameFrameDifference(to: current)
         if sameDifference <= Self.stableDifferenceThreshold {
@@ -275,7 +282,7 @@ struct FrameSignature {
         let minimumDelta = max(Int(Double(height) * 0.015), 2)
         let maximumDelta = min(
             Int(Double(height) * 0.82),
-            height - insetY * 2 - 12
+            height - insetY * 2 - 8
         )
         guard maximumDelta >= minimumDelta else {
             return Estimate(
@@ -313,7 +320,7 @@ struct FrameSignature {
             to: current,
             deltaRows: 0,
             insetX: max(Int(Double(width) * 0.06), 1),
-            insetY: max(Int(Double(height) * 0.12), 2)
+            insetY: max(Int(Double(height) * 0.06), 2)
         )
     }
 
@@ -325,17 +332,48 @@ struct FrameSignature {
     ) -> Double {
         let maxY = height - insetY - deltaRows
         guard maxY > insetY else { return 1 }
-        var total = 0
-        var count = 0
+        var weightedDifference = 0.0
+        var totalWeight = 0.0
+        var fallbackDifference = 0
+        var fallbackCount = 0
         for y in stride(from: insetY, to: maxY, by: 2) {
             let previousRow = (y + deltaRows) * width
             let currentRow = y * width
             for x in stride(from: insetX, to: width - insetX, by: 2) {
-                total += abs(Int(pixels[previousRow + x]) - Int(current.pixels[currentRow + x]))
-                count += 1
+                let previousIndex = previousRow + x
+                let currentIndex = currentRow + x
+                let intensityDifference = abs(
+                    Int(pixels[previousIndex]) - Int(current.pixels[currentIndex])
+                )
+                fallbackDifference += intensityDifference
+                fallbackCount += 1
+
+                let previousGradient = gradientMagnitude(at: previousIndex)
+                let currentGradient = current.gradientMagnitude(at: currentIndex)
+                let information = max(previousGradient, currentGradient)
+                guard information >= 8 else { continue }
+
+                // Sparse edges carry the scroll signal in otherwise uniform cards.
+                // Give stronger text/border pixels more influence while keeping the
+                // score normalized to the same 0...1 range as before.
+                let weight = 1.0 + min(Double(information) / 32.0, 5.0)
+                weightedDifference += Double(intensityDifference) * weight
+                totalWeight += weight
             }
         }
-        guard count > 0 else { return 1 }
-        return Double(total) / Double(count * 255)
+        if totalWeight >= 12 {
+            return weightedDifference / (totalWeight * 255)
+        }
+        guard fallbackCount > 0 else { return 1 }
+        return Double(fallbackDifference) / Double(fallbackCount * 255)
+    }
+
+    private func gradientMagnitude(at index: Int) -> Int {
+        let x = index % width
+        let y = index / width
+        guard x > 0, x + 1 < width, y > 0, y + 1 < height else { return 0 }
+        let horizontal = abs(Int(pixels[index + 1]) - Int(pixels[index - 1]))
+        let vertical = abs(Int(pixels[index + width]) - Int(pixels[index - width]))
+        return max(horizontal, vertical)
     }
 }

@@ -67,6 +67,30 @@ final class VerticalScrollingCaptureAssemblerTests: XCTestCase {
         XCTAssertEqual(result.frames.count, 1)
     }
 
+    func testSparseFlatWebCardsDoNotProduceShortFalseOffsets() throws {
+        let assembler = VerticalScrollingCaptureAssembler()
+        let offsets = [0, 420, 840, 1_260]
+        let frames = try offsets.map {
+            try makeFlatCardViewport(width: 1_200, height: 720, contentOffset: $0)
+        }
+
+        XCTAssertEqual(try assembler.append(frames[0]), .first)
+        for (index, frame) in frames.dropFirst().enumerated() {
+            let disposition = try assembler.append(frame)
+            guard case let .appended(delta, difference) = disposition else {
+                return XCTFail(
+                    "Flat web card frame \(index + 1) should overlap: \(disposition)"
+                )
+            }
+            XCTAssertLessThanOrEqual(
+                abs(delta - 420),
+                12,
+                "Unexpected flat-card delta \(delta), score \(difference)"
+            )
+            XCTAssertLessThan(difference, 0.08)
+        }
+    }
+
     private func makeViewport(
         width: Int,
         height: Int,
@@ -110,6 +134,76 @@ final class VerticalScrollingCaptureAssemblerTests: XCTestCase {
                   intent: .defaultIntent
               ) else {
             throw XCTSkip("Unable to create synthetic scrolling viewport")
+        }
+        return image
+    }
+
+    private func makeFlatCardViewport(
+        width: Int,
+        height: Int,
+        contentOffset: Int,
+        fixedHeaderHeight: Int = 36
+    ) throws -> CGImage {
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                let index = (y * width + x) * 4
+                if y < fixedHeaderHeight {
+                    bytes[index] = 24
+                    bytes[index + 1] = 82
+                    bytes[index + 2] = 66
+                } else {
+                    let documentY = contentOffset + y - fixedHeaderHeight
+                    let card = documentY / 430
+                    let withinCard = documentY % 430
+                    let cardTop = withinCard < 390
+                    let isBorder = withinCard < 3 || (387..<390).contains(withinCard)
+                    let headingEnd = 260 + (card * 83) % 420
+                    let textEnd = 560 + (card * 137) % 520
+                    let isHeading = (70..<92).contains(withinCard) && (60..<headingEnd).contains(x)
+                        && ((x / 13 + card * 2) % 5 != 0)
+                    let isText = (145..<169).contains(withinCard) && (60..<textEnd).contains(x)
+                        && ((x / 23 + card * 3) % 7 != 0)
+                    let base: (UInt8, UInt8, UInt8) = card % 3 == 0
+                        ? (248, 248, 246)
+                        : (card % 3 == 1 ? (244, 240, 252) : (252, 244, 236))
+                    let color: (UInt8, UInt8, UInt8)
+                    if isBorder {
+                        color = (198, 211, 204)
+                    } else if isHeading {
+                        color = (20, 128, 92)
+                    } else if isText {
+                        color = (28, 33, 31)
+                    } else if cardTop {
+                        color = base
+                    } else {
+                        color = (237, 243, 239)
+                    }
+                    bytes[index] = color.0
+                    bytes[index + 1] = color.1
+                    bytes[index + 2] = color.2
+                }
+                bytes[index + 3] = 255
+            }
+        }
+        let data = Data(bytes)
+        guard let provider = CGDataProvider(data: data as CFData),
+              let image = CGImage(
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 32,
+                  bytesPerRow: width * 4,
+                  space: CGColorSpaceCreateDeviceRGB(),
+                  bitmapInfo: CGBitmapInfo.byteOrder32Big.union(
+                      CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
+                  ),
+                  provider: provider,
+                  decode: nil,
+                  shouldInterpolate: false,
+                  intent: .defaultIntent
+              ) else {
+            throw XCTSkip("Unable to create flat web card viewport")
         }
         return image
     }

@@ -82,6 +82,7 @@ open Build/ScreenTrace.app
 - [核心工作进程协议 v0.1](docs/屏迹核心工作进程协议-v0.1.md)
 - [macOS 发布检查清单](docs/发布检查清单.md)
 - [第三方依赖与素材清单](docs/第三方依赖与素材清单.md)
+- [品牌资产说明](docs/品牌资产说明.md)
 - [安装、权限、升级与卸载](docs/安装与权限指南.md)
 - [隐私说明](PRIVACY.md)
 - [贡献指南](CONTRIBUTING.md)

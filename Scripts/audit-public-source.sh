@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MAX_TRACKED_BYTES=$((5 * 1024 * 1024))
+APP_ICON_PATH="Assets/AppIcon.png"
+APP_ICON_SHA256="b7c0307b815edbbc8829af9557530a0fd66cc0a18b334482263e4f5ec146d172"
 FAILURES=0
 
 cd "$PROJECT_DIR"
@@ -18,7 +20,9 @@ required_files=(
     "PRIVACY.md"
     "SECURITY.md"
     "CONTRIBUTING.md"
+    "$APP_ICON_PATH"
     "docs/第三方依赖与素材清单.md"
+    "docs/品牌资产说明.md"
     "docs/发布检查清单.md"
     ".github/ISSUE_TEMPLATE/bug_report.yml"
     ".github/ISSUE_TEMPLATE/feature_request.yml"
@@ -65,12 +69,33 @@ while IFS= read -r -d '' path; do
     case "$mime_type" in
         text/*|application/json|application/xml|application/x-empty|application/x-shellscript|inode/x-empty)
             ;;
+        image/png)
+            if [[ "$path" != "$APP_ICON_PATH" ]]; then
+                fail "tracked image is not an explicitly audited brand asset: $path"
+            fi
+            ;;
         *)
             fail "tracked non-text file requires an explicit asset review: $path ($mime_type)"
             ;;
     esac
 done < <(git ls-files -z)
 shopt -u nocasematch
+
+if [[ -f "$APP_ICON_PATH" ]]; then
+    app_icon_sha256="$(shasum -a 256 "$APP_ICON_PATH" | awk '{print $1}')"
+    app_icon_width="$(sips -g pixelWidth "$APP_ICON_PATH" | awk '/pixelWidth/ { print $2 }')"
+    app_icon_height="$(sips -g pixelHeight "$APP_ICON_PATH" | awk '/pixelHeight/ { print $2 }')"
+    app_icon_alpha="$(sips -g hasAlpha "$APP_ICON_PATH" | awk '/hasAlpha/ { print $2 }')"
+    if [[ "$app_icon_sha256" != "$APP_ICON_SHA256" ]]; then
+        fail "app icon changed without an explicit asset review: $APP_ICON_PATH"
+    fi
+    if [[ "$app_icon_width" != "1024" || "$app_icon_height" != "1024" ]]; then
+        fail "app icon master must be 1024x1024: $APP_ICON_PATH"
+    fi
+    if [[ "$app_icon_alpha" != "no" ]]; then
+        fail "app icon master must be an opaque RGB image: $APP_ICON_PATH"
+    fi
+fi
 
 secret_pattern='-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}|sk-[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}'
 set +e
@@ -89,7 +114,7 @@ if (( FAILURES > 0 )); then
     exit 1
 fi
 
-echo "Public-source audit passed for $tracked_count tracked text files."
+echo "Public-source audit passed for $tracked_count tracked public files."
 if [[ ! -f "LICENSE" ]]; then
     echo "Release remains blocked: choose a license and add LICENSE."
 fi

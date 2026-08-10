@@ -15,6 +15,7 @@ struct PermissionCenterView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     shortcutsSection
                     permissionsSection
+                    diagnosticsSection
                     privacyNote
                 }
                 .padding(.vertical, 18)
@@ -143,6 +144,38 @@ struct PermissionCenterView: View {
         }
         .padding(13)
         .background(.green.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var diagnosticsSection: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "stethoscope")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.cyan)
+                .frame(width: 30, height: 30)
+                .background(.cyan.opacity(0.10), in: Circle())
+            VStack(alignment: .leading, spacing: 3) {
+                Text("诊断与支持")
+                    .font(.system(size: 11.5, weight: .semibold))
+                Text("仅包含版本、权限状态和错误代码；不包含媒体、正文、标题或路径。")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let message = model.diagnosticStatusMessage {
+                    Label(message, systemImage: message.contains("已复制") ? "checkmark.circle.fill" : "xmark.circle.fill")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(message.contains("已复制") ? .green : .red)
+                }
+            }
+            Spacer(minLength: 10)
+            Button(model.isPreparingDiagnosticSummary ? "正在准备…" : "复制诊断摘要") {
+                model.copyDiagnosticSummary()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(model.isPreparingDiagnosticSummary)
+        }
+        .padding(12)
+        .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
     private func sectionTitle(_ title: String, symbol: String) -> some View {

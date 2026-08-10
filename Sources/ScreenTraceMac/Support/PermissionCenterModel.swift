@@ -101,8 +101,23 @@ enum PermissionAccessState: String, Equatable {
 @MainActor
 final class PermissionCenterModel: ObservableObject {
     @Published private(set) var states: [SystemPermissionKind: PermissionAccessState] = [:]
+    @Published private(set) var diagnosticStatusMessage: String?
+    @Published private(set) var isPreparingDiagnosticSummary = false
 
-    init() {
+    private let diagnosticSummaryProvider: @MainActor () async -> String
+    private let diagnosticSummaryConsumer: @MainActor (String) -> Bool
+
+    init(
+        diagnosticSummaryProvider: @escaping @MainActor () async -> String = {
+            "ScreenTrace 诊断摘要\n尚无可用运行信息。"
+        },
+        diagnosticSummaryConsumer: @escaping @MainActor (String) -> Bool = { summary in
+            NSPasteboard.general.clearContents()
+            return NSPasteboard.general.setString(summary, forType: .string)
+        }
+    ) {
+        self.diagnosticSummaryProvider = diagnosticSummaryProvider
+        self.diagnosticSummaryConsumer = diagnosticSummaryConsumer
         refresh()
     }
 
@@ -111,7 +126,11 @@ final class PermissionCenterModel: ObservableObject {
     }
 
     func refresh() {
-        states = [
+        states = Self.currentStates()
+    }
+
+    static func currentStates() -> [SystemPermissionKind: PermissionAccessState] {
+        [
             .screenCapture: ScreenPermission.hasAccess ? .granted : .denied,
             .microphone: PermissionAccessState(
                 authorizationStatus: AVCaptureDevice.authorizationStatus(for: .audio)
@@ -124,6 +143,21 @@ final class PermissionCenterModel: ObservableObject {
             ),
             .accessibility: AXIsProcessTrusted() ? .granted : .denied
         ]
+    }
+
+    func copyDiagnosticSummary() {
+        guard !isPreparingDiagnosticSummary else { return }
+        isPreparingDiagnosticSummary = true
+        diagnosticStatusMessage = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let summary = await diagnosticSummaryProvider()
+            let copied = diagnosticSummaryConsumer(summary)
+            diagnosticStatusMessage = copied
+                ? "诊断摘要已复制"
+                : "无法写入剪贴板"
+            isPreparingDiagnosticSummary = false
+        }
     }
 
     func performPrimaryAction(for kind: SystemPermissionKind) {

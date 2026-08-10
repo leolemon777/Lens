@@ -4,6 +4,27 @@ import XCTest
 @testable import ScreenTraceMac
 
 final class PermissionCenterModelTests: XCTestCase {
+    @MainActor
+    func testDiagnosticSummaryCopyReportsSuccessWithoutChangingItsContents() async {
+        let copied = expectation(description: "diagnostic summary copied")
+        var receivedSummary: String?
+        let model = PermissionCenterModel(
+            diagnosticSummaryProvider: { "safe diagnostic summary" },
+            diagnosticSummaryConsumer: { summary in
+                receivedSummary = summary
+                copied.fulfill()
+                return true
+            }
+        )
+
+        model.copyDiagnosticSummary()
+        await fulfillment(of: [copied], timeout: 1)
+
+        XCTAssertEqual(receivedSummary, "safe diagnostic summary")
+        XCTAssertEqual(model.diagnosticStatusMessage, "诊断摘要已复制")
+        XCTAssertFalse(model.isPreparingDiagnosticSummary)
+    }
+
     func testAVAuthorizationStatusMapsToPermissionPresentation() {
         XCTAssertEqual(
             PermissionAccessState(authorizationStatus: .notDetermined),

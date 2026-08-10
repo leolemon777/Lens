@@ -15,9 +15,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioMixdownRenderer = AudioMixdownRenderer()
     private let transcriptionService = LocalSpeechTranscriptionService()
     private let toast = ToastWindowController()
+    private let diagnostics = LocalDiagnosticLog()
     private lazy var permissionCenter = PermissionCenterWindowController(
         appModel: model,
-        onShortcutsChanged: { [weak self] in self?.restartHotKeys() }
+        onShortcutsChanged: { [weak self] in self?.restartHotKeys() },
+        diagnosticSummaryProvider: { [weak self] in
+            await self?.makeDiagnosticSummary() ?? "ScreenTrace 诊断摘要\n应用尚未完成启动。"
+        }
     )
     private lazy var annotationEditor = ScreenshotAnnotationEditorWindowController(store: store)
     private lazy var traceLibrary = TraceLibraryWindowController(store: store)
@@ -50,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         },
         onScrollingCaptureFailed: { [weak self] error in
+            self?.logDiagnosticFailure("scrolling_capture.failed", error: error)
             self?.toast.show(
                 title: "长截图未完成",
                 detail: error.localizedDescription,
@@ -78,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recoverInterruptedRecordings()
         startHotKeys()
         actionCenter.show()
+        logDiagnostic("app.launched", metadata: appVersionMetadata)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -121,6 +127,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         recordingControl.onCriticalStorage = { [weak self] availableBytes in
             guard let self, recordingService.isRecording else { return }
+            logDiagnostic(
+                "storage.critical",
+                level: .error,
+                metadata: ["storageLevel": "critical"]
+            )
             let remaining = availableBytes.map {
                 ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
             } ?? "不足 1 GB"
@@ -167,6 +178,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func recoverInterruptedRecordings() {
         let recovered = store.recoverInterruptedRecordings()
         guard !recovered.isEmpty else { return }
+        logDiagnostic(
+            "recording.recovered",
+            level: .warning,
+            metadata: ["count": String(recovered.count)]
+        )
         toast.show(
             title: "发现并保留了 \(recovered.count) 条中断录屏",
             detail: "原始分片未被删除，可在屏迹目录中恢复",
@@ -193,6 +209,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let report = manager.start()
         hotKeyManager = manager
         if !report.issues.isEmpty {
+            logDiagnostic(
+                "hotkey.registration_fallback",
+                level: .warning,
+                metadata: ["count": String(report.issues.count)]
+            )
             toast.show(
                 title: "部分主快捷键被占用",
                 detail: "屏迹已启用事件监听回退；Control + Option + 1/2 备用组合仍会尝试保持可用",
@@ -402,6 +423,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleOCRFailed(_ error: Error, trace: SavedTrace) {
+        logDiagnosticFailure("ocr.failed", error: error)
         toast.show(
             title: "原图已安全保存",
             detail: "文字识别未完成：\(error.localizedDescription)",
@@ -484,6 +506,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     manifest: entry.manifest
                 )
                 var updatedTrace = try store.attachTranscript(document, to: saved)
+                logDiagnostic(
+                    "transcription.completed",
+                    metadata: ["count": String(document.segments.count)]
+                )
                 traceLibrary.reloadIfVisible()
                 let trimmed = document.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
                 toast.show(
@@ -512,12 +538,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     beginOrganization(trace: updatedTrace, transcript: document)
                 }
             } catch is CancellationError {
+                logDiagnostic("transcription.cancelled", level: .warning)
                 toast.show(
                     title: "转写已取消",
                     detail: "录屏与原始音轨保持不变",
                     symbol: "xmark.circle"
                 )
             } catch {
+                logDiagnosticFailure("transcription.failed", error: error)
                 toast.show(
                     title: "原始录屏仍然安全",
                     detail: "本机转写未完成：\(error.localizedDescription)",
@@ -575,6 +603,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ).replacingCustomization(previous?.customization)
                 }.value
                 _ = try store.attachInsights(insights, to: trace)
+                logDiagnostic(
+                    "organization.completed",
+                    metadata: ["count": String(insights.chapters.count)]
+                )
                 traceLibrary.reloadIfVisible()
 
                 var details: [String] = []
@@ -599,6 +631,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } catch is CancellationError {
                 return
             } catch {
+                logDiagnosticFailure("organization.failed", error: error)
                 if announcesResult {
                     toast.show(
                         title: "原始内容仍然安全",
@@ -767,6 +800,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             do {
                 _ = try await recordingService.start(source: source, options: options)
+                logDiagnostic(
+                    "recording.started",
+                    metadata: [
+                        "captureMode": source.mode.rawValue,
+                        "frameRate": String(options.framesPerSecond)
+                    ]
+                )
                 recordingControl.begin(
                     sourceTitle: "\(source.mode.presentationTitle) · \(options.framesPerSecond) FPS",
                     capturesSystemAudio: options.capturesSystemAudio,
@@ -779,7 +819,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             } catch {
                 recordingControl.hide()
-                showRecordingError(error)
+                showRecordingError(error, phase: "start")
             }
         }
     }
@@ -794,6 +834,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             do {
                 let saved = try await recordingService.stop()
+                logDiagnostic("recording.stopped", metadata: ["status": "saved"])
                 let shouldAutomaticallyTranscribe = model.automaticallyTranscribesRecordings
                     && saved.manifest.assets.contains {
                         $0.role == .microphone || $0.role == .systemAudio
@@ -823,7 +864,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 } else {
                     recordingControl.hide()
                 }
-                showRecordingError(error)
+                showRecordingError(error, phase: "stop")
             }
         }
     }
@@ -838,6 +879,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 if shouldPause {
                     try await recordingService.pause()
+                    logDiagnostic("recording.paused")
                     recordingControl.setPaused(true)
                     toast.show(
                         title: "录制已暂停",
@@ -846,6 +888,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     )
                 } else {
                     try await recordingService.resume()
+                    logDiagnostic("recording.resumed")
                     recordingControl.setPaused(false)
                     toast.show(
                         title: "继续录制",
@@ -855,7 +898,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             } catch {
                 recordingControl.setPaused(recordingService.isPaused)
-                showRecordingError(error)
+                showRecordingError(error, phase: shouldPause ? "pause" : "resume")
             }
         }
     }
@@ -894,6 +937,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 startRecording(source: discarded.source)
             } catch {
+                logDiagnosticFailure(
+                    "recording.discard_restart_failed",
+                    error: error,
+                    metadata: ["phase": "discard"]
+                )
                 recordingControl.hide()
                 traceLibrary.reloadIfVisible()
                 toast.show(
@@ -941,7 +989,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func showRecordingError(_ error: Error) {
+    private var appVersionMetadata: [String: String] {
+        [
+            "appVersion": Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleShortVersionString"
+            ) as? String ?? "development",
+            "build": Bundle.main.object(
+                forInfoDictionaryKey: "CFBundleVersion"
+            ) as? String ?? "development"
+        ]
+    }
+
+    private func logDiagnostic(
+        _ code: String,
+        level: DiagnosticLevel = .info,
+        metadata: [String: String] = [:]
+    ) {
+        let diagnostics = diagnostics
+        Task {
+            await diagnostics.record(code, level: level, metadata: metadata)
+        }
+    }
+
+    private func logDiagnosticFailure(
+        _ code: String,
+        error: Error,
+        metadata: [String: String] = [:]
+    ) {
+        logDiagnostic(
+            code,
+            level: .error,
+            metadata: metadata.merging(DiagnosticEvent.errorMetadata(error)) { current, _ in current }
+        )
+    }
+
+    private func makeDiagnosticSummary() async -> String {
+        let version = appVersionMetadata
+        let permissions = PermissionCenterModel.currentStates().reduce(into: [:]) {
+            result, pair in
+            result[pair.key.rawValue] = pair.value.rawValue
+        }
+        return await diagnostics.makeSummary(
+            appVersion: version["appVersion"] ?? "development",
+            build: version["build"] ?? "development",
+            systemVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+            architecture: Self.architectureName,
+            permissions: permissions
+        )
+    }
+
+    private static var architectureName: String {
+        #if arch(arm64)
+        "arm64"
+        #elseif arch(x86_64)
+        "x86_64"
+        #else
+        "unknown"
+        #endif
+    }
+
+    private func showRecordingError(_ error: Error, phase: String) {
+        logDiagnosticFailure(
+            "recording.failed",
+            error: error,
+            metadata: ["phase": phase]
+        )
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "屏迹无法完成录屏"
@@ -1046,7 +1158,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }(),
                 symbol: "sparkles"
             )
+            logDiagnostic("preview.completed")
         } catch {
+            logDiagnosticFailure("preview.failed", error: error)
             toast.show(
                 title: "原始录屏已保留",
                 detail: "自动成片暂未完成，稍后可以重新处理",

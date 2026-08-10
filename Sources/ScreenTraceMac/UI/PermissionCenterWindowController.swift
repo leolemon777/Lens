@@ -3,14 +3,21 @@ import SwiftUI
 
 @MainActor
 final class PermissionCenterWindowController {
-    private let model = PermissionCenterModel()
+    private let model: PermissionCenterModel
     private let window: PermissionPanel
     private let appModel: AppModel
     private let onShortcutsChanged: () -> Void
 
-    init(appModel: AppModel, onShortcutsChanged: @escaping () -> Void) {
+    init(
+        appModel: AppModel,
+        onShortcutsChanged: @escaping () -> Void,
+        diagnosticSummaryProvider: @escaping @MainActor () async -> String
+    ) {
         self.appModel = appModel
         self.onShortcutsChanged = onShortcutsChanged
+        model = PermissionCenterModel(
+            diagnosticSummaryProvider: diagnosticSummaryProvider
+        )
         window = PermissionPanel(
             contentRect: NSRect(x: 0, y: 0, width: 678, height: 628),
             styleMask: [.borderless, .fullSizeContentView],

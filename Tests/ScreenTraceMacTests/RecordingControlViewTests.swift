@@ -73,6 +73,33 @@ final class RecordingControlViewTests: XCTestCase {
         XCTAssertGreaterThan(png?.count ?? 0, 4_000)
     }
 
+    func testControlModelProvidesDynamicSpokenStatus() {
+        let model = RecordingControlModel()
+        let startedAt = Date(timeIntervalSince1970: 100)
+        model.startedAt = startedAt
+        model.capturesSystemAudio = true
+        model.capturesMicrophone = true
+        model.updateAudioLevels(system: 0.724, microphone: 0.946)
+
+        XCTAssertEqual(model.pauseActionTitle, "暂停录制")
+        XCTAssertEqual(model.recordingStateTitle, "正在录制")
+        XCTAssertEqual(model.systemAudioAccessibilityValue, "录制中，电平 72%")
+        XCTAssertEqual(model.microphoneAccessibilityValue, "单独分轨录制中，电平 95%")
+        XCTAssertEqual(
+            model.elapsedAccessibilityValue(at: startedAt.addingTimeInterval(65)),
+            "01:05"
+        )
+
+        model.setPaused(true, at: startedAt.addingTimeInterval(65))
+        XCTAssertEqual(model.pauseActionTitle, "继续录制")
+        XCTAssertEqual(model.recordingStateTitle, "已暂停")
+        model.capturesSystemAudio = false
+        XCTAssertEqual(model.systemAudioAccessibilityValue, "已关闭")
+
+        _ = model.updateAvailableStorageBytes(512 * 1_024 * 1_024)
+        XCTAssertTrue(model.storageAccessibilityValue.contains("不足 1 GB"))
+    }
+
     func testStorageStatusWarnsBeforeItRequiresASafeStop() throws {
         let gibibyte: Int64 = 1_024 * 1_024 * 1_024
         XCTAssertEqual(RecordingControlModel.storageLevel(for: nil), .unknown)

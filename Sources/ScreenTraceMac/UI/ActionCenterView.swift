@@ -161,6 +161,8 @@ struct ActionCenterView: View {
         .buttonStyle(TraceActionButtonStyle(tint: .cyan))
         .keyboardShortcut("1", modifiers: [])
         .help("选择截图模式")
+        .accessibilityLabel("选择截图模式")
+        .accessibilityHint("区域截图、窗口截图、多窗口截图或当前屏幕")
     }
 
     private var recordingMenu: some View {
@@ -212,6 +214,8 @@ struct ActionCenterView: View {
         .buttonStyle(TraceActionButtonStyle(tint: .red))
         .keyboardShortcut("2", modifiers: [])
         .help("选择录屏来源")
+        .accessibilityLabel("选择录屏来源")
+        .accessibilityHint("区域、窗口或当前屏幕，并可配置声音、摄像头和转写")
     }
 
     private func actionTile(_ action: ActionCenterAction, shortcut: KeyEquivalent) -> some View {
@@ -272,6 +276,7 @@ struct ActionCenterView: View {
                             RoundedRectangle(cornerRadius: 10, style: .continuous)
                                 .stroke(.white.opacity(0.16), lineWidth: 1)
                         )
+                        .accessibilityLabel("最近屏迹预览")
                     VStack(alignment: .leading, spacing: 4) {
                         Text(recent.title)
                             .font(.system(size: 12, weight: .semibold))
@@ -313,6 +318,7 @@ struct ActionCenterView: View {
             }
             .buttonStyle(.plain)
             .help("设置")
+            .accessibilityLabel("打开设置与权限")
             Text("Esc 关闭")
         }
         .font(.system(size: 10.5, weight: .medium))

@@ -36,6 +36,7 @@ struct PermissionCenterView: View {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.cyan)
+                    .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("设置与权限")
@@ -54,6 +55,7 @@ struct PermissionCenterView: View {
             }
             .buttonStyle(.plain)
             .help("重新检查权限")
+            .accessibilityLabel("重新检查权限")
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
@@ -62,6 +64,8 @@ struct PermissionCenterView: View {
             }
             .buttonStyle(.plain)
             .help("关闭")
+            .accessibilityLabel("关闭设置与权限")
+            .keyboardShortcut(.cancelAction)
         }
         .padding(.bottom, 15)
     }

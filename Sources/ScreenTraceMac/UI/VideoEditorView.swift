@@ -103,11 +103,15 @@ struct VideoEditorView: View {
             }
             .disabled(!model.canUndo)
             .help("撤销")
+            .accessibilityLabel("撤销")
+            .keyboardShortcut("z", modifiers: .command)
             Button(action: model.redo) {
                 Image(systemName: "arrow.uturn.forward")
             }
             .disabled(!model.canRedo)
             .help("重做")
+            .accessibilityLabel("重做")
+            .keyboardShortcut("z", modifiers: [.command, .shift])
             Button(action: onSave) {
                 HStack(spacing: 6) {
                     if model.isProcessing {
@@ -122,6 +126,7 @@ struct VideoEditorView: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.cyan)
                 .disabled(model.isProcessing)
+                .keyboardShortcut("s", modifiers: .command)
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
@@ -130,6 +135,8 @@ struct VideoEditorView: View {
             }
             .buttonStyle(.plain)
             .help("关闭")
+            .accessibilityLabel("关闭视频编辑器")
+            .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
@@ -366,6 +373,7 @@ struct VideoEditorView: View {
             }
             .buttonStyle(.plain)
             .disabled(playback.isLoading || playback.durationSeconds <= 0)
+            .accessibilityLabel(playback.isPlaying ? "暂停预览" : "播放预览")
             Text(timeText(playback.currentTimeSeconds))
                 .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -377,6 +385,8 @@ struct VideoEditorView: View {
                 ),
                 in: 0...max(playback.durationSeconds, 0.01)
             )
+            .accessibilityLabel("预览播放位置")
+            .accessibilityValue("\(timeText(playback.currentTimeSeconds)) / \(timeText(playback.durationSeconds))")
             Text(timeText(playback.durationSeconds))
                 .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -470,6 +480,13 @@ struct VideoEditorView: View {
                         .frame(width: segmentWidth, height: 58)
                         .offset(x: segmentStart)
                         .zIndex(model.selectedSegmentID == segment.id ? 2 : Double(index % 2))
+                        .accessibilityLabel("片段 \(index + 1)")
+                        .accessibilityValue(String(
+                            format: "源时间 %.1f 到 %.1f 秒，%.2g 倍速",
+                            segment.sourceStartSeconds,
+                            segment.sourceEndSeconds,
+                            segment.playbackRate
+                        ))
                     }
                     ForEach(model.resolvedTransitions, id: \.fromSegmentID) { transition in
                         let center = availableWidth
@@ -513,6 +530,8 @@ struct VideoEditorView: View {
                         .offset(x: start, y: 49)
                         .zIndex(5)
                         .help("视频标注 · \(captionTimeText(band.range.startSeconds))")
+                        .accessibilityLabel("视频标注")
+                        .accessibilityValue("\(captionTimeText(band.range.startSeconds)) 开始")
                     }
                     ForEach(
                         Array(model.presenterKeyframeOutputTimes.enumerated()),
@@ -535,6 +554,8 @@ struct VideoEditorView: View {
                         .buttonStyle(.plain)
                         .offset(x: markerCenter - 7)
                         .help("讲解人像关键帧 · \(captionTimeText(keyframeTime))")
+                        .accessibilityLabel("讲解人像关键帧")
+                        .accessibilityValue(captionTimeText(keyframeTime))
                     }
                     Rectangle()
                         .fill(.white)
@@ -652,16 +673,16 @@ struct VideoEditorView: View {
                     HStack {
                         Text("背景")
                         Spacer()
-                        presetButton(colors: [.gray, .teal]) {
+                        presetButton(colors: [.gray, .teal], accessibilityName: "灰绿") {
                             model.setCanvasPreset(topHex: "#D9D6CF", bottomHex: "#9EA9A7")
                         }
-                        presetButton(colors: [.indigo, .purple]) {
+                        presetButton(colors: [.indigo, .purple], accessibilityName: "蓝紫") {
                             model.setCanvasPreset(topHex: "#667EEA", bottomHex: "#764BA2")
                         }
-                        presetButton(colors: [.orange, .pink]) {
+                        presetButton(colors: [.orange, .pink], accessibilityName: "日落") {
                             model.setCanvasPreset(topHex: "#F6D365", bottomHex: "#FDA085")
                         }
-                        presetButton(colors: [.black, .gray]) {
+                        presetButton(colors: [.black, .gray], accessibilityName: "深色") {
                             model.setCanvasPreset(topHex: "#232526", bottomHex: "#414345")
                         }
                     }
@@ -760,6 +781,13 @@ struct VideoEditorView: View {
                             }
                             .buttonStyle(.plain)
                             .help(item.name)
+                            .accessibilityLabel("\(item.name)视频标注颜色")
+                            .accessibilityHint("选择视频标注颜色")
+                            .accessibilityAddTraits(
+                                model.selectedVideoAnnotationColor == item.color
+                                    ? .isSelected
+                                    : []
+                            )
                         }
                     }
 
@@ -919,6 +947,7 @@ struct VideoEditorView: View {
                             .disabled(model.previousPresenterKeyframeOutputTime(
                                 before: playback.currentTimeSeconds
                             ) == nil)
+                            .accessibilityLabel("上一个讲解人像关键帧")
                             Button {
                                 if let time = model.nextPresenterKeyframeOutputTime(
                                     after: playback.currentTimeSeconds
@@ -932,6 +961,7 @@ struct VideoEditorView: View {
                             .disabled(model.nextPresenterKeyframeOutputTime(
                                 after: playback.currentTimeSeconds
                             ) == nil)
+                            .accessibilityLabel("下一个讲解人像关键帧")
                             Button(hasKeyframe ? "更新当前关键帧" : "添加当前关键帧") {
                                 model.upsertPresenterKeyframe(
                                     atOutputTime: playback.currentTimeSeconds
@@ -1134,6 +1164,12 @@ struct VideoEditorView: View {
                                                     ? Color.cyan
                                                     : Color.secondary
                                             )
+                                            .accessibilityLabel("播放第 \(index + 1) 条字幕")
+                                            .accessibilityValue(String(
+                                                format: "%@ 到 %@",
+                                                captionTimeText(cue.sourceStartSeconds),
+                                                captionTimeText(cue.sourceEndSeconds)
+                                            ))
                                             Spacer(minLength: 2)
                                             Text("入")
                                                 .font(.system(size: 7.5, weight: .medium))
@@ -1200,6 +1236,8 @@ struct VideoEditorView: View {
                                                 Image(systemName: "trash")
                                             }
                                             .help("删除这条自定义字幕；原始转写仍会保留")
+                                            .accessibilityLabel("删除第 \(index + 1) 条字幕")
+                                            .accessibilityHint("原始转写仍会保留")
                                         }
                                         .font(.system(size: 8.5, weight: .semibold))
                                         .buttonStyle(.borderless)
@@ -1344,6 +1382,7 @@ struct VideoEditorView: View {
 
     private func presetButton(
         colors: [Color],
+        accessibilityName: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -1357,6 +1396,7 @@ struct VideoEditorView: View {
                 .overlay(Circle().stroke(.white.opacity(0.35), lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(accessibilityName)背景预设")
     }
 
     private func timelineButton(

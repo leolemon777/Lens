@@ -86,6 +86,41 @@ final class RecordingControlModel: ObservableObject {
         }
     }
 
+    var pauseActionTitle: String {
+        isPaused ? "继续录制" : "暂停录制"
+    }
+
+    var recordingStateTitle: String {
+        isPaused ? "已暂停" : "正在录制"
+    }
+
+    var systemAudioAccessibilityValue: String {
+        capturesSystemAudio
+            ? "录制中，电平 \(Self.audioLevelPercentage(systemAudioLevel))"
+            : "已关闭"
+    }
+
+    var microphoneAccessibilityValue: String {
+        "单独分轨录制中，电平 \(Self.audioLevelPercentage(microphoneAudioLevel))"
+    }
+
+    var storageAccessibilityValue: String {
+        "\(storageLabel)，\(storageHelp)"
+    }
+
+    func elapsedAccessibilityValue(at date: Date) -> String {
+        Self.formatDuration(elapsed(at: date))
+    }
+
+    private static func audioLevelPercentage(_ level: Double) -> String {
+        "\(Int((min(max(level, 0), 1) * 100).rounded()))%"
+    }
+
+    private static func formatDuration(_ interval: TimeInterval) -> String {
+        let seconds = max(0, Int(interval))
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
     private static let byteFormatter: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
         formatter.allowedUnits = [.useGB, .useMB]
@@ -127,11 +162,16 @@ struct RecordingControlView: View {
                 .fill(model.isPaused ? .orange : .red)
                 .frame(width: 10, height: 10)
                 .shadow(color: (model.isPaused ? Color.orange : .red).opacity(0.6), radius: 6)
+                .accessibilityHidden(true)
 
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(Self.format(model.elapsed(at: context.date)))
+                Text(model.elapsedAccessibilityValue(at: context.date))
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     .frame(width: 64, alignment: .leading)
+                    .accessibilityLabel(model.recordingStateTitle)
+                    .accessibilityValue(
+                        "时长 \(model.elapsedAccessibilityValue(at: context.date))"
+                    )
             }
 
             Divider().frame(height: 20)
@@ -145,6 +185,9 @@ struct RecordingControlView: View {
             .opacity(model.capturesSystemAudio ? 1 : 0.35)
             .frame(width: 44)
             .help(model.capturesSystemAudio ? "正在录制系统声音" : "系统声音已关闭")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("系统声音")
+            .accessibilityValue(model.systemAudioAccessibilityValue)
 
             if model.capturesMicrophone {
                 HStack(spacing: 4) {
@@ -155,6 +198,9 @@ struct RecordingControlView: View {
                     .foregroundStyle(.green)
                     .frame(width: 38)
                     .help("麦克风正在单独分轨录制")
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("麦克风")
+                    .accessibilityValue(model.microphoneAccessibilityValue)
             }
 
             if model.capturesCamera {
@@ -163,6 +209,8 @@ struct RecordingControlView: View {
                     .foregroundStyle(.green)
                     .frame(width: 24)
                     .help("摄像头正在单独分轨录制")
+                    .accessibilityLabel("摄像头")
+                    .accessibilityValue("单独分轨录制中")
             }
 
             HStack(spacing: 4) {
@@ -175,6 +223,9 @@ struct RecordingControlView: View {
             .foregroundStyle(storageColor)
             .frame(minWidth: 68)
             .help(model.storageHelp)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("项目磁盘可用空间")
+            .accessibilityValue(model.storageAccessibilityValue)
 
             Button {
                 onPauseToggle()
@@ -187,6 +238,8 @@ struct RecordingControlView: View {
             .disabled(model.isTransitioning)
             .opacity(model.isTransitioning ? 0.38 : 1)
             .help(model.isPaused ? "继续并写入新分片" : "暂停并安全完成当前分片")
+            .accessibilityLabel(model.pauseActionTitle)
+            .accessibilityHint(model.isPaused ? "继续并写入新分片" : "暂停并安全完成当前分片")
 
             Button(action: onDiscardAndRestart) {
                 Image(systemName: "arrow.counterclockwise")
@@ -199,6 +252,8 @@ struct RecordingControlView: View {
             .disabled(model.isTransitioning)
             .opacity(model.isTransitioning ? 0.38 : 1)
             .help("丢弃并重新录制")
+            .accessibilityLabel("丢弃并重新录制")
+            .accessibilityHint("停止当前录制，移到废纸篓后按相同来源重新开始")
 
             Button(action: onStop) {
                 Image(systemName: "stop.fill")
@@ -211,20 +266,19 @@ struct RecordingControlView: View {
             .disabled(model.isTransitioning)
             .opacity(model.isTransitioning ? 0.5 : 1)
             .help("停止")
+            .accessibilityLabel("停止录制")
+            .accessibilityHint("安全完成当前分片并生成预览")
 
             Text(model.sourceTitle)
                 .font(.system(size: 9.5, weight: .medium))
                 .foregroundStyle(.tertiary)
+                .accessibilityLabel("录制来源")
+                .accessibilityValue(model.sourceTitle)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .traceGlassPanel(cornerRadius: 24)
         .padding(28)
-    }
-
-    private static func format(_ interval: TimeInterval) -> String {
-        let seconds = max(0, Int(interval))
-        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
     }
 
     private var storageColor: Color {

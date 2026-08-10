@@ -22,6 +22,7 @@ struct QuickAccessView: View {
                     RoundedRectangle(cornerRadius: 13, style: .continuous)
                         .stroke(.white.opacity(0.18), lineWidth: 1)
                 )
+                .accessibilityLabel("刚刚保存的截图预览")
 
             VStack(alignment: .leading, spacing: 5) {
                 Label("截图已复制", systemImage: "checkmark.circle.fill")
@@ -52,6 +53,8 @@ struct QuickAccessView: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .help("关闭")
+            .accessibilityLabel("关闭快速操作")
+            .keyboardShortcut(.cancelAction)
         }
         .padding(12)
         .frame(width: 430)

@@ -79,12 +79,15 @@ struct ScrollingCaptureControlView: View {
             Button("取消", action: onCancel)
                 .buttonStyle(.borderless)
                 .disabled(model.isFinalizing)
+                .keyboardShortcut(.cancelAction)
             Button(action: onFinish) {
                 Label("完成", systemImage: "checkmark")
             }
+            .accessibilityLabel("完成长截图")
             .buttonStyle(.borderedProminent)
             .tint(.orange)
             .disabled(model.acceptedFrames == 0 || model.isFinalizing)
+            .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 15)
         .padding(.vertical, 12)

@@ -89,6 +89,8 @@ struct ScreenshotCanvasToolbar: View {
                 }
                 .buttonStyle(.plain)
                 .help(preset.id)
+                .accessibilityLabel("\(preset.id)背景预设")
+                .accessibilityHint("应用截图画布背景颜色")
             }
         }
     }

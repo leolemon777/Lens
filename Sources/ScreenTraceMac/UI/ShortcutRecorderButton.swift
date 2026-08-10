@@ -34,6 +34,10 @@ struct ShortcutRecorderButton: View {
                 )
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(isCapturing ? "正在录入快捷键" : "快捷键 \(shortcut.displayName)")
+            .accessibilityHint(isCapturing
+                ? "按下新的组合键，按 Escape 取消"
+                : "按下后录入新的组合键")
             .background(
                 ShortcutCaptureHost(
                     isActive: $isCapturing,

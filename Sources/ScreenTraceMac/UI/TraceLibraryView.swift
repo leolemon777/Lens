@@ -39,6 +39,7 @@ struct TraceLibraryView: View {
                 Image(systemName: "square.grid.2x2.fill")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.cyan)
+                    .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("屏迹库")
@@ -51,6 +52,7 @@ struct TraceLibraryView: View {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 TextField("搜索标题、标签、OCR 或转写", text: $model.query)
                     .textFieldStyle(.plain)
                     .frame(width: 220)
@@ -62,6 +64,7 @@ struct TraceLibraryView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel("清除搜索")
                 }
             }
             .padding(.horizontal, 10)
@@ -74,6 +77,7 @@ struct TraceLibraryView: View {
             }
             .buttonStyle(.plain)
             .help("刷新")
+            .accessibilityLabel("刷新屏迹库")
             Button(action: onOpenFolder) {
                 Image(systemName: "folder")
                     .frame(width: 27, height: 27)
@@ -81,6 +85,7 @@ struct TraceLibraryView: View {
             }
             .buttonStyle(.plain)
             .help("在 Finder 中打开")
+            .accessibilityLabel("在 Finder 中打开屏迹文件夹")
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
@@ -89,6 +94,8 @@ struct TraceLibraryView: View {
             }
             .buttonStyle(.plain)
             .help("关闭")
+            .accessibilityLabel("关闭屏迹库")
+            .keyboardShortcut(.cancelAction)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 13)
@@ -288,6 +295,7 @@ private struct TraceLibraryCard: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .help("在 Finder 中显示")
+                    .accessibilityLabel("在 Finder 中显示：\(displayTitle)")
                 }
             }
             .padding(11)
@@ -337,6 +345,9 @@ private struct TraceLibraryCard: View {
         .foregroundStyle(entry.insights == nil ? Color.secondary : Color.cyan)
         .disabled(isOrganizing)
         .help(entry.insights == nil ? "本地智能整理" : "查看整理结果")
+        .accessibilityLabel(entry.insights == nil
+            ? "整理：\(displayTitle)"
+            : "查看整理结果：\(displayTitle)")
     }
 
     @ViewBuilder

@@ -33,6 +33,7 @@ struct ScreenshotAnnotationEditorView: View {
                 Image(systemName: "pencil.and.outline")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.cyan)
+                    .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text("标注截图")
@@ -49,6 +50,7 @@ struct ScreenshotAnnotationEditorView: View {
             .disabled(!model.canUndo)
             .keyboardShortcut("z", modifiers: .command)
             .help("撤销")
+            .accessibilityLabel("撤销")
             Button(action: model.redo) {
                 Image(systemName: "arrow.uturn.forward")
             }
@@ -56,8 +58,10 @@ struct ScreenshotAnnotationEditorView: View {
             .disabled(!model.canRedo)
             .keyboardShortcut("z", modifiers: [.command, .shift])
             .help("重做")
+            .accessibilityLabel("重做")
             Button("取消", action: onCancel)
                 .buttonStyle(.bordered)
+                .keyboardShortcut(.cancelAction)
             Menu {
                 ForEach(ScreenshotExportFormat.allCases, id: \.self) { format in
                     Button {
@@ -145,6 +149,11 @@ struct ScreenshotAnnotationEditorView: View {
                 }
                 .buttonStyle(.plain)
                 .help(item.name)
+                .accessibilityLabel("\(item.name)标注颜色")
+                .accessibilityHint("选择标注颜色")
+                .accessibilityAddTraits(
+                    model.selectedColor == item.color ? .isSelected : []
+                )
             }
 
             if !model.isSelectionMode && model.selectedTool == .text {
@@ -240,6 +249,11 @@ struct ScreenshotAnnotationEditorView: View {
                     .frame(width: imageRect.width, height: imageRect.height)
                     .position(x: imageRect.midX, y: imageRect.midY)
                     .gesture(annotationGesture(in: imageRect))
+                    .accessibilityLabel("截图标注画布")
+                    .accessibilityValue("\(model.annotations.count) 个标注对象")
+                    .accessibilityHint(model.isSelectionMode
+                        ? "使用指针选择、移动或缩放标注对象"
+                        : "使用指针拖动添加\(model.selectedTool.editorTitle)")
             }
         }
     }

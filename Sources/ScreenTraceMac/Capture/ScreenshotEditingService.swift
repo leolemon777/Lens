@@ -36,4 +36,13 @@ struct ScreenshotEditingService {
             renderedImageURL: outputURL
         )
     }
+
+    func export(
+        image: CGImage,
+        to outputURL: URL,
+        format: ScreenshotExportFormat
+    ) throws {
+        let data = try ImageEncoding.data(from: image, format: format)
+        try data.write(to: outputURL, options: .atomic)
+    }
 }

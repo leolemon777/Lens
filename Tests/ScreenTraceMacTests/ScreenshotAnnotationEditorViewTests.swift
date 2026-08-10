@@ -18,6 +18,8 @@ final class ScreenshotAnnotationEditorViewTests: XCTestCase {
             end: TracePoint(x: 0.4, y: 0.4)
         )
         model.activateSelectionTool()
+        model.setCanvasEnabled(true)
+        model.setCanvasAspectRatio(.widescreen16x9)
         model.beginSelectionInteraction(
             at: TracePoint(x: 0.2, y: 0.2),
             hitTolerance: 0.01,
@@ -28,6 +30,7 @@ final class ScreenshotAnnotationEditorViewTests: XCTestCase {
             model: model,
             image: image,
             onSave: { _ in },
+            onExport: { _, _ in },
             onCancel: {}
         )
         let hostingView = NSHostingView(rootView: root)

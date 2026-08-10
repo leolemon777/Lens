@@ -150,7 +150,15 @@ final class TraceProjectStoreTests: XCTestCase {
                     kind: .rectangle,
                     bounds: TraceRect(x: 0.1, y: 0.1, width: 0.4, height: 0.3)
                 )
-            ]
+            ],
+            canvasStyle: ScreenshotCanvasStyle(
+                backgroundKind: .gradient,
+                primaryColor: .blue,
+                secondaryColor: .orange,
+                padding: 0.12,
+                cornerRadius: 0.04,
+                aspectRatio: .widescreen16x9
+            )
         )
 
         let withPlan = try store.writeScreenshotEditPlan(plan, to: screenshot)

@@ -9,18 +9,25 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
     @Published var selectedColor: TraceColor = .red
     @Published var textDraft = "重点"
     @Published private(set) var annotations: [ScreenshotAnnotation]
+    @Published private(set) var canvasStyle: ScreenshotCanvasStyle?
     @Published private(set) var draftAnnotation: ScreenshotAnnotation?
     @Published private(set) var isSelectionMode = false
     @Published private(set) var selectedAnnotationID: UUID?
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
 
-    private var undoStack: [[ScreenshotAnnotation]] = []
-    private var redoStack: [[ScreenshotAnnotation]] = []
+    private struct EditorSnapshot: Equatable {
+        let annotations: [ScreenshotAnnotation]
+        let canvasStyle: ScreenshotCanvasStyle?
+    }
+
+    private var undoStack: [EditorSnapshot] = []
+    private var redoStack: [EditorSnapshot] = []
     private var draftID = UUID()
     private var draftPathPoints: [TracePoint] = []
     private var selectionInteractionActive = false
     private var activeTransform: ActiveTransform?
+    private var canvasAdjustmentBaseline: EditorSnapshot?
 
     private struct ActiveTransform {
         enum Operation {
@@ -38,13 +45,19 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
         self.sourceDimensions = sourceDimensions
         if existingPlan?.sourceDimensions == sourceDimensions {
             annotations = existingPlan?.annotations ?? []
+            canvasStyle = existingPlan?.canvasStyle
         } else {
             annotations = []
+            canvasStyle = nil
         }
     }
 
     var plan: ScreenshotEditPlan {
-        ScreenshotEditPlan(sourceDimensions: sourceDimensions, annotations: annotations)
+        ScreenshotEditPlan(
+            sourceDimensions: sourceDimensions,
+            annotations: annotations,
+            canvasStyle: canvasStyle
+        )
     }
 
     var selectedAnnotation: ScreenshotAnnotation? {
@@ -118,8 +131,8 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
     func undo() {
         cancelSelectionInteraction()
         guard let previous = undoStack.popLast() else { return }
-        redoStack.append(annotations)
-        annotations = previous
+        redoStack.append(currentSnapshot)
+        apply(previous)
         sanitizeSelection()
         updateHistoryFlags()
     }
@@ -127,8 +140,8 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
     func redo() {
         cancelSelectionInteraction()
         guard let next = redoStack.popLast() else { return }
-        undoStack.append(annotations)
-        annotations = next
+        undoStack.append(currentSnapshot)
+        apply(next)
         sanitizeSelection()
         updateHistoryFlags()
     }
@@ -251,6 +264,58 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
                 blue: color.blue,
                 alpha: fill.alpha
             )
+        }
+    }
+
+    func setCanvasEnabled(_ enabled: Bool) {
+        guard enabled != (canvasStyle != nil) else { return }
+        recordUndoPoint()
+        canvasStyle = enabled ? ScreenshotCanvasStyle() : nil
+    }
+
+    func setCanvasBackgroundKind(_ kind: ScreenshotCanvasBackgroundKind) {
+        mutateCanvas { $0.backgroundKind = kind }
+    }
+
+    func setCanvasAspectRatio(_ aspectRatio: ScreenshotCanvasAspectRatio) {
+        mutateCanvas { $0.aspectRatio = aspectRatio }
+    }
+
+    func applyCanvasPreset(primary: TraceColor, secondary: TraceColor) {
+        mutateCanvas {
+            $0.primaryColor = primary
+            $0.secondaryColor = secondary
+        }
+    }
+
+    func beginCanvasAdjustment() {
+        guard canvasAdjustmentBaseline == nil else { return }
+        canvasAdjustmentBaseline = currentSnapshot
+    }
+
+    func setCanvasPadding(_ value: Double) {
+        mutateCanvas(recordHistory: canvasAdjustmentBaseline == nil) {
+            $0.padding = value
+        }
+    }
+
+    func setCanvasCornerRadius(_ value: Double) {
+        mutateCanvas(recordHistory: canvasAdjustmentBaseline == nil) {
+            $0.cornerRadius = value
+        }
+    }
+
+    func endCanvasAdjustment() {
+        guard let baseline = canvasAdjustmentBaseline else { return }
+        canvasAdjustmentBaseline = nil
+        guard baseline != currentSnapshot else { return }
+        recordUndoSnapshot(baseline)
+    }
+
+    func setCanvasShadowEnabled(_ enabled: Bool) {
+        mutateCanvas {
+            $0.shadowRadius = enabled ? 0.035 : 0
+            $0.shadowOpacity = enabled ? 0.32 : 0
         }
     }
 
@@ -419,8 +484,39 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
         }
     }
 
-    private func recordUndoPoint(_ snapshot: [ScreenshotAnnotation]? = nil) {
-        undoStack.append(snapshot ?? annotations)
+    private var currentSnapshot: EditorSnapshot {
+        EditorSnapshot(annotations: annotations, canvasStyle: canvasStyle)
+    }
+
+    private func apply(_ snapshot: EditorSnapshot) {
+        annotations = snapshot.annotations
+        canvasStyle = snapshot.canvasStyle
+    }
+
+    private func mutateCanvas(
+        recordHistory: Bool = true,
+        mutation: (inout ScreenshotCanvasStyle) -> Void
+    ) {
+        var style = canvasStyle ?? ScreenshotCanvasStyle()
+        let original = style
+        mutation(&style)
+        style = style.normalized
+        guard style != original || canvasStyle == nil else { return }
+        if recordHistory {
+            recordUndoPoint()
+        }
+        canvasStyle = style
+    }
+
+    private func recordUndoPoint(_ annotationSnapshot: [ScreenshotAnnotation]? = nil) {
+        recordUndoSnapshot(EditorSnapshot(
+            annotations: annotationSnapshot ?? annotations,
+            canvasStyle: canvasStyle
+        ))
+    }
+
+    private func recordUndoSnapshot(_ snapshot: EditorSnapshot) {
+        undoStack.append(snapshot)
         if undoStack.count > 50 {
             undoStack.removeFirst(undoStack.count - 50)
         }

@@ -4,6 +4,29 @@ import ScreenTraceCore
 
 @MainActor
 final class ScreenshotAnnotationEditorModelTests: XCTestCase {
+    func testCanvasChangesRoundTripAndUndoAsSingleSliderInteraction() {
+        let model = makeModel()
+        model.setCanvasEnabled(true)
+        model.setCanvasAspectRatio(.square)
+        model.beginCanvasAdjustment()
+        model.setCanvasPadding(0.12)
+        model.setCanvasPadding(0.18)
+        model.endCanvasAdjustment()
+
+        XCTAssertEqual(model.plan.canvasStyle?.aspectRatio, .square)
+        XCTAssertEqual(model.plan.canvasStyle?.padding, 0.18)
+        model.undo()
+        XCTAssertEqual(model.canvasStyle?.padding, 0.08)
+        model.redo()
+        XCTAssertEqual(model.canvasStyle?.padding, 0.18)
+
+        let reopened = ScreenshotAnnotationEditorModel(
+            sourceDimensions: model.sourceDimensions,
+            existingPlan: model.plan
+        )
+        XCTAssertEqual(reopened.canvasStyle, model.canvasStyle)
+    }
+
     func testReverseDragCreatesStandardizedRectangleBounds() {
         let model = makeModel()
         model.selectedTool = .rectangle

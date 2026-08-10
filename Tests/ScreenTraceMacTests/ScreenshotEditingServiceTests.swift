@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import XCTest
@@ -5,6 +6,31 @@ import ScreenTraceCore
 @testable import ScreenTraceMac
 
 final class ScreenshotEditingServiceTests: XCTestCase {
+    func testJPEGExportFlattensTransparentPixelsOntoWhite() throws {
+        guard let context = CGContext(
+            data: nil,
+            width: 16,
+            height: 16,
+            bitsPerComponent: 8,
+            bytesPerRow: 16 * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue
+                | CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let transparentImage = context.makeImage() else {
+            throw XCTSkip("Unable to create transparent bitmap")
+        }
+
+        let data = try ImageEncoding.jpegData(from: transparentImage, quality: 1)
+        guard let representation = NSBitmapImageRep(data: data),
+              let color = representation.colorAt(x: 8, y: 8)?.usingColorSpace(.sRGB) else {
+            return XCTFail("Unable to decode exported JPEG")
+        }
+
+        XCTAssertGreaterThan(color.redComponent, 0.97)
+        XCTAssertGreaterThan(color.greenComponent, 0.97)
+        XCTAssertGreaterThan(color.blueComponent, 0.97)
+    }
+
     func testFullEditingWorkflowWritesPreviewAndPlanWithoutMutatingRawImage() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTraceEditingTests-\(UUID().uuidString)", isDirectory: true)
@@ -43,6 +69,17 @@ final class ScreenshotEditingServiceTests: XCTestCase {
             try ImageEncoding.pngData(from: result.renderedImage),
             rawPNG
         )
+
+        let pngURL = root.appendingPathComponent("export.png")
+        let jpegURL = root.appendingPathComponent("export.jpg")
+        let service = ScreenshotEditingService(store: store)
+        try service.export(image: result.renderedImage, to: pngURL, format: .png)
+        try service.export(image: result.renderedImage, to: jpegURL, format: .jpeg)
+
+        XCTAssertGreaterThan(try Data(contentsOf: pngURL).count, 100)
+        XCTAssertGreaterThan(try Data(contentsOf: jpegURL).count, 100)
+        XCTAssertNotNil(NSImage(contentsOf: pngURL))
+        XCTAssertNotNil(NSImage(contentsOf: jpegURL))
     }
 
     private func solidImage(width: Int, height: Int) throws -> CGImage {

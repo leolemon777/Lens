@@ -150,6 +150,67 @@ final class ScreenshotAnnotationRendererTests: XCTestCase {
         }
     }
 
+    func testCanvasBackgroundExpandsOutputAndPreservesSourcePixels() throws {
+        let source = try solidImage(width: 400, height: 200, gray: 1)
+        let plan = ScreenshotEditPlan(
+            sourceDimensions: TraceDimensions(width: 400, height: 200),
+            canvasStyle: ScreenshotCanvasStyle(
+                backgroundKind: .solid,
+                primaryColor: .red,
+                secondaryColor: .red,
+                padding: 0.1,
+                cornerRadius: 0.05,
+                shadowRadius: 0,
+                shadowOpacity: 0,
+                aspectRatio: .square
+            )
+        )
+
+        let output = try ScreenshotAnnotationRenderer().render(source: source, plan: plan)
+        let pixels = try rgbaPixels(output)
+
+        XCTAssertEqual(output.width, 440)
+        XCTAssertEqual(output.height, 440)
+        XCTAssertGreaterThan(
+            countPixels(pixels, matching: { $0.r > 220 && $0.g < 100 && $0.b < 100 }),
+            90_000
+        )
+        XCTAssertGreaterThan(
+            countPixels(pixels, matching: { $0.r > 245 && $0.g > 245 && $0.b > 245 }),
+            70_000
+        )
+    }
+
+    func testCanvasShadowDoesNotFillTransparentSourceGaps() throws {
+        let source = try makeImage(width: 100, height: 100) { context in
+            context.setFillColor(CGColor(red: 0, green: 0.2, blue: 1, alpha: 1))
+            context.fill(CGRect(x: 40, y: 40, width: 20, height: 20))
+        }
+        let plan = ScreenshotEditPlan(
+            sourceDimensions: TraceDimensions(width: 100, height: 100),
+            canvasStyle: ScreenshotCanvasStyle(
+                backgroundKind: .solid,
+                primaryColor: .red,
+                secondaryColor: .red,
+                padding: 0.1,
+                cornerRadius: 0,
+                shadowRadius: 0.05,
+                shadowOpacity: 0.5
+            )
+        )
+
+        let output = try ScreenshotAnnotationRenderer().render(source: source, plan: plan)
+        let pixels = try rgbaPixels(output)
+        let transparentGap = pixels[25 * output.width + 25]
+        let opaqueCenter = pixels[60 * output.width + 60]
+
+        XCTAssertGreaterThan(transparentGap.r, 220)
+        XCTAssertLessThan(transparentGap.g, 110)
+        XCTAssertLessThan(transparentGap.b, 110)
+        XCTAssertGreaterThan(opaqueCenter.b, 220)
+        XCTAssertLessThan(opaqueCenter.r, 40)
+    }
+
     private typealias RGBA = (r: UInt8, g: UInt8, b: UInt8, a: UInt8)
 
     private func solidImage(width: Int, height: Int, gray: CGFloat) throws -> CGImage {

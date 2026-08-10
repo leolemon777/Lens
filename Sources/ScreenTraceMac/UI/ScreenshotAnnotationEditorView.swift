@@ -6,6 +6,7 @@ struct ScreenshotAnnotationEditorView: View {
     @ObservedObject var model: ScreenshotAnnotationEditorModel
     let image: NSImage
     let onSave: (ScreenshotEditPlan) -> Void
+    let onExport: (ScreenshotEditPlan, ScreenshotExportFormat) -> Void
     let onCancel: () -> Void
 
     var body: some View {
@@ -13,6 +14,8 @@ struct ScreenshotAnnotationEditorView: View {
             header
             Divider().opacity(0.35)
             toolbar
+            Divider().opacity(0.35)
+            backgroundToolbar
             Divider().opacity(0.35)
             canvas
             footer
@@ -55,6 +58,18 @@ struct ScreenshotAnnotationEditorView: View {
             .help("重做")
             Button("取消", action: onCancel)
                 .buttonStyle(.bordered)
+            Menu {
+                ForEach(ScreenshotExportFormat.allCases, id: \.self) { format in
+                    Button {
+                        onExport(model.plan, format)
+                    } label: {
+                        Label(format.editorTitle, systemImage: format.editorSymbol)
+                    }
+                }
+            } label: {
+                Label("导出", systemImage: "square.and.arrow.up")
+            }
+            .menuStyle(.button)
             Button {
                 onSave(model.plan)
             } label: {
@@ -164,22 +179,47 @@ struct ScreenshotAnnotationEditorView: View {
         .background(.thinMaterial)
     }
 
+    private var backgroundToolbar: some View {
+        ScreenshotCanvasToolbar(model: model)
+    }
+
     private var canvas: some View {
         GeometryReader { proxy in
-            let imageRect = aspectFitRect(
-                imageSize: image.size,
+            let layout = ScreenshotCanvasPlanner.layout(
+                sourceDimensions: model.sourceDimensions,
+                style: model.canvasStyle
+            )
+            let canvasRect = aspectFitRect(
+                imageSize: CGSize(
+                    width: layout.outputDimensions.width,
+                    height: layout.outputDimensions.height
+                ),
                 containerSize: proxy.size,
                 margin: 34
             )
+            let imageRect = sourceRect(layout: layout, canvasRect: canvasRect)
             ZStack {
                 Color.black.opacity(0.88)
+                canvasBackground(style: model.canvasStyle)
+                    .frame(width: canvasRect.width, height: canvasRect.height)
+                    .position(x: canvasRect.midX, y: canvasRect.midY)
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
                     .frame(width: imageRect.width, height: imageRect.height)
                     .position(x: imageRect.midX, y: imageRect.midY)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .shadow(color: .black.opacity(0.42), radius: 22, y: 10)
+                    .clipShape(RoundedRectangle(
+                        cornerRadius: CGFloat(model.canvasStyle?.normalized.cornerRadius ?? 0)
+                            * min(imageRect.width, imageRect.height),
+                        style: .continuous
+                    ))
+                    .shadow(
+                        color: .black.opacity(model.canvasStyle?.normalized.shadowOpacity ?? 0),
+                        radius: CGFloat(model.canvasStyle?.normalized.shadowRadius ?? 0)
+                            * min(imageRect.width, imageRect.height),
+                        y: CGFloat(model.canvasStyle == nil ? 0 : 0.018)
+                            * min(imageRect.width, imageRect.height)
+                    )
 
                 Canvas { context, _ in
                     for annotation in model.annotations {
@@ -202,6 +242,41 @@ struct ScreenshotAnnotationEditorView: View {
                     .gesture(annotationGesture(in: imageRect))
             }
         }
+    }
+
+    @ViewBuilder
+    private func canvasBackground(style: ScreenshotCanvasStyle?) -> some View {
+        if let style = style?.normalized {
+            switch style.backgroundKind {
+            case .solid:
+                style.primaryColor.swiftUIColor
+            case .gradient:
+                LinearGradient(
+                    colors: [
+                        style.primaryColor.swiftUIColor,
+                        style.secondaryColor.swiftUIColor
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
+        } else {
+            Color.clear
+        }
+    }
+
+    private func sourceRect(
+        layout: ScreenshotCanvasLayout,
+        canvasRect: CGRect
+    ) -> CGRect {
+        let outputWidth = max(CGFloat(layout.outputDimensions.width), 1)
+        let outputHeight = max(CGFloat(layout.outputDimensions.height), 1)
+        return CGRect(
+            x: canvasRect.minX + CGFloat(layout.sourceFrame.x) / outputWidth * canvasRect.width,
+            y: canvasRect.minY + CGFloat(layout.sourceFrame.y) / outputHeight * canvasRect.height,
+            width: CGFloat(layout.sourceFrame.width) / outputWidth * canvasRect.width,
+            height: CGFloat(layout.sourceFrame.height) / outputHeight * canvasRect.height
+        )
     }
 
     private var footer: some View {
@@ -471,6 +546,7 @@ struct ScreenshotAnnotationEditorView: View {
             ("黑色", .black)
         ]
     }
+
 }
 
 extension ScreenshotAnnotationKind {
@@ -511,5 +587,33 @@ extension TraceColor {
             blue: min(max(blue, 0), 1),
             opacity: min(max(alpha, 0), 1)
         )
+    }
+}
+
+extension ScreenshotCanvasAspectRatio {
+    var editorTitle: String {
+        switch self {
+        case .automatic: "自动"
+        case .square: "1:1"
+        case .landscape4x3: "4:3"
+        case .widescreen16x9: "16:9"
+        case .portrait9x16: "9:16"
+        }
+    }
+}
+
+extension ScreenshotExportFormat {
+    var editorTitle: String {
+        switch self {
+        case .png: "PNG 图像"
+        case .jpeg: "JPEG 图像"
+        }
+    }
+
+    var editorSymbol: String {
+        switch self {
+        case .png: "photo"
+        case .jpeg: "photo.badge.arrow.down"
+        }
     }
 }

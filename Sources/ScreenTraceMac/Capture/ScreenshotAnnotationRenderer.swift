@@ -29,7 +29,146 @@ struct ScreenshotAnnotationRenderer {
         }
 
         let effected = try renderRasterEffects(source: source, annotations: plan.annotations)
-        return try renderVectorAnnotations(base: effected, annotations: plan.annotations)
+        let annotated = try renderVectorAnnotations(base: effected, annotations: plan.annotations)
+        return try renderCanvas(base: annotated, plan: plan)
+    }
+
+    private func renderCanvas(base: CGImage, plan: ScreenshotEditPlan) throws -> CGImage {
+        guard let rawStyle = plan.canvasStyle else { return base }
+        let style = rawStyle.normalized
+        let layout = ScreenshotCanvasPlanner.layout(
+            sourceDimensions: plan.sourceDimensions,
+            style: style
+        )
+        let width = layout.outputDimensions.width
+        let height = layout.outputDimensions.height
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)
+            ?? CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue
+            | CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            throw ScreenshotAnnotationRendererError.unableToCreateBitmap
+        }
+
+        let canvasRect = CGRect(x: 0, y: 0, width: width, height: height)
+        switch style.backgroundKind {
+        case .solid:
+            context.setFillColor(cgColor(style.primaryColor))
+            context.fill(canvasRect)
+        case .gradient:
+            let colors = [
+                cgColor(style.primaryColor),
+                cgColor(style.secondaryColor)
+            ] as CFArray
+            if let gradient = CGGradient(
+                colorsSpace: colorSpace,
+                colors: colors,
+                locations: [0, 1]
+            ) {
+                context.drawLinearGradient(
+                    gradient,
+                    start: CGPoint(x: 0, y: CGFloat(height)),
+                    end: CGPoint(x: CGFloat(width), y: 0),
+                    options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+                )
+            } else {
+                context.setFillColor(cgColor(style.primaryColor))
+                context.fill(canvasRect)
+            }
+        }
+
+        let sourceFrame = layout.sourceFrame
+        let imageRect = CGRect(
+            x: sourceFrame.x,
+            y: Double(height) - sourceFrame.y - sourceFrame.height,
+            width: sourceFrame.width,
+            height: sourceFrame.height
+        )
+        let shortestSide = CGFloat(min(base.width, base.height))
+        let cornerRadius = min(
+            CGFloat(style.cornerRadius) * shortestSide,
+            min(imageRect.width, imageRect.height) / 2
+        )
+        let imagePath = CGPath(
+            roundedRect: imageRect,
+            cornerWidth: cornerRadius,
+            cornerHeight: cornerRadius,
+            transform: nil
+        )
+        if style.shadowOpacity > 0, style.shadowRadius > 0 {
+            try drawShadow(
+                path: imagePath,
+                canvasRect: canvasRect,
+                shortestSide: shortestSide,
+                style: style,
+                colorSpace: colorSpace,
+                into: context
+            )
+        }
+
+        context.saveGState()
+        context.addPath(imagePath)
+        context.clip()
+        context.interpolationQuality = .high
+        context.draw(base, in: imageRect)
+        context.restoreGState()
+
+        guard let output = context.makeImage() else {
+            throw ScreenshotAnnotationRendererError.unableToCreateBitmap
+        }
+        return output
+    }
+
+    private func drawShadow(
+        path: CGPath,
+        canvasRect: CGRect,
+        shortestSide: CGFloat,
+        style: ScreenshotCanvasStyle,
+        colorSpace: CGColorSpace,
+        into destination: CGContext
+    ) throws {
+        let bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue
+            | CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let shadowContext = CGContext(
+            data: nil,
+            width: Int(canvasRect.width),
+            height: Int(canvasRect.height),
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            throw ScreenshotAnnotationRendererError.unableToCreateBitmap
+        }
+
+        shadowContext.setShadow(
+            offset: CGSize(width: 0, height: -shortestSide * 0.018),
+            blur: CGFloat(style.shadowRadius) * shortestSide,
+            color: CGColor(gray: 0, alpha: CGFloat(style.shadowOpacity))
+        )
+        shadowContext.addPath(path)
+        shadowContext.setFillColor(CGColor(gray: 1, alpha: 1))
+        shadowContext.fillPath()
+
+        // Keep only the shadow. The temporary white shape must not fill transparent
+        // gaps in a composed multi-window screenshot.
+        shadowContext.setShadow(offset: .zero, blur: 0, color: nil)
+        shadowContext.setBlendMode(.clear)
+        shadowContext.addPath(path)
+        shadowContext.fillPath()
+
+        guard let shadowImage = shadowContext.makeImage() else {
+            throw ScreenshotAnnotationRendererError.unableToCreateBitmap
+        }
+        destination.draw(shadowImage, in: canvasRect)
     }
 
     private func renderRasterEffects(

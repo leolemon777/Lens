@@ -1,6 +1,7 @@
 import AppKit
 import ScreenTraceCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class ScreenshotAnnotationEditorWindowController {
@@ -35,6 +36,7 @@ final class ScreenshotAnnotationEditorWindowController {
             model: model,
             image: originalImage,
             onSave: { [weak self] plan in self?.save(plan) },
+            onExport: { [weak self] plan, format in self?.export(plan, format: format) },
             onCancel: { [weak self] in self?.hide() }
         )
         let hostingView = NSHostingView(rootView: root)
@@ -75,6 +77,40 @@ final class ScreenshotAnnotationEditorWindowController {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.writeObjects([image])
+    }
+
+    private func export(
+        _ plan: ScreenshotEditPlan,
+        format: ScreenshotExportFormat
+    ) {
+        guard let activeTrace, let sourceImage else { return }
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [format == .png ? .png : .jpeg]
+        let safeTitle = activeTrace.manifest.title
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        panel.nameFieldStringValue = "\(safeTitle).\(format.fileExtension)"
+        guard panel.runModal() == .OK, let outputURL = panel.url else { return }
+
+        do {
+            let source = try ImageEncoding.cgImage(from: sourceImage)
+            let result = try editingService.renderAndSave(
+                source: source,
+                plan: plan,
+                trace: activeTrace
+            )
+            try editingService.export(
+                image: result.renderedImage,
+                to: outputURL,
+                format: format
+            )
+            onSaved?(result.trace, ImageEncoding.nsImage(from: result.renderedImage))
+            hide()
+        } catch {
+            onFailure?(error)
+        }
     }
 
     private func makeWindow() -> AnnotationEditorWindow {

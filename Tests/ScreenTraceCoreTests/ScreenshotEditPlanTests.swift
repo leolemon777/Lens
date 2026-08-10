@@ -31,7 +31,17 @@ final class ScreenshotEditPlanTests: XCTestCase {
         }
         let plan = ScreenshotEditPlan(
             sourceDimensions: TraceDimensions(width: 1_440, height: 900),
-            annotations: annotations
+            annotations: annotations,
+            canvasStyle: ScreenshotCanvasStyle(
+                backgroundKind: .gradient,
+                primaryColor: .blue,
+                secondaryColor: .orange,
+                padding: 0.1,
+                cornerRadius: 0.04,
+                shadowRadius: 0.05,
+                shadowOpacity: 0.4,
+                aspectRatio: .widescreen16x9
+            )
         )
 
         let data = try JSONEncoder().encode(plan)
@@ -40,5 +50,43 @@ final class ScreenshotEditPlanTests: XCTestCase {
         XCTAssertEqual(decoded, plan)
         XCTAssertEqual(decoded.annotations.map(\.kind), ScreenshotAnnotationKind.allCases)
         XCTAssertEqual(decoded.schemaVersion, ScreenshotEditPlan.currentSchemaVersion)
+    }
+
+    func testCanvasPlannerPreservesPaddingAndExpandsWithoutCropping() {
+        let style = ScreenshotCanvasStyle(
+            padding: 0.1,
+            aspectRatio: .square
+        )
+        let layout = ScreenshotCanvasPlanner.layout(
+            sourceDimensions: TraceDimensions(width: 1_000, height: 500),
+            style: style
+        )
+
+        XCTAssertEqual(layout.outputDimensions, TraceDimensions(width: 1_100, height: 1_100))
+        XCTAssertEqual(
+            layout.sourceFrame,
+            TraceRect(x: 50, y: 300, width: 1_000, height: 500)
+        )
+    }
+
+    func testLegacyPointTwoPlanDecodesWithoutCanvasStyle() throws {
+        let json = """
+        {
+          "schemaVersion": "0.2",
+          "sourceDimensions": { "width": 800, "height": 500 },
+          "annotations": []
+        }
+        """
+        let plan = try JSONDecoder().decode(ScreenshotEditPlan.self, from: Data(json.utf8))
+
+        XCTAssertEqual(plan.schemaVersion, "0.2")
+        XCTAssertNil(plan.canvasStyle)
+        XCTAssertEqual(
+            ScreenshotCanvasPlanner.layout(
+                sourceDimensions: plan.sourceDimensions,
+                style: plan.canvasStyle
+            ).outputDimensions,
+            plan.sourceDimensions
+        )
     }
 }

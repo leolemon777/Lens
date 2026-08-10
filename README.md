@@ -65,7 +65,7 @@ open Build/ScreenTrace.app
 
 发布候选包应使用 `bash Scripts/build-release-artifacts.sh`；脚本会生成 Release App、严格校验签名结构，并在 `Build/Symbols/` 生成与 Mach-O UUID 一致的 dSYM 及 zip 归档。
 
-本地可安装 DMG、App zip、dSYM 与 SHA-256 清单使用 `bash Scripts/package-macos-release.sh`，输出到 `Build/Releases/`。默认仍是 ad-hoc 签名且跳过公证；发布环境需通过 `SCREENTRACE_SIGNING_IDENTITY`、`SCREENTRACE_NOTARY_PROFILE`、`SCREENTRACE_VERSION` 和 `SCREENTRACE_BUILD_NUMBER` 显式提供签名/公证与版本信息。公证凭据只通过 `notarytool` 钥匙串 profile 读取，不写入仓库或命令行。
+本地可安装 DMG、App zip、dSYM、SHA-256 清单与机器可读 `release.json` 使用 `bash Scripts/package-macos-release.sh`，输出到 `Build/Releases/`。发布清单记录版本、最低系统、Git commit/工作区状态、Mach-O UUID、签名身份、Team ID、公证 request ID，以及三类制品的尺寸和摘要；校验和文件也覆盖发布清单本身。默认仍是 ad-hoc 签名且跳过公证；发布环境需通过 `SCREENTRACE_SIGNING_IDENTITY`、`SCREENTRACE_NOTARY_PROFILE`、`SCREENTRACE_VERSION` 和 `SCREENTRACE_BUILD_NUMBER` 显式提供签名/公证与版本信息。公证凭据只通过 `notarytool` 钥匙串 profile 读取，不写入仓库或命令行。
 
 公开源码前执行 `bash Scripts/audit-public-source.sh`；它会拒绝被 Git 跟踪的媒体、项目包、崩溃报告、发布/签名文件、超大或非文本文件，以及常见私钥和访问令牌格式。脚本通过不代表已经选定许可证。
 

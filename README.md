@@ -90,6 +90,8 @@ open Build/ScreenTrace.app
 - [第三方依赖与素材清单](docs/第三方依赖与素材清单.md)
 - [品牌资产说明](docs/品牌资产说明.md)
 - [安装、权限、升级与卸载](docs/安装与权限指南.md)
+- [发布状态说明模板](docs/templates/发布状态说明模板.md)
+- [安全公告模板](docs/templates/安全公告模板.md)
 - [隐私说明](PRIVACY.md)
 - [贡献指南](CONTRIBUTING.md)
 - [安全政策](SECURITY.md)

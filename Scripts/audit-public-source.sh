@@ -25,6 +25,8 @@ required_files=(
     "docs/品牌资产说明.md"
     "docs/发布检查清单.md"
     "docs/发布撤回与回滚手册.md"
+    "docs/templates/发布状态说明模板.md"
+    "docs/templates/安全公告模板.md"
     "Scripts/verify-macos-release.sh"
     "Scripts/generate-release-notes.sh"
     "Scripts/archive-macos-release.sh"
@@ -37,6 +39,28 @@ required_files=(
 for path in "${required_files[@]}"; do
     if [[ ! -f "$path" ]]; then
         fail "missing required public file: $path"
+    fi
+done
+
+required_template_sections=(
+    "docs/templates/发布状态说明模板.md|## 当前状态"
+    "docs/templates/发布状态说明模板.md|## 用户数据与权限"
+    "docs/templates/发布状态说明模板.md|## 当前缓解措施"
+    "docs/templates/发布状态说明模板.md|## 修复与验证"
+    "docs/templates/发布状态说明模板.md|## 获取帮助与安全报告"
+    "docs/templates/发布状态说明模板.md|## 发布前检查"
+    "docs/templates/安全公告模板.md|## 公告身份"
+    "docs/templates/安全公告模板.md|## 受影响范围"
+    "docs/templates/安全公告模板.md|## 数据与权限影响"
+    "docs/templates/安全公告模板.md|## 临时缓解措施"
+    "docs/templates/安全公告模板.md|## 修复与验证"
+    "docs/templates/安全公告模板.md|## 时间线"
+    "docs/templates/安全公告模板.md|## 发布前检查"
+)
+for requirement in "${required_template_sections[@]}"; do
+    IFS='|' read -r path heading <<< "$requirement"
+    if [[ -f "$path" ]] && ! grep -Fqx -- "$heading" "$path"; then
+        fail "required response template section is missing: $path: $heading"
     fi
 done
 

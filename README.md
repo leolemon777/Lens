@@ -69,6 +69,8 @@ open Build/ScreenTrace.app
 
 生成后用 `bash Scripts/verify-macos-release.sh --development Build/Releases/ScreenTrace-0.1.0-1-release.json` 独立反查开发包结构；去掉 `--development` 即进入公开发布门槛，会额外要求根许可证、Developer ID、Team ID、App/DMG 公证 Accepted、Staple 和 Gatekeeper 全部通过；公开门槛会一次列出所有阻断项，避免修完一项后才看到下一项。
 
+通过校验的候选可用 `bash Scripts/archive-macos-release.sh --development <release.json> Build/ReleaseArchives` 创建带 Git commit 前缀的不可覆盖档案，再用 `bash Scripts/verify-macos-release-archive.sh --development <archive-directory>` 独立复验。档案保留全部安装/符号/清单/说明文件、原始 SHA-256 清单和额外归档身份元数据；公开档案必须移除 `--development` 并通过正式发布门槛。
+
 公开源码前执行 `bash Scripts/audit-public-source.sh`；它会拒绝被 Git 跟踪的媒体、项目包、崩溃报告、发布/签名文件、超大或非文本文件，以及常见私钥和访问令牌格式。脚本通过不代表已经选定许可证。
 
 离线崩溃符号化使用 `Scripts/symbolicate-screen-trace-crash.sh <ScreenTrace.ips> <ScreenTrace.dSYM>`。脚本会先校验 Bundle ID 和 UUID，不一致时拒绝继续；仅符号化故障线程中 ScreenTrace 自身镜像的帧。

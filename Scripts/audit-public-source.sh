@@ -27,6 +27,8 @@ required_files=(
     "docs/发布撤回与回滚手册.md"
     "Scripts/verify-macos-release.sh"
     "Scripts/generate-release-notes.sh"
+    "Scripts/archive-macos-release.sh"
+    "Scripts/verify-macos-release-archive.sh"
     ".github/ISSUE_TEMPLATE/bug_report.yml"
     ".github/ISSUE_TEMPLATE/feature_request.yml"
     ".github/PULL_REQUEST_TEMPLATE.md"

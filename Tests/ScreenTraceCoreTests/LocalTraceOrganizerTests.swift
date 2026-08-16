@@ -160,6 +160,60 @@ final class LocalTraceOrganizerTests: XCTestCase {
         XCTAssertFalse(encoded.contains("alice@"))
     }
 
+    /// An eighteen-digit order number is not an identity card. The payment-card
+    /// rule already validates its checksum; the identity rule must do the same
+    /// or it floods the panel with false positives users learn to ignore.
+    func testEighteenDigitNumberWithoutAValidChecksumIsNotReported() {
+        let ocr = OCRDocument(
+            engine: "test",
+            recognitionLanguages: ["zh-Hans"],
+            blocks: [OCRTextBlock(
+                text: "订单号 202608160000000123 已创建",
+                confidence: 0.9,
+                normalizedBounds: TraceRect(x: 0, y: 0, width: 1, height: 1)
+            )]
+        )
+        let manifest = TraceManifest(
+            kind: .screenshot,
+            title: "订单",
+            dimensions: TraceDimensions(width: 1_920, height: 1_080),
+            assets: []
+        )
+
+        let insights = LocalTraceOrganizer.organize(manifest: manifest, ocr: ocr)
+
+        XCTAssertFalse(
+            insights.sensitiveFindings.contains { $0.kind == .governmentIdentifier },
+            "无效校验位的 18 位数字被误报成了身份证号"
+        )
+    }
+
+    /// A build number or a timestamp run is not a phone number.
+    func testDigitRunThatIsNotAPhoneNumberIsNotReported() {
+        let ocr = OCRDocument(
+            engine: "test",
+            recognitionLanguages: ["zh-Hans"],
+            blocks: [OCRTextBlock(
+                text: "构建 202608160931 完成",
+                confidence: 0.9,
+                normalizedBounds: TraceRect(x: 0, y: 0, width: 1, height: 1)
+            )]
+        )
+        let manifest = TraceManifest(
+            kind: .screenshot,
+            title: "构建",
+            dimensions: TraceDimensions(width: 1_920, height: 1_080),
+            assets: []
+        )
+
+        let insights = LocalTraceOrganizer.organize(manifest: manifest, ocr: ocr)
+
+        XCTAssertFalse(
+            insights.sensitiveFindings.contains { $0.kind == .phoneNumber },
+            "构建号被误报成了手机号"
+        )
+    }
+
     func testSensitiveCaptureMetadataCannotLeakThroughTitleOrTags() throws {
         let syntheticCredential = "api_key: synthetic-private-value"
         let email = "owner@example.com"

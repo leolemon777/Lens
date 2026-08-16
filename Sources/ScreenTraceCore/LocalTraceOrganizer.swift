@@ -443,7 +443,8 @@ public enum LocalTraceOrganizer {
         )
         append(
             pattern: #"(?<!\d)\d{17}[\dXx](?!\d)"#,
-            kind: .governmentIdentifier
+            kind: .governmentIdentifier,
+            validation: { passesIdentityCardChecksum($0) }
         )
         append(
             pattern: #"(?<!\d)(?:\d[ -]?){13,19}(?!\d)"#,
@@ -457,8 +458,18 @@ public enum LocalTraceOrganizer {
             pattern: #"(?<!\d)(?:\+?\d[\d\s().-]{7,}\d)(?!\d)"#,
             kind: .phoneNumber,
             validation: { value in
-                let count = value.filter(\.isNumber).count
-                return (10...15).contains(count)
+                let digits = value.filter(\.isNumber)
+                guard (10...15).contains(digits.count) else { return false }
+                // A bare digit run is far more often a build number, an order id
+                // or a concatenated timestamp than a phone number. Require either
+                // an explicit international prefix, human separators, or a real
+                // mainland mobile prefix before claiming it is a phone number.
+                let hasInternationalPrefix = value.contains("+")
+                let hasSeparators = value.contains(where: { " -().".contains($0) })
+                let isMainlandMobile = digits.count == 11
+                    && digits.first == "1"
+                    && "3456789".contains(digits[digits.index(digits.startIndex, offsetBy: 1)])
+                return hasInternationalPrefix || hasSeparators || isMainlandMobile
             }
         )
         return result
@@ -517,6 +528,22 @@ public enum LocalTraceOrganizer {
             }
         }
         return sum > 0 && sum.isMultiple(of: 10)
+    }
+
+    /// ISO 7064 MOD 11-2, the checksum carried by an 18-digit mainland identity
+    /// card. Without it every eighteen-digit order number or timestamp run gets
+    /// reported, and a panel full of false positives is one users stop reading.
+    private static func passesIdentityCardChecksum(_ rawValue: String) -> Bool {
+        let digits = Array(rawValue.uppercased())
+        guard digits.count == 18 else { return false }
+        let weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2]
+        let checkCharacters = Array("10X98765432")
+        var sum = 0
+        for (weight, character) in zip(weights, digits.prefix(17)) {
+            guard let value = character.wholeNumberValue else { return false }
+            sum += weight * value
+        }
+        return checkCharacters[sum % 11] == digits[17]
     }
 
     private static func sentences(in text: String) -> [String] {

@@ -26,7 +26,8 @@ public enum LocalTraceOrganizer {
         manifest: TraceManifest,
         ocr: OCRDocument? = nil,
         transcript: TranscriptDocument? = nil,
-        generatedAt: Date = Date()
+        generatedAt: Date = Date(),
+        tokenizer: TraceTokenizing = BigramTokenizer()
     ) -> TraceInsightsDocument {
         let rawTranscriptText = transcript.map {
             assembledTranscriptText(
@@ -41,14 +42,14 @@ public enum LocalTraceOrganizer {
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
         let sentenceList = sentences(in: primaryText)
-        let summary = extractiveSummary(from: sentenceList)
-        let keyPoints = salientSentences(sentenceList)
+        let summary = extractiveSummary(from: sentenceList, tokenizer: tokenizer)
+        let keyPoints = salientSentences(sentenceList, tokenizer: tokenizer)
         let title = suggestedTitle(
             manifest: manifest,
             sentences: sentenceList,
             fallbackText: primaryText
         )
-        let tags = suggestedTags(manifest: manifest, text: combinedText)
+        let tags = suggestedTags(manifest: manifest, text: combinedText, tokenizer: tokenizer)
         let chapters = transcript.map {
             makeChapters(
                 transcript: $0,
@@ -109,12 +110,13 @@ public enum LocalTraceOrganizer {
     /// two sentences" made it strictly weaker than the key points beside it.
     private static func rankedSentences(
         _ sentences: [String],
-        minimumCharacters: Int
+        minimumCharacters: Int,
+        tokenizer: TraceTokenizing
     ) -> [RankedSentence] {
         let candidates = sentences.enumerated().compactMap { index, sentence -> (Int, String, [String])? in
             let sentence = normalizedWhitespace(sentence)
             guard sentence.count >= minimumCharacters else { return nil }
-            return (index, sentence, semanticTokens(in: sentence))
+            return (index, sentence, semanticTokens(in: sentence, tokenizer: tokenizer))
         }
         guard !candidates.isEmpty else { return [] }
         var frequency: [String: Int] = [:]
@@ -138,9 +140,12 @@ public enum LocalTraceOrganizer {
         }
     }
 
-    private static func extractiveSummary(from sentences: [String]) -> String {
+    private static func extractiveSummary(
+        from sentences: [String],
+        tokenizer: TraceTokenizing
+    ) -> String {
         guard !sentences.isEmpty else { return "" }
-        let ranked = rankedSentences(sentences, minimumCharacters: 4)
+        let ranked = rankedSentences(sentences, minimumCharacters: 4, tokenizer: tokenizer)
             .prefix(2)
             .sorted { $0.index < $1.index }
         var selected: [String] = []
@@ -156,8 +161,11 @@ public enum LocalTraceOrganizer {
         return truncated(selected.joined(separator: " "), maximumCharacters: 220)
     }
 
-    private static func salientSentences(_ sentences: [String]) -> [String] {
-        rankedSentences(sentences, minimumCharacters: 6)
+    private static func salientSentences(
+        _ sentences: [String],
+        tokenizer: TraceTokenizing
+    ) -> [String] {
+        rankedSentences(sentences, minimumCharacters: 6, tokenizer: tokenizer)
             .prefix(4)
             .sorted { $0.index < $1.index }
             .map { truncated($0.text, maximumCharacters: 140) }
@@ -165,7 +173,8 @@ public enum LocalTraceOrganizer {
 
     private static func suggestedTags(
         manifest: TraceManifest,
-        text: String
+        text: String,
+        tokenizer: TraceTokenizing
     ) -> [String] {
         let normalized = text.folding(
             options: [.caseInsensitive, .diacriticInsensitive],
@@ -213,7 +222,7 @@ public enum LocalTraceOrganizer {
         }
 
         var hanFrequency: [String: Int] = [:]
-        for token in hanTokens(in: text) where !hanStopWords.contains(token) {
+        for token in hanTokens(in: text, tokenizer: tokenizer) where !hanStopWords.contains(token) {
             hanFrequency[token, default: 0] += 1
         }
         let repeatedHan = hanFrequency
@@ -563,8 +572,11 @@ public enum LocalTraceOrganizer {
         return result
     }
 
-    private static func semanticTokens(in text: String) -> [String] {
-        latinTokens(in: text.lowercased()) + hanTokens(in: text)
+    private static func semanticTokens(
+        in text: String,
+        tokenizer: TraceTokenizing
+    ) -> [String] {
+        latinTokens(in: text.lowercased()) + hanTokens(in: text, tokenizer: tokenizer)
     }
 
     private static func latinTokens(in text: String) -> [String] {
@@ -572,20 +584,11 @@ public enum LocalTraceOrganizer {
             .map { $0.value.lowercased() }
     }
 
-    private static func hanTokens(in text: String) -> [String] {
-        var result: [String] = []
-        for run in regexMatches(pattern: #"\p{Han}{2,}"#, text: text).map(\.value) {
-            let characters = Array(run)
-            if characters.count <= 6 {
-                result.append(run)
-            }
-            if characters.count >= 2 {
-                for index in 0..<(characters.count - 1) {
-                    result.append(String(characters[index...index + 1]))
-                }
-            }
-        }
-        return result
+    private static func hanTokens(
+        in text: String,
+        tokenizer: TraceTokenizing
+    ) -> [String] {
+        tokenizer.words(in: text)
     }
 
     private static func regexMatches(

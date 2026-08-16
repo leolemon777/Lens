@@ -771,7 +771,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return LocalTraceOrganizer.organize(
                         manifest: manifest,
                         ocr: ocr,
-                        transcript: transcript
+                        transcript: transcript,
+                        tokenizer: NaturalLanguageTokenizer()
                     ).replacingCustomization(previous?.customization)
                 }.value
                 _ = try store.attachInsights(insights, to: trace)

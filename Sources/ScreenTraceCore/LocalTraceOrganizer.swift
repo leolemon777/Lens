@@ -98,48 +98,69 @@ public enum LocalTraceOrganizer {
         return truncated("\(application) · \(contentTitle)", maximumCharacters: 46)
     }
 
-    private static func extractiveSummary(from sentences: [String]) -> String {
-        guard !sentences.isEmpty else { return "" }
-        var selected: [String] = []
-        var characterCount = 0
-        for sentence in sentences {
-            let sentence = normalizedWhitespace(sentence)
-            guard sentence.count >= 4 else { continue }
-            if !selected.isEmpty, characterCount + sentence.count > 220 { break }
-            selected.append(sentence)
-            characterCount += sentence.count
-            if selected.count == 2 { break }
-        }
-        if selected.isEmpty { selected = [sentences[0]] }
-        return truncated(selected.joined(separator: " "), maximumCharacters: 220)
+    private struct RankedSentence {
+        let index: Int
+        let text: String
+        let score: Double
     }
 
-    private static func salientSentences(_ sentences: [String]) -> [String] {
+    /// Frequency-and-position ranking shared by the summary and the key points.
+    /// Both read the same text, so letting the summary fall back to "the first
+    /// two sentences" made it strictly weaker than the key points beside it.
+    private static func rankedSentences(
+        _ sentences: [String],
+        minimumCharacters: Int
+    ) -> [RankedSentence] {
         let candidates = sentences.enumerated().compactMap { index, sentence -> (Int, String, [String])? in
             let sentence = normalizedWhitespace(sentence)
-            guard sentence.count >= 6 else { return nil }
-            let tokens = semanticTokens(in: sentence)
-            return (index, sentence, tokens)
+            guard sentence.count >= minimumCharacters else { return nil }
+            return (index, sentence, semanticTokens(in: sentence))
         }
         guard !candidates.isEmpty else { return [] }
         var frequency: [String: Int] = [:]
         for candidate in candidates {
             for token in Set(candidate.2) { frequency[token, default: 0] += 1 }
         }
-        let ranked = candidates.map { candidate -> (Int, String, Double) in
+        return candidates.map { candidate in
             let tokenScore = candidate.2.reduce(0.0) {
                 $0 + Double(frequency[$1, default: 0])
             } / Double(max(candidate.2.count, 1))
             let positionBonus = max(0, 0.8 - Double(candidate.0) * 0.08)
-            return (candidate.0, candidate.1, tokenScore + positionBonus)
+            return RankedSentence(
+                index: candidate.0,
+                text: candidate.1,
+                score: tokenScore + positionBonus
+            )
         }
         .sorted {
-            if $0.2 != $1.2 { return $0.2 > $1.2 }
-            return $0.0 < $1.0
+            if $0.score != $1.score { return $0.score > $1.score }
+            return $0.index < $1.index
         }
-        .prefix(4)
-        .sorted { $0.0 < $1.0 }
-        return ranked.map { truncated($0.1, maximumCharacters: 140) }
+    }
+
+    private static func extractiveSummary(from sentences: [String]) -> String {
+        guard !sentences.isEmpty else { return "" }
+        let ranked = rankedSentences(sentences, minimumCharacters: 4)
+            .prefix(2)
+            .sorted { $0.index < $1.index }
+        var selected: [String] = []
+        var characterCount = 0
+        for item in ranked {
+            if !selected.isEmpty, characterCount + item.text.count > 220 { break }
+            selected.append(item.text)
+            characterCount += item.text.count
+        }
+        if selected.isEmpty {
+            selected = [normalizedWhitespace(sentences[0])]
+        }
+        return truncated(selected.joined(separator: " "), maximumCharacters: 220)
+    }
+
+    private static func salientSentences(_ sentences: [String]) -> [String] {
+        rankedSentences(sentences, minimumCharacters: 6)
+            .prefix(4)
+            .sorted { $0.index < $1.index }
+            .map { truncated($0.text, maximumCharacters: 140) }
     }
 
     private static func suggestedTags(

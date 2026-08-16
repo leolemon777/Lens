@@ -37,10 +37,16 @@ public struct TranscriptChunk: Codable, Equatable, Sendable {
 }
 
 public enum TranscriptChunkPlanner {
+    /// - Parameter overlapSeconds: Shared audio between neighbouring chunks. A
+    ///   speech segment that straddles an ownership boundary must be heard in
+    ///   full by both neighbours, otherwise the midpoint rule can award it to
+    ///   the chunk that only caught its tail. Chinese and Japanese utterances
+    ///   commonly run two to five seconds, so a one-second overlap was too
+    ///   narrow to protect them.
     public static func plan(
         durationSeconds: Double,
         maximumChunkDurationSeconds: Double = 50,
-        overlapSeconds: Double = 1
+        overlapSeconds: Double = 4
     ) -> [TranscriptChunk] {
         let duration = durationSeconds.isFinite ? max(durationSeconds, 0) : 0
         guard duration >= VideoEditTimeline.minimumSegmentDurationSeconds else { return [] }

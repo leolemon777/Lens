@@ -55,6 +55,36 @@ final class TranscriptChunkingTests: XCTestCase {
         XCTAssertEqual(merged.fullText, "keep next")
     }
 
+    /// A one-second overlap left only half a second of margin on each side of an
+    /// ownership boundary, so an ordinary two-second utterance straddling a cut
+    /// was awarded to the chunk that had only heard its tail. The default must
+    /// give both neighbours enough context to hear such an utterance in full.
+    func testDefaultOverlapCoversAnOrdinaryUtteranceStraddlingABoundary() {
+        let chunks = TranscriptChunkPlanner.plan(durationSeconds: 200)
+
+        XCTAssertGreaterThanOrEqual(chunks.count, 2)
+        let first = chunks[0]
+        let second = chunks[1]
+        let overlap = first.sourceEndSeconds - second.sourceStartSeconds
+        XCTAssertGreaterThanOrEqual(
+            overlap, 4,
+            "默认重叠不足以覆盖常见的 2–4 秒中文语音片段"
+        )
+
+        // Ownership must stay contiguous: no gap and no double counting.
+        XCTAssertEqual(
+            first.acceptedEndSeconds,
+            second.acceptedStartSeconds,
+            accuracy: 0.001
+        )
+
+        // An utterance centred just past the boundary must sit entirely inside
+        // the chunk that owns it, not start before that chunk's audio begins.
+        let boundary = first.acceptedEndSeconds
+        let utteranceStart = boundary - 1.0
+        XCTAssertGreaterThanOrEqual(utteranceStart, second.sourceStartSeconds)
+    }
+
     private func document(segments: [TranscriptSegment]) -> TranscriptDocument {
         TranscriptDocument(
             engine: "test-local",

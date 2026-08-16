@@ -85,6 +85,66 @@ final class TranscriptChunkingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(utteranceStart, second.sourceStartSeconds)
     }
 
+    /// An utterance longer than the overlap can still straddle a boundary. When
+    /// the midpoint awards it to a chunk that only caught its tail, the merger
+    /// must fall back to the neighbour that heard the whole thing.
+    func testTruncatedWinnerIsReplacedByTheChunkThatHeardTheWholeUtterance() {
+        let chunks = TranscriptChunkPlanner.plan(
+            durationSeconds: 100,
+            maximumChunkDurationSeconds: 50,
+            overlapSeconds: 4
+        )
+        XCTAssertGreaterThanOrEqual(chunks.count, 2)
+
+        // Chunk 0 covers [0, 50]. These times put the midpoint just past the
+        // ownership cut so the full hearing is a neighbour, not the winner.
+        let firstDocument = TranscriptDocument(
+            engine: "test",
+            localeIdentifier: "zh-CN",
+            isOnDevice: true,
+            sourceRole: .microphone,
+            fullText: "完整的一句话",
+            segments: [TranscriptSegment(
+                startSeconds: 46.2,
+                endSeconds: 49.9,
+                text: "完整的一句话",
+                confidence: 0.9
+            )]
+        )
+        // Chunk 1 starts at 46 and only catches the tail from t=0, so the
+        // midpoint lands in its accepted range and the slice looks truncated.
+        let secondDocument = TranscriptDocument(
+            engine: "test",
+            localeIdentifier: "zh-CN",
+            isOnDevice: true,
+            sourceRole: .microphone,
+            fullText: "句话",
+            segments: [TranscriptSegment(
+                startSeconds: 0,
+                endSeconds: 4.2,
+                text: "句话",
+                confidence: 0.4
+            )]
+        )
+
+        let merged = TranscriptChunkMerger.merge(
+            [
+                TranscriptChunkDocument(chunk: chunks[0], document: firstDocument),
+                TranscriptChunkDocument(chunk: chunks[1], document: secondDocument)
+            ],
+            engine: "test",
+            localeIdentifier: "zh-CN",
+            isOnDevice: true,
+            sourceRole: .microphone
+        )
+
+        XCTAssertTrue(
+            merged.segments.contains { $0.text == "完整的一句话" },
+            "被截断的版本胜出了，应该采用完整听到的那一份"
+        )
+        XCTAssertFalse(merged.segments.contains { $0.text == "句话" })
+    }
+
     private func document(segments: [TranscriptSegment]) -> TranscriptDocument {
         TranscriptDocument(
             engine: "test-local",

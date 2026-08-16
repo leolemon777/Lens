@@ -99,27 +99,59 @@ public enum TranscriptChunkMerger {
     ) -> TranscriptDocument {
         let ordered = chunkDocuments.sorted { $0.chunk.index < $1.chunk.index }
         var mergedSegments: [TranscriptSegment] = []
+        struct Candidate {
+            let segment: TranscriptSegment
+            let isFullyHeard: Bool
+            let ownedByMidpoint: Bool
+        }
+        var candidates: [Candidate] = []
+
         for (documentIndex, item) in ordered.enumerated() {
+            let isFirstChunk = documentIndex == 0
             let includesUpperBoundary = documentIndex == ordered.count - 1
             for segment in item.document.segments {
                 let start = item.chunk.sourceStartSeconds + segment.startSeconds
-                let end = min(
-                    item.chunk.sourceStartSeconds + segment.endSeconds,
-                    item.chunk.sourceEndSeconds
-                )
+                let rawEnd = item.chunk.sourceStartSeconds + segment.endSeconds
+                let end = min(rawEnd, item.chunk.sourceEndSeconds)
                 let midpoint = start + max(end - start, 0) / 2
                 let isAfterLowerBoundary = midpoint >= item.chunk.acceptedStartSeconds
                 let isBeforeUpperBoundary = includesUpperBoundary
                     ? midpoint <= item.chunk.acceptedEndSeconds
                     : midpoint < item.chunk.acceptedEndSeconds
-                guard isAfterLowerBoundary, isBeforeUpperBoundary else { continue }
-                mergedSegments.append(TranscriptSegment(
-                    startSeconds: start,
-                    endSeconds: end,
-                    text: segment.text,
-                    confidence: segment.confidence
+                // A segment flush against a chunk's own edge was cut off by the
+                // slice, not by the speaker. Only the interior of a chunk can be
+                // trusted to hold a complete utterance.
+                let clippedAtStart = !isFirstChunk && segment.startSeconds <= 0.001
+                let clippedAtEnd = !includesUpperBoundary
+                    && rawEnd >= item.chunk.sourceDurationSeconds - 0.001
+                candidates.append(Candidate(
+                    segment: TranscriptSegment(
+                        startSeconds: start,
+                        endSeconds: end,
+                        text: segment.text,
+                        confidence: segment.confidence
+                    ),
+                    isFullyHeard: !clippedAtStart && !clippedAtEnd,
+                    ownedByMidpoint: isAfterLowerBoundary && isBeforeUpperBoundary
                 ))
             }
+        }
+
+        // Prefer the midpoint owner, but let a neighbour that actually heard the
+        // whole utterance replace a truncated winner covering the same instant.
+        let accepted = candidates.filter(\.ownedByMidpoint)
+        for candidate in accepted {
+            if candidate.isFullyHeard {
+                mergedSegments.append(candidate.segment)
+                continue
+            }
+            let replacement = candidates.first {
+                !$0.ownedByMidpoint
+                    && $0.isFullyHeard
+                    && $0.segment.startSeconds <= candidate.segment.startSeconds + 0.35
+                    && $0.segment.endSeconds >= candidate.segment.endSeconds - 0.35
+            }
+            mergedSegments.append(replacement?.segment ?? candidate.segment)
         }
         mergedSegments.sort {
             if $0.startSeconds != $1.startSeconds { return $0.startSeconds < $1.startSeconds }

@@ -23,7 +23,14 @@ struct VideoExportProfile: Equatable, Sendable {
             maximumFramesPerSecond = 30
             presenterBitRateScale = 0.72
         case .compact:
-            assetExportPresetName = AVAssetExportPresetMediumQuality
+            // A device-adaptive quality preset is not a bitrate knob: it rescales
+            // a 1920x1080 source down to 568x320 even when the video composition
+            // carries an explicit full-size renderSize. Text legibility is the
+            // only thing a screen recording has to preserve, so trade codec
+            // efficiency for size instead of pixels. HEVC lands roughly 35%
+            // smaller than H.264 at the same dimensions, and the frame-rate cap
+            // supplies the rest of the reduction.
+            assetExportPresetName = AVAssetExportPresetHEVCHighestQuality
             maximumFramesPerSecond = 24
             presenterBitRateScale = 0.38
         }

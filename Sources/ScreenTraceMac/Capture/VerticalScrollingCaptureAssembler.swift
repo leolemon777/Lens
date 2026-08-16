@@ -118,6 +118,12 @@ final class VerticalScrollingCaptureAssembler {
               estimate.bestDifference <= 0.145 else {
             return .rejected(bestDifference: estimate.bestDifference)
         }
+        // Several equally good offsets mean the real scroll distance is unknown.
+        // Another frame arrives in about half a second; waiting for an
+        // unambiguous one is far cheaper than stitching a duplicated screenful.
+        guard !estimate.isAmbiguous else {
+            return .stabilizing(frameDifference: estimate.bestDifference)
+        }
         let deltaPixels = min(
             max(Int((Double(signatureDelta) / Double(signature.height)
                 * Double(viewportHeight)).rounded()), 1),
@@ -222,6 +228,18 @@ struct FrameSignature {
         let bestDifference: Double
         let sameFrameDifference: Double
         let isDuplicate: Bool
+        /// The best score achievable at an offset far away from the winner.
+        /// Periodic page content (tables, card lists, monospaced code) produces
+        /// several near-equal minima; without this the first one silently wins.
+        let runnerUpDifference: Double
+
+        var isAmbiguous: Bool {
+            guard runnerUpDifference.isFinite else { return false }
+            // Periodic content can produce several exact minima (both scores 0).
+            // A strict `>` would let the first one win; Lowe's test rejects a
+            // match that is not significantly better than a distant runner-up.
+            return bestDifference >= runnerUpDifference * 0.75
+        }
     }
 
     let width: Int
@@ -260,7 +278,8 @@ struct FrameSignature {
                 deltaRows: nil,
                 bestDifference: 1,
                 sameFrameDifference: 1,
-                isDuplicate: false
+                isDuplicate: false,
+                runnerUpDifference: .infinity
             )
         }
         // Keep enough of a narrow overlap to support larger wheel/trackpad steps.
@@ -275,7 +294,8 @@ struct FrameSignature {
                 deltaRows: nil,
                 bestDifference: sameDifference,
                 sameFrameDifference: sameDifference,
-                isDuplicate: true
+                isDuplicate: true,
+                runnerUpDifference: .infinity
             )
         }
 
@@ -289,9 +309,11 @@ struct FrameSignature {
                 deltaRows: nil,
                 bestDifference: 1,
                 sameFrameDifference: sameDifference,
-                isDuplicate: false
+                isDuplicate: false,
+                runnerUpDifference: .infinity
             )
         }
+        var scores = [Double](repeating: .infinity, count: maximumDelta - minimumDelta + 1)
         var bestDelta: Int?
         var bestDifference = Double.infinity
         for delta in minimumDelta...maximumDelta {
@@ -301,16 +323,28 @@ struct FrameSignature {
                 insetX: insetX,
                 insetY: insetY
             )
+            scores[delta - minimumDelta] = candidate
             if candidate < bestDifference {
                 bestDifference = candidate
                 bestDelta = delta
+            }
+        }
+        // The runner-up must come from a genuinely different offset, not from
+        // the shoulder of the same minimum, so ignore everything adjacent to the
+        // winner. Rows near a real match always score well by continuity.
+        var runnerUpDifference = Double.infinity
+        if let bestDelta {
+            let exclusion = max(Int(Double(height) * 0.02), 6)
+            for delta in minimumDelta...maximumDelta where abs(delta - bestDelta) > exclusion {
+                runnerUpDifference = min(runnerUpDifference, scores[delta - minimumDelta])
             }
         }
         return Estimate(
             deltaRows: bestDelta,
             bestDifference: bestDifference.isFinite ? bestDifference : 1,
             sameFrameDifference: sameDifference,
-            isDuplicate: false
+            isDuplicate: false,
+            runnerUpDifference: runnerUpDifference
         )
     }
 

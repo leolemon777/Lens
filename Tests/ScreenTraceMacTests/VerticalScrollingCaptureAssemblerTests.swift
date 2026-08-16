@@ -91,6 +91,54 @@ final class VerticalScrollingCaptureAssemblerTests: XCTestCase {
         }
     }
 
+    /// A page of identical repeating rows makes several scroll offsets score
+    /// almost the same. Accepting the first minimum silently duplicates or drops
+    /// a screenful, so an ambiguous frame must be skipped instead of stitched.
+    func testAmbiguousRepeatingRowsAreSkippedInsteadOfStitchedAtAGuess() throws {
+        let assembler = VerticalScrollingCaptureAssembler()
+        // Perfectly periodic stripes: every candidate offset that is a multiple
+        // of the period matches equally well.
+        let period = 20
+        func stripedFrame(shiftedBy shift: Int, markX: Int) throws -> CGImage {
+            let width = 400
+            let height = 800
+            let context = try XCTUnwrap(CGContext(
+                data: nil,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+            var y = -period + (shift % period)
+            while y < height {
+                context.fill(CGRect(x: 0, y: y, width: width, height: period / 2))
+                y += period
+            }
+            // A period-aligned shift of a pure stripe is an identical frame and
+            // would be dropped as a duplicate before the offset search runs.
+            // A half-period shift plus a tiny unique mark keeps the frames
+            // distinct while leaving many equally good periodic offsets.
+            context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+            context.fill(CGRect(x: markX, y: 8, width: 6, height: 6))
+            return try XCTUnwrap(context.makeImage())
+        }
+
+        _ = try assembler.append(stripedFrame(shiftedBy: 0, markX: 12))
+        let disposition = try assembler.append(stripedFrame(shiftedBy: period / 2, markX: 380))
+
+        switch disposition {
+        case .appended:
+            XCTFail("周期性重复内容被当成了确定的滚动量，应该判为歧义并跳过")
+        case .rejected, .duplicate, .stabilizing, .limitReached, .first:
+            break
+        }
+    }
+
     private func makeViewport(
         width: Int,
         height: Int,

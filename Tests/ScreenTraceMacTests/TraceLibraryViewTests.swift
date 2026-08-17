@@ -63,6 +63,7 @@ final class TraceLibraryViewTests: XCTestCase {
             onOrganize: { _ in },
             onSaveInsights: { _, _ in },
             onDelete: { _ in },
+            onRepair: { _ in },
             onDeleteAll: {},
             onOpenFolder: {},
             onClose: {}

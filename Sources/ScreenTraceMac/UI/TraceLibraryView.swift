@@ -12,6 +12,7 @@ struct TraceLibraryView: View {
     let onOrganize: (TraceLibraryEntry) -> Void
     let onSaveInsights: (TraceLibraryEntry, TraceInsightsCustomization?) -> Void
     let onDelete: (TraceLibraryEntry) -> Void
+    let onRepair: (TraceLibraryEntry) -> Void
     let onDeleteAll: () -> Void
     let onOpenFolder: () -> Void
     let onClose: () -> Void
@@ -170,7 +171,10 @@ struct TraceLibraryView: View {
                             onDelete: { onDelete(entry) },
                             canDelete: model.canDelete(entry),
                             isTranscribing: model.isTranscribing(entry.id),
-                            isOrganizing: model.isOrganizing(entry.id)
+                            isOrganizing: model.isOrganizing(entry.id),
+                            recovery: model.recoveryAssessment(for: entry.id),
+                            isRepairing: model.isRepairing(entry.id),
+                            onRepair: { onRepair(entry) }
                         )
                     }
                 }
@@ -208,8 +212,72 @@ private struct TraceLibraryCard: View {
     let canDelete: Bool
     let isTranscribing: Bool
     let isOrganizing: Bool
+    let recovery: RecordingRecoveryAssessment?
+    let isRepairing: Bool
+    let onRepair: () -> Void
 
     @State private var showsInsights = false
+
+    /// Damage found by comparing the project against its own files. The wording
+    /// separates the two outcomes on purpose: a recording that holds more
+    /// picture can be rebuilt, while a side track that outlived a dead screen
+    /// stream has nothing left to merge and only warrants telling the user.
+    @ViewBuilder
+    private func recoveryNotice(_ recovery: RecordingRecoveryAssessment) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label {
+                Text(recovery.canRebuildLongerRecording
+                     ? "有 \(durationText(recovery.recoverableScreenSeconds)) 画面没有并入成片"
+                     : "录制期间屏幕画面提前结束")
+                    .font(.system(size: 9.5, weight: .semibold))
+            } icon: {
+                Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+            }
+            .foregroundStyle(.orange)
+
+            Text(recoveryDetail(recovery))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if recovery.canRebuildLongerRecording {
+                Button(action: onRepair) {
+                    Text(isRepairing ? "正在并入…" : "并入并重新生成")
+                        .font(.system(size: 9.5, weight: .semibold))
+                }
+                .disabled(isRepairing)
+                .help("原始分片会保留，不会被覆盖")
+            }
+        }
+        .padding(7)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func recoveryDetail(_ recovery: RecordingRecoveryAssessment) -> String {
+        if recovery.canRebuildLongerRecording {
+            return "成片现在是 \(durationText(recovery.presentedScreenSeconds))，"
+                + "磁盘上实际有 \(durationText(recovery.availableScreenSeconds))。"
+                + "并入后原始分片仍然保留。"
+        }
+        let outlived = recovery.findings.compactMap { finding -> String? in
+            guard case let .sideTrackOutlivesScreen(role, _, screen, track) = finding
+            else { return nil }
+            let name = role == .camera ? "摄像头" : (role == .microphone ? "麦克风" : "系统声音")
+            return "\(name)录到 \(durationText(track))，画面只有 \(durationText(screen))"
+        }
+        if !outlived.isEmpty {
+            return outlived.joined(separator: "；") + "。这部分没有对应画面可以合成，原始文件仍在项目里。"
+        }
+        let missing = recovery.findings.compactMap { finding -> String? in
+            guard case let .missingDeclaredAsset(path, _) = finding else { return nil }
+            return path
+        }
+        return missing.isEmpty
+            ? "项目内容与记录不一致。"
+            : "项目记录的文件已不在磁盘上：\(missing.joined(separator: "、"))。"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -268,6 +336,10 @@ private struct TraceLibraryCard: View {
                                 .background(.cyan.opacity(0.09), in: Capsule())
                         }
                     }
+                }
+
+                if let recovery, recovery.isDamaged {
+                    recoveryNotice(recovery)
                 }
 
                 HStack(spacing: 7) {

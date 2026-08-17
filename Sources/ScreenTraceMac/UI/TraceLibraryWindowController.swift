@@ -14,6 +14,9 @@ final class TraceLibraryWindowController {
     var onOrganizationRequested: ((TraceLibraryEntry) -> Void)?
     var onInsightsCustomizationRequested: ((TraceLibraryEntry, TraceInsightsCustomization?) -> Void)?
     var onCopyResult: ((Bool) -> Void)?
+    /// A rebuilt recording is handed back as `processing` so the ordinary
+    /// post-processing path regenerates its preview and plan for the new length.
+    var onRecordingRepaired: ((TraceLibraryEntry, RebuiltRecording) -> Void)?
 
     init(store: TraceProjectStore) {
         self.store = store
@@ -75,6 +78,7 @@ final class TraceLibraryWindowController {
                 self?.saveInsights(entry, customization: customization)
             },
             onDelete: { [weak self] in self?.confirmDelete($0) },
+            onRepair: { [weak self] in self?.repairRecoverable($0) },
             onDeleteAll: { [weak self] in self?.confirmDeleteAll() },
             onOpenFolder: { [weak self] in self?.openFolder() },
             onClose: { [weak self] in self?.hide() }
@@ -139,6 +143,48 @@ final class TraceLibraryWindowController {
     private func openFolder() {
         try? FileManager.default.createDirectory(at: store.rootDirectory, withIntermediateDirectories: true)
         NSWorkspace.shared.open(store.rootDirectory)
+    }
+
+    /// Merging changes the project, so it is confirmed first. The sheet states
+    /// what happens to the original files, because the whole reason this
+    /// recording needs recovery is that it already lost content once.
+    private func repairRecoverable(_ entry: TraceLibraryEntry) {
+        guard let assessment = model.recoveryAssessment(for: entry.id),
+              assessment.canRebuildLongerRecording,
+              !model.isRepairing(entry.id) else { return }
+        let alert = NSAlert()
+        alert.messageText = "把缺失的 \(Self.durationText(assessment.recoverableScreenSeconds))画面并入“\(entry.manifest.title)”？"
+        alert.informativeText = """
+        成片会从 \(Self.durationText(assessment.presentedScreenSeconds))变成 \
+        \(Self.durationText(assessment.availableScreenSeconds))。\
+        原始分片会保留在项目内，不会被覆盖或删除；并入后会按新时长重新生成预览。
+        """
+        alert.addButton(withTitle: "并入")
+        alert.addButton(withTitle: "取消")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                switch await model.repairRecoverableRecording(entry) {
+                case let .success(rebuilt):
+                    model.reload()
+                    onRecordingRepaired?(entry, rebuilt)
+                case let .failure(error):
+                    showMessage(
+                        title: "并入失败",
+                        message: "原始文件没有被改动。\(error.localizedDescription)"
+                    )
+                case nil:
+                    break
+                }
+            }
+        }
+    }
+
+    private static func durationText(_ seconds: Double) -> String {
+        seconds >= 60
+            ? String(format: "%d 分 %.0f 秒", Int(seconds) / 60, seconds.truncatingRemainder(dividingBy: 60))
+            : String(format: "%.1f 秒", seconds)
     }
 
     private func confirmDelete(_ entry: TraceLibraryEntry) {

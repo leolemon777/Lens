@@ -360,6 +360,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         traceLibrary.onInsightsCustomizationRequested = { [weak self] entry, customization in
             self?.saveInsightsCustomization(for: entry, customization: customization)
         }
+        traceLibrary.onRecordingRepaired = { [weak self] entry, rebuilt in
+            self?.completeRecordingRepair(entry, rebuilt: rebuilt)
+        }
         videoEditor.onSaved = { [weak self] saved in
             guard let self else { return }
             traceLibrary.reloadIfVisible()
@@ -1603,6 +1606,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = StorageRecoveryGuidance.detail(for: error)
         alert.addButton(withTitle: "好")
         alert.runModal()
+    }
+
+    /// A rebuilt recording is longer than the plan and preview that were
+    /// generated for it, so both are regenerated from the merged media before
+    /// the user opens it.
+    private func completeRecordingRepair(
+        _ entry: TraceLibraryEntry,
+        rebuilt: RebuiltRecording
+    ) {
+        logDiagnostic(
+            "recording.repair_completed",
+            metadata: [
+                "addedMilliseconds": String(Int(rebuilt.addedSeconds * 1_000)),
+                "durationMilliseconds": String(Int(rebuilt.durationSeconds * 1_000))
+            ]
+        )
+        toast.show(
+            title: "已并入 \(String(format: "%.1f", rebuilt.addedSeconds)) 秒画面",
+            detail: "原始分片仍保留；正在按新时长重新生成预览",
+            symbol: "arrow.clockwise.circle.fill"
+        )
+        Task { @MainActor [weak self] in
+            guard let self,
+                  let manifest = try? store.loadManifest(from: rebuilt.packageURL)
+            else { return }
+            let saved = SavedTrace(
+                packageURL: rebuilt.packageURL,
+                rawAssetURL: rebuilt.packageURL
+                    .appendingPathComponent("raw/screen.mp4"),
+                manifest: manifest
+            )
+            _ = await processRecording(saved)
+            traceLibrary.reloadIfVisible()
+        }
     }
 
     @discardableResult

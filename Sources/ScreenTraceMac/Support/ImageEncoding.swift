@@ -1,5 +1,7 @@
 import AppKit
+import ImageIO
 import ScreenTraceCore
+import UniformTypeIdentifiers
 
 enum ImageEncodingError: LocalizedError {
     case unableToCreateBitmap
@@ -20,14 +22,23 @@ enum ImageEncodingError: LocalizedError {
 
 enum ImageEncoding {
     static func pngData(from image: CGImage) throws -> Data {
-        let representation = NSBitmapImageRep(cgImage: image)
-        guard representation.pixelsWide > 0, representation.pixelsHigh > 0 else {
+        guard image.width > 0, image.height > 0 else {
             throw ImageEncodingError.unableToCreateBitmap
         }
-        guard let data = representation.representation(using: .png, properties: [:]) else {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ) else {
             throw ImageEncodingError.unableToEncodePNG
         }
-        return data
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ImageEncodingError.unableToEncodePNG
+        }
+        return data as Data
     }
 
     static func jpegData(from image: CGImage, quality: Double = 0.92) throws -> Data {
@@ -54,17 +65,24 @@ enum ImageEncoding {
             throw ImageEncodingError.unableToCreateBitmap
         }
 
-        let representation = NSBitmapImageRep(cgImage: flattenedImage)
-        guard representation.pixelsWide > 0, representation.pixelsHigh > 0 else {
-            throw ImageEncodingError.unableToCreateBitmap
-        }
-        guard let data = representation.representation(
-            using: .jpeg,
-            properties: [.compressionFactor: min(max(quality, 0), 1)]
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data,
+            UTType.jpeg.identifier as CFString,
+            1,
+            nil
         ) else {
             throw ImageEncodingError.unableToEncodeJPEG
         }
-        return data
+        let properties = [
+            kCGImageDestinationLossyCompressionQuality:
+                NSNumber(value: min(max(quality, 0), 1))
+        ] as CFDictionary
+        CGImageDestinationAddImage(destination, flattenedImage, properties)
+        guard CGImageDestinationFinalize(destination) else {
+            throw ImageEncodingError.unableToEncodeJPEG
+        }
+        return data as Data
     }
 
     static func data(

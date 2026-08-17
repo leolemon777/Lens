@@ -2,6 +2,47 @@ import AppKit
 import CoreGraphics
 import ScreenTraceCore
 
+enum EventCaptureFailure: String, Equatable, Sendable {
+    case inputMonitoringDenied
+    case monitorUnavailable
+    case eventsNotDelivered
+    case writerFailure
+
+    var userFacingDescription: String {
+        switch self {
+        case .inputMonitoringDenied:
+            "输入监控未授权，已改为在原始视频中保留光标"
+        case .monitorUnavailable:
+            "无法启动全局事件监听，智能跟踪已降级"
+        case .eventsNotDelivered:
+            "检测到鼠标移动，但系统没有交付事件"
+        case .writerFailure:
+            "事件轨写入失败，原始录屏仍在继续"
+        }
+    }
+}
+
+enum EventCaptureHealth: Equatable, Sendable {
+    case checking
+    case waitingForActivity
+    case healthy(pointerCount: Int, clickCount: Int)
+    case degraded(EventCaptureFailure)
+
+    var isDegraded: Bool {
+        if case .degraded = self { return true }
+        return false
+    }
+}
+
+struct EventCaptureSnapshot: Equatable, Sendable {
+    let health: EventCaptureHealth
+    let pointerCount: Int
+    let clickCount: Int
+    let keyboardCount: Int
+    let windowCount: Int
+    let lastEventUptime: TimeInterval?
+}
+
 @MainActor
 final class PointerEventRecorder {
     typealias GlobalMonitorHandler = @Sendable (NSEvent) -> Void
@@ -14,6 +55,7 @@ final class PointerEventRecorder {
         enum Kind: Sendable {
             case moved
             case dragged
+            case scroll
             case leftMouseDown
             case leftMouseUp
             case rightMouseDown
@@ -33,11 +75,16 @@ final class PointerEventRecorder {
         let modifierFlags: UInt
         let charactersIgnoringModifiers: String?
         let isRepeat: Bool
+        let scrollingDeltaX: Double
+        let scrollingDeltaY: Double
     }
 
     nonisolated(unsafe) private var monitor: Any?
     private let addGlobalMonitorOverride: GlobalMonitorInstaller?
     private let removeMonitorOverride: ((Any) -> Void)?
+    private let inputMonitoringPreflight: () -> Bool
+    private let mouseLocationProvider: () -> CGPoint
+    private let cursorShapeProvider: () -> PointerCursorShape?
     private var pointerWriter: JSONLinesWriter<PointerEvent>?
     private var clickWriter: JSONLinesWriter<ClickEvent>?
     private var keyboardWriter: JSONLinesWriter<KeyboardEvent>?
@@ -47,18 +94,60 @@ final class PointerEventRecorder {
     private var startedAtUptime: TimeInterval = 0
     private var timelineOffset: TimeInterval = 0
     private var lastMoveAtUptime: TimeInterval = 0
+    private var lastScrollAtUptime: TimeInterval = 0
+    private var lastCursorShapeSampleAtUptime: TimeInterval = -.infinity
+    private var sampledCursorShape: PointerCursorShape?
     private var captureBounds: CGRect?
     private var trackedWindowID: CGWindowID?
     private var lastWindowBoundsRefresh: TimeInterval = 0
     private var monitorGeneration: UInt64 = 0
     private let minimumMoveInterval: TimeInterval = 1.0 / 60.0
+    private var activeSessionPackageURL: URL?
+    private var inputMonitoringGrantedAtStart = false
+    private var initialMouseLocation = CGPoint.zero
+    private var pointerEventCount = 0
+    private var clickEventCount = 0
+    private var keyboardEventCount = 0
+    private var windowEventCount = 0
+    private var lastEventUptime: TimeInterval?
+    private var didEncounterWriterFailure = false
+    private var isMonitoring = false
+    private var healthBeforeStop: EventCaptureHealth = .checking
 
     init(
         addGlobalMonitorOverride: GlobalMonitorInstaller? = nil,
-        removeMonitorOverride: ((Any) -> Void)? = nil
+        removeMonitorOverride: ((Any) -> Void)? = nil,
+        inputMonitoringPreflight: @escaping () -> Bool = {
+            CGPreflightListenEventAccess()
+        },
+        mouseLocationProvider: @escaping () -> CGPoint = {
+            NSEvent.mouseLocation
+        },
+        cursorShapeProvider: @escaping () -> PointerCursorShape? = {
+            SystemCursorShapeMatcher.currentShape()
+        }
     ) {
         self.addGlobalMonitorOverride = addGlobalMonitorOverride
         self.removeMonitorOverride = removeMonitorOverride
+        self.inputMonitoringPreflight = inputMonitoringPreflight
+        self.mouseLocationProvider = mouseLocationProvider
+        self.cursorShapeProvider = cursorShapeProvider
+    }
+
+    var requiresEmbeddedCursorFallback: Bool {
+        !inputMonitoringGrantedAtStart || monitor == nil
+    }
+
+    var eventCaptureSnapshot: EventCaptureSnapshot {
+        let health = isMonitoring ? evaluateHealth() : healthBeforeStop
+        return EventCaptureSnapshot(
+            health: health,
+            pointerCount: pointerEventCount,
+            clickCount: clickEventCount,
+            keyboardCount: keyboardEventCount,
+            windowCount: windowEventCount,
+            lastEventUptime: lastEventUptime
+        )
     }
 
     func start(
@@ -68,6 +157,9 @@ final class PointerEventRecorder {
         timelineOffset: TimeInterval = 0
     ) throws {
         stopMonitoring()
+        if activeSessionPackageURL?.standardizedFileURL != session.packageURL.standardizedFileURL {
+            resetSessionHealth(packageURL: session.packageURL)
+        }
         pointerWriter = try JSONLinesWriter(url: session.pointerEventsURL)
         clickWriter = try JSONLinesWriter(url: session.clickEventsURL)
         keyboardWriter = try JSONLinesWriter(url: session.keyboardEventsURL)
@@ -75,15 +167,22 @@ final class PointerEventRecorder {
         startedAtUptime = ProcessInfo.processInfo.systemUptime
         self.timelineOffset = max(0, timelineOffset)
         lastMoveAtUptime = 0
+        lastScrollAtUptime = 0
+        lastCursorShapeSampleAtUptime = -.infinity
+        sampledCursorShape = nil
         self.captureBounds = captureBounds.standardized
         self.trackedWindowID = trackedWindowID
         lastWindowBoundsRefresh = 0
+        inputMonitoringGrantedAtStart = inputMonitoringPreflight()
+        initialMouseLocation = mouseLocationProvider()
+        healthBeforeStop = .checking
 
         let mask: NSEvent.EventTypeMask = [
             .mouseMoved,
             .leftMouseDragged,
             .rightMouseDragged,
             .otherMouseDragged,
+            .scrollWheel,
             .leftMouseDown,
             .leftMouseUp,
             .rightMouseDown,
@@ -101,8 +200,12 @@ final class PointerEventRecorder {
             generation: generation,
             deliver: deliver
         )
-        monitor = addGlobalMonitorOverride?(mask, globalHandler)
-            ?? NSEvent.addGlobalMonitorForEvents(matching: mask, handler: globalHandler)
+        if let addGlobalMonitorOverride {
+            monitor = addGlobalMonitorOverride(mask, globalHandler)
+        } else {
+            monitor = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: globalHandler)
+        }
+        isMonitoring = true
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
@@ -118,6 +221,7 @@ final class PointerEventRecorder {
     }
 
     func stop() async {
+        healthBeforeStop = evaluateHealth()
         stopMonitoring()
         await writeTask?.value
         writeTask = nil
@@ -143,6 +247,7 @@ final class PointerEventRecorder {
     }
 
     private func stopMonitoring() {
+        isMonitoring = false
         monitorGeneration &+= 1
         if let monitor {
             removeMonitorOverride?(monitor) ?? NSEvent.removeMonitor(monitor)
@@ -176,10 +281,34 @@ final class PointerEventRecorder {
                 kind: kind,
                 location: point,
                 normalizedLocation: normalizedLocation,
-                displayID: Self.displayID(at: location)
+                displayID: Self.displayID(at: location),
+                cursorShape: cursorShape(at: now)
             )
             if let pointerWriter {
-                enqueueWrite { try? await pointerWriter.append(pointerEvent) }
+                pointerEventCount += 1
+                lastEventUptime = now
+                enqueueWrite { try await pointerWriter.append(pointerEvent) }
+            }
+
+        case .scroll:
+            guard now - lastScrollAtUptime >= minimumMoveInterval else { return }
+            lastScrollAtUptime = now
+            let pointerEvent = PointerEvent(
+                time: elapsed,
+                kind: .scroll,
+                location: point,
+                normalizedLocation: normalizedLocation,
+                displayID: Self.displayID(at: location),
+                scrollDelta: TracePoint(
+                    x: input.scrollingDeltaX,
+                    y: input.scrollingDeltaY
+                ),
+                cursorShape: cursorShape(at: now)
+            )
+            if let pointerWriter {
+                pointerEventCount += 1
+                lastEventUptime = now
+                enqueueWrite { try await pointerWriter.append(pointerEvent) }
             }
 
         case .leftMouseDown, .leftMouseUp,
@@ -192,16 +321,37 @@ final class PointerEventRecorder {
                 location: point,
                 normalizedLocation: normalizedLocation,
                 displayID: Self.displayID(at: location),
-                clickCount: max(input.clickCount, 1)
+                clickCount: max(input.clickCount, 1),
+                cursorShape: cursorShape(at: now)
             )
             if let clickWriter {
-                enqueueWrite { try? await clickWriter.append(click) }
+                clickEventCount += 1
+                lastEventUptime = now
+                enqueueWrite { try await clickWriter.append(click) }
+            }
+            // A mouse-up can happen without a subsequent move. Emit a stationary
+            // pointer sample so replay can end the dragged state at the exact
+            // release time instead of leaving the cursor visually "held".
+            if click.phase == .up, let pointerWriter {
+                let release = PointerEvent(
+                    time: elapsed,
+                    kind: .moved,
+                    location: point,
+                    normalizedLocation: normalizedLocation,
+                    displayID: Self.displayID(at: location),
+                    cursorShape: click.cursorShape
+                )
+                pointerEventCount += 1
+                lastEventUptime = now
+                enqueueWrite { try await pointerWriter.append(release) }
             }
 
         case .keyDown:
             guard let keyboardEvent = Self.sanitizedKeyboardEvent(from: input, time: elapsed),
                   let keyboardWriter else { return }
-            enqueueWrite { try? await keyboardWriter.append(keyboardEvent) }
+            keyboardEventCount += 1
+            lastEventUptime = now
+            enqueueWrite { try await keyboardWriter.append(keyboardEvent) }
 
         default:
             break
@@ -233,7 +383,9 @@ final class PointerEventRecorder {
             bundleIdentifier: bundleIdentifier
         )
         guard event.applicationName != nil || event.bundleIdentifier != nil else { return }
-        enqueueWrite { try? await windowWriter.append(event) }
+        windowEventCount += 1
+        lastEventUptime = ProcessInfo.processInfo.systemUptime
+        enqueueWrite { try await windowWriter.append(event) }
     }
 
     static func sanitizedKeyboardEvent(from event: NSEvent, time: Double) -> KeyboardEvent? {
@@ -273,7 +425,7 @@ final class PointerEventRecorder {
         let kind = monitoredKind(from: event.type)
         let location: CGPoint
         switch kind {
-        case .moved, .dragged,
+        case .moved, .dragged, .scroll,
              .leftMouseDown, .leftMouseUp,
              .rightMouseDown, .rightMouseUp,
              .otherMouseDown, .otherMouseUp:
@@ -301,7 +453,9 @@ final class PointerEventRecorder {
             keyCode: isKeyEvent ? event.keyCode : 0,
             modifierFlags: flags.rawValue,
             charactersIgnoringModifiers: isKeyEvent ? event.charactersIgnoringModifiers : nil,
-            isRepeat: isKeyEvent && event.isARepeat
+            isRepeat: isKeyEvent && event.isARepeat,
+            scrollingDeltaX: kind == .scroll ? event.scrollingDeltaX : 0,
+            scrollingDeltaY: kind == .scroll ? event.scrollingDeltaY : 0
         )
     }
 
@@ -309,6 +463,7 @@ final class PointerEventRecorder {
         switch type {
         case .mouseMoved: .moved
         case .leftMouseDragged, .rightMouseDragged, .otherMouseDragged: .dragged
+        case .scrollWheel: .scroll
         case .leftMouseDown: .leftMouseDown
         case .leftMouseUp: .leftMouseUp
         case .rightMouseDown: .rightMouseDown
@@ -357,6 +512,15 @@ final class PointerEventRecorder {
         return CaptureGeometry.normalizedPoint(location, in: captureBounds)
     }
 
+    private func cursorShape(at uptime: TimeInterval) -> PointerCursorShape? {
+        guard uptime - lastCursorShapeSampleAtUptime >= 1.0 / 12.0 else {
+            return sampledCursorShape
+        }
+        lastCursorShapeSampleAtUptime = uptime
+        sampledCursorShape = cursorShapeProvider()
+        return sampledCursorShape
+    }
+
     private func refreshTrackedWindowBoundsIfNeeded() {
         guard let trackedWindowID else { return }
         let now = ProcessInfo.processInfo.systemUptime
@@ -376,12 +540,53 @@ final class PointerEventRecorder {
         captureBounds = bounds.standardized
     }
 
-    private func enqueueWrite(_ operation: @escaping @Sendable () async -> Void) {
+    private func enqueueWrite(_ operation: @escaping @Sendable () async throws -> Void) {
         let previous = writeTask
-        writeTask = Task {
+        writeTask = Task { @MainActor [weak self] in
             await previous?.value
-            await operation()
+            do {
+                try await operation()
+            } catch {
+                self?.didEncounterWriterFailure = true
+            }
         }
+    }
+
+    private func evaluateHealth() -> EventCaptureHealth {
+        if didEncounterWriterFailure {
+            return .degraded(.writerFailure)
+        }
+        if !inputMonitoringGrantedAtStart {
+            return .degraded(.inputMonitoringDenied)
+        }
+        guard monitor != nil else {
+            return .degraded(.monitorUnavailable)
+        }
+        if pointerEventCount > 0 || clickEventCount > 0 {
+            return .healthy(
+                pointerCount: pointerEventCount,
+                clickCount: clickEventCount
+            )
+        }
+        let currentLocation = mouseLocationProvider()
+        if hypot(
+            currentLocation.x - initialMouseLocation.x,
+            currentLocation.y - initialMouseLocation.y
+        ) >= 4 {
+            return .degraded(.eventsNotDelivered)
+        }
+        return .waitingForActivity
+    }
+
+    private func resetSessionHealth(packageURL: URL) {
+        activeSessionPackageURL = packageURL.standardizedFileURL
+        pointerEventCount = 0
+        clickEventCount = 0
+        keyboardEventCount = 0
+        windowEventCount = 0
+        lastEventUptime = nil
+        didEncounterWriterFailure = false
+        healthBeforeStop = .checking
     }
 
     private static func button(for input: MonitoredInput) -> PointerButton {
@@ -406,5 +611,57 @@ final class PointerEventRecorder {
         var count: UInt32 = 0
         let error = CGGetDisplaysWithPoint(point, 1, &displayID, &count)
         return error == .success && count > 0 ? displayID : nil
+    }
+}
+
+@MainActor
+enum SystemCursorShapeMatcher {
+    private struct Candidate {
+        let shape: PointerCursorShape
+        let cursor: NSCursor
+    }
+
+    private static let candidates: [Candidate] = [
+        Candidate(shape: .arrow, cursor: .arrow),
+        Candidate(shape: .pointingHand, cursor: .pointingHand),
+        Candidate(shape: .iBeam, cursor: .iBeam),
+        Candidate(shape: .verticalIBeam, cursor: .iBeamCursorForVerticalLayout),
+        Candidate(shape: .crosshair, cursor: .crosshair),
+        Candidate(shape: .openHand, cursor: .openHand),
+        Candidate(shape: .closedHand, cursor: .closedHand),
+        Candidate(shape: .horizontalResize, cursor: .columnResize),
+        Candidate(shape: .verticalResize, cursor: .rowResize),
+        Candidate(shape: .operationNotAllowed, cursor: .operationNotAllowed),
+        Candidate(shape: .dragCopy, cursor: .dragCopy),
+        Candidate(shape: .dragLink, cursor: .dragLink),
+        Candidate(shape: .contextualMenu, cursor: .contextualMenu),
+        Candidate(shape: .disappearingItem, cursor: .disappearingItem)
+    ]
+
+    static func currentShape() -> PointerCursorShape? {
+        shape(for: NSCursor.currentSystem)
+    }
+
+    static func shape(for cursor: NSCursor?) -> PointerCursorShape? {
+        guard let cursor else { return nil }
+        let size = cursor.image.size
+        let hotSpot = cursor.hotSpot
+        let representations = representationSignature(of: cursor.image)
+        let matches = candidates.filter { candidate in
+            abs(candidate.cursor.image.size.width - size.width) < 0.5
+                && abs(candidate.cursor.image.size.height - size.height) < 0.5
+                && abs(candidate.cursor.hotSpot.x - hotSpot.x) < 0.5
+                && abs(candidate.cursor.hotSpot.y - hotSpot.y) < 0.5
+                && representationSignature(of: candidate.cursor.image) == representations
+        }
+        if matches.count == 1 { return matches[0].shape }
+        let data = cursor.image.tiffRepresentation
+        return matches.first {
+            $0.cursor.image.tiffRepresentation == data
+        }?.shape ?? .unknown
+    }
+
+    private static func representationSignature(of image: NSImage) -> [String] {
+        image.representations.map { "\($0.pixelsWide)x\($0.pixelsHigh)" }
     }
 }

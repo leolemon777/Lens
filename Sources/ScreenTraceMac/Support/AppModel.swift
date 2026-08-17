@@ -9,6 +9,162 @@ enum RecordingFrameRate: Int, CaseIterable, Identifiable, Sendable {
     var id: Int { rawValue }
 }
 
+enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
+    case natural
+    case presentation
+    case teaching
+    case source
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .natural: "自然成片"
+        case .presentation: "聚焦演示"
+        case .teaching: "教学讲解"
+        case .source: "原始录制"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .natural: "平滑缩放、光标与点击反馈"
+        case .presentation: "更强聚焦，适合产品演示"
+        case .teaching: "讲解声、字幕与人像优先"
+        case .source: "不加效果，只保留独立原始轨"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .natural: "sparkles"
+        case .presentation: "scope"
+        case .teaching: "person.wave.2"
+        case .source: "film.stack"
+        }
+    }
+
+    func makeEditPlan(includesCamera: Bool) -> AutoEditPlan {
+        var plan = AutoEditPlan(preset: rawValue)
+        switch self {
+        case .natural:
+            plan.camera.mode = "event-driven"
+            plan.camera.zoomIntensity = 0.42
+            plan.camera.zoomScale = 1.60
+            plan.camera.generationStrength = .restrained
+            plan.camera.motionBlurStrength = 0.12
+            plan.camera.clickToZoom = true
+            plan.camera.followPointer = true
+            plan.cursor.isEnabled = true
+            plan.cursor.smoothing = 0.72
+            plan.cursor.smoothingWindowMilliseconds = 42
+            plan.cursor.scale = 1.15
+            plan.cursor.hidesWhenIdle = false
+            plan.cursor.appearance = .recorded
+            plan.cursor.motionEffect = .halo
+            plan.cursor.motionEffectStrength = 0.50
+            plan.interaction?.showsClickPulse = true
+            plan.interaction?.clickEffect = .ripple
+            plan.interaction?.clickEffectStrength = 1
+            plan.interaction?.clickPulseScale = 1.25
+            plan.interaction?.clickPulseColorHex = "#FF684D"
+            plan.interaction?.clickPulseDuration = 0.64
+            plan.canvas?.isEnabled = true
+            plan.export?.preset = .source
+        case .presentation:
+            plan.camera.mode = "event-driven"
+            plan.camera.zoomIntensity = 0.62
+            plan.camera.zoomScale = 1.60
+            plan.camera.generationStrength = .active
+            plan.camera.motionBlurStrength = 0.16
+            plan.camera.clickToZoom = true
+            plan.camera.followPointer = true
+            plan.cursor.isEnabled = true
+            plan.cursor.smoothing = 0.78
+            plan.cursor.smoothingWindowMilliseconds = 52
+            plan.cursor.scale = 1.28
+            plan.cursor.hidesWhenIdle = false
+            plan.cursor.appearance = .highContrast
+            plan.cursor.motionEffect = .trail
+            plan.cursor.motionEffectStrength = 0.48
+            plan.interaction?.showsClickPulse = true
+            plan.interaction?.clickEffect = .pulse
+            plan.interaction?.clickEffectStrength = 0.96
+            plan.interaction?.clickPulseScale = 1.30
+            plan.interaction?.clickPulseColorHex = "#FF684D"
+            plan.interaction?.clickPulseDuration = 0.58
+            plan.canvas = AutoEditPlan.Canvas(
+                isEnabled: true,
+                margin: 0.065,
+                cornerRadius: 0.032,
+                shadowOpacity: 0.32,
+                backgroundTopHex: "#667EEA",
+                backgroundBottomHex: "#764BA2"
+            )
+            plan.export?.preset = .source
+        case .teaching:
+            plan.camera.mode = "event-driven"
+            plan.camera.zoomIntensity = 0.50
+            plan.camera.zoomScale = 1.60
+            plan.camera.generationStrength = .balanced
+            plan.camera.motionBlurStrength = 0.14
+            plan.camera.clickToZoom = true
+            plan.camera.followPointer = true
+            plan.cursor.isEnabled = true
+            plan.cursor.smoothing = 0.76
+            plan.cursor.smoothingWindowMilliseconds = 48
+            plan.cursor.scale = 1.22
+            plan.cursor.hidesWhenIdle = false
+            plan.cursor.appearance = .recorded
+            plan.cursor.motionEffect = .spotlight
+            plan.cursor.motionEffectStrength = 0.42
+            plan.interaction?.showsClickPulse = true
+            plan.interaction?.clickEffect = .spotlight
+            plan.interaction?.clickEffectStrength = 0.90
+            plan.interaction?.clickPulseScale = 1.25
+            plan.interaction?.clickPulseColorHex = "#FF684D"
+            plan.interaction?.clickPulseDuration = 0.64
+            plan.audio = AutoEditPlan.Audio(
+                reducesMicrophoneNoise: true,
+                noiseReductionAmount: 0.62,
+                normalizesLoudness: true,
+                targetLoudnessLUFS: -16,
+                ducksSystemUnderNarration: true,
+                duckedSystemVolume: 0.28
+            )
+            plan.captions = AutoEditPlan.Captions(
+                isEnabled: false,
+                style: .glass,
+                position: .bottom,
+                fontScale: 1.08,
+                maxCharactersPerCue: 24
+            )
+            plan.export?.preset = .source
+        case .source:
+            plan.camera.mode = "off"
+            plan.camera.zoomIntensity = 0
+            plan.camera.zoomScale = 1
+            plan.camera.clickToZoom = false
+            plan.camera.followPointer = false
+            plan.camera.motionBlurStrength = 0
+            plan.cursor.isEnabled = false
+            plan.cursor.smoothingWindowMilliseconds = 0
+            plan.cursor.motionEffect = .none
+            plan.interaction?.showsClickPulse = false
+            plan.canvas?.isEnabled = false
+            plan.presenterCamera?.isEnabled = false
+            plan.audio?.reducesMicrophoneNoise = false
+            plan.audio?.normalizesLoudness = false
+            plan.audio?.ducksSystemUnderNarration = false
+            plan.export?.preset = .source
+        }
+        if self != .source {
+            plan.presenterCamera?.isEnabled = includesCamera
+        }
+        return plan
+    }
+}
+
 enum TranscriptionLanguage: String, CaseIterable, Identifiable, Sendable {
     case automatic
     case simplifiedChinese
@@ -79,6 +235,7 @@ final class AppModel: ObservableObject {
         static let capturesMicrophone = "recording.capturesMicrophone"
         static let capturesCamera = "recording.capturesCamera"
         static let frameRate = "recording.framesPerSecond"
+        static let experiencePreset = "recording.experiencePreset"
         static let automaticallyTranscribesRecordings = "analysis.automaticallyTranscribesRecordings"
         static let transcriptionLanguage = "analysis.transcriptionLanguage"
         static let quickScreenshotShortcut = "shortcuts.quickScreenshot"
@@ -98,6 +255,14 @@ final class AppModel: ObservableObject {
     }
     @Published var recordingFrameRate: RecordingFrameRate {
         didSet { defaults.set(recordingFrameRate.rawValue, forKey: PreferenceKey.frameRate) }
+    }
+    @Published var recordingExperiencePreset: RecordingExperiencePreset {
+        didSet {
+            defaults.set(
+                recordingExperiencePreset.rawValue,
+                forKey: PreferenceKey.experiencePreset
+            )
+        }
     }
     @Published var automaticallyTranscribesRecordings: Bool {
         didSet {
@@ -121,10 +286,16 @@ final class AppModel: ObservableObject {
         self.defaults = defaults
         capturesSystemAudio = defaults.object(forKey: PreferenceKey.capturesSystemAudio) as? Bool ?? true
         capturesMicrophone = defaults.object(forKey: PreferenceKey.capturesMicrophone) as? Bool ?? false
-        capturesCamera = defaults.object(forKey: PreferenceKey.capturesCamera) as? Bool ?? false
+        // Camera capture is deliberately opt-in for every app session. A previous
+        // release persisted this toggle, which could unexpectedly start the next
+        // recording with the front camera active.
+        capturesCamera = false
+        defaults.set(false, forKey: PreferenceKey.capturesCamera)
         recordingFrameRate = RecordingFrameRate(
             rawValue: defaults.integer(forKey: PreferenceKey.frameRate)
         ) ?? .fps60
+        recordingExperiencePreset = defaults.string(forKey: PreferenceKey.experiencePreset)
+            .flatMap(RecordingExperiencePreset.init(rawValue:)) ?? .natural
         automaticallyTranscribesRecordings = defaults.object(
             forKey: PreferenceKey.automaticallyTranscribesRecordings
         ) as? Bool ?? true
@@ -179,5 +350,27 @@ final class AppModel: ObservableObject {
             dimensions: dimensions,
             thumbnail: thumbnail
         )
+    }
+
+    /// Restores the latest screenshot after launch without overwriting a capture
+    /// that completed while the persistent library was still loading.
+    @discardableResult
+    func restoreRecentTraceIfAbsent(
+        _ entry: TraceLibraryEntry,
+        thumbnail: NSImage
+    ) -> Bool {
+        guard recentTrace == nil,
+              entry.manifest.kind == .screenshot,
+              entry.manifest.state == .ready,
+              let dimensions = entry.manifest.dimensions else { return false }
+        recentTrace = RecentTrace(
+            id: entry.id,
+            title: entry.manifest.title,
+            packageURL: entry.packageURL,
+            imageURL: entry.displayAssetURL,
+            dimensions: dimensions,
+            thumbnail: thumbnail
+        )
+        return true
     }
 }

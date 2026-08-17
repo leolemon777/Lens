@@ -117,6 +117,219 @@ final class AudioMixdownRendererTests: XCTestCase {
             accuracy: 0.6
         )
         XCTAssertEqual(try Data(contentsOf: microphoneURL), originalMicrophoneBytes)
+
+        var editPlan = AutoEditPlan()
+        editPlan.camera.mode = "off"
+        editPlan.cursor.isEnabled = false
+        editPlan.canvas?.isEnabled = false
+        editPlan.presenterCamera?.isEnabled = false
+        editPlan.captions?.isEnabled = false
+        editPlan.audio = plan
+        let evidence = await RenderedEffectVerifier(
+            renderer: AutoPreviewRenderer()
+        ).validate(
+            rawURL: inputURL,
+            previewURL: outputURL,
+            plan: editPlan,
+            microphoneURL: microphoneURL
+        )
+        let audioEvidence = try XCTUnwrap(
+            evidence.effects.first { $0.effect == .audioMix }
+        )
+        XCTAssertEqual(audioEvidence.state, .verified)
+        XCTAssertGreaterThan(try XCTUnwrap(audioEvidence.audioDifference), 0.0015)
+        XCTAssertTrue(evidence.isVerified)
+    }
+
+    @MainActor
+    func testSourceQualityMixdownPreservesReorderedSixtyFPSVideoTiming() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ScreenTraceSourceTimingMixTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rawURL = directory.appendingPathComponent("reordered-60.mp4")
+        let inputURL = directory.appendingPathComponent("effects-60.mp4")
+        let microphoneURL = directory.appendingPathComponent("microphone.caf")
+        let outputURL = directory.appendingPathComponent("mixed.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: rawURL,
+            frameCount: 120,
+            framesPerSecond: 60,
+            width: 2_560,
+            height: 1_664,
+            allowsFrameReordering: true
+        )
+        var editPlan = AutoEditPlan()
+        editPlan.camera.mode = "off"
+        editPlan.cursor.isEnabled = false
+        editPlan.canvas?.isEnabled = false
+        editPlan.presenterCamera?.isEnabled = false
+        editPlan.captions?.isEnabled = false
+        editPlan.export = .init(preset: .source)
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: rawURL,
+            outputURL: inputURL,
+            plan: editPlan
+        )
+        try makeTone(at: microphoneURL, frameCount: 96_000) { frame in
+            frame < 48_000 ? 0.16 : 0
+        }
+        let plan = AutoEditPlan.Audio(
+            reducesMicrophoneNoise: false,
+            normalizesLoudness: false,
+            ducksSystemUnderNarration: false
+        )
+
+        _ = try await AudioMixdownRenderer().render(
+            inputURL: inputURL,
+            microphoneURL: microphoneURL,
+            outputURL: outputURL,
+            plan: plan,
+            export: .init(preset: .source)
+        )
+
+        let output = AVURLAsset(url: outputURL)
+        let outputTracks = try await output.loadTracks(withMediaType: .video)
+        let outputTrack = try XCTUnwrap(outputTracks.first)
+        let nominalFrameRate = try await outputTrack.load(.nominalFrameRate)
+        XCTAssertGreaterThanOrEqual(nominalFrameRate, 58)
+    }
+
+    @MainActor
+    func testSystemVolumeAppliesWithoutMicrophoneTrack() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ScreenTraceSystemOnlyMixTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let videoURL = directory.appendingPathComponent("video.mp4")
+        let systemURL = directory.appendingPathComponent("system.caf")
+        let inputURL = directory.appendingPathComponent("input.mp4")
+        let outputURL = directory.appendingPathComponent("adjusted.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: videoURL,
+            frameCount: 30,
+            framesPerSecond: 24
+        )
+        try makeTone(at: systemURL, frameCount: 60_000) { _ in 0.20 }
+        try await mux(videoURL: videoURL, audioURL: systemURL, outputURL: inputURL)
+        let plan = AutoEditPlan.Audio(
+            systemVolume: 0.25,
+            reducesMicrophoneNoise: false,
+            normalizesLoudness: false,
+            ducksSystemUnderNarration: false
+        )
+
+        XCTAssertTrue(AudioMixdownRenderer.requiresMixdown(
+            microphoneURL: nil,
+            plan: plan
+        ))
+        let report = try await AudioMixdownRenderer().renderWithReport(
+            inputURL: inputURL,
+            microphoneURL: nil,
+            outputURL: outputURL,
+            plan: plan
+        )
+
+        let output = AVURLAsset(url: outputURL)
+        let videoTracks = try await output.loadTracks(withMediaType: .video)
+        let audioTracks = try await output.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(videoTracks.count, 1)
+        XCTAssertEqual(audioTracks.count, 1)
+        XCTAssertNil(report.voiceProcessingResult)
+        XCTAssertNil(report.voiceProcessingErrorDescription)
+        let analyzer = VoiceAudioProcessor()
+        let before = try await analyzer.analyze(url: inputURL)
+        let after = try await analyzer.analyze(url: outputURL)
+        XCTAssertEqual(
+            after.peakAmplitude / before.peakAmplitude,
+            0.25,
+            accuracy: 0.04
+        )
+
+        var unity = plan
+        unity.systemVolume = 1
+        XCTAssertFalse(AudioMixdownRenderer.requiresMixdown(
+            microphoneURL: nil,
+            plan: unity
+        ))
+    }
+
+    @MainActor
+    func testFinalMediaEvidenceProvesSystemVolumeAndRejectsAnUnchangedFile() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ScreenTraceAudioEvidenceTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let videoURL = directory.appendingPathComponent("video.mp4")
+        let systemURL = directory.appendingPathComponent("system.caf")
+        let inputURL = directory.appendingPathComponent("input.mp4")
+        let adjustedURL = directory.appendingPathComponent("adjusted.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: videoURL,
+            frameCount: 30,
+            framesPerSecond: 24
+        )
+        try makeTone(at: systemURL, frameCount: 60_000) { frame in
+            sin(Float(frame) * 0.007) * 0.18
+        }
+        try await mux(videoURL: videoURL, audioURL: systemURL, outputURL: inputURL)
+
+        var editPlan = AutoEditPlan()
+        editPlan.camera.mode = "off"
+        editPlan.cursor.isEnabled = false
+        editPlan.canvas?.isEnabled = false
+        editPlan.presenterCamera?.isEnabled = false
+        editPlan.captions?.isEnabled = false
+        editPlan.audio = AutoEditPlan.Audio(
+            systemVolume: 0.25,
+            reducesMicrophoneNoise: false,
+            normalizesLoudness: false,
+            ducksSystemUnderNarration: false
+        )
+        _ = try await AudioMixdownRenderer().render(
+            inputURL: inputURL,
+            microphoneURL: nil,
+            outputURL: adjustedURL,
+            plan: try XCTUnwrap(editPlan.audio)
+        )
+
+        let verifier = RenderedEffectVerifier(renderer: AutoPreviewRenderer())
+        let verifiedReport = await verifier.validate(
+            rawURL: inputURL,
+            previewURL: adjustedURL,
+            plan: editPlan
+        )
+        let verifiedAudio = try XCTUnwrap(
+            verifiedReport.effects.first { $0.effect == .audioMix }
+        )
+        XCTAssertEqual(verifiedAudio.state, .verified)
+        let outputRMS = try XCTUnwrap(verifiedAudio.outputAudioRMS)
+        let referenceRMS = try XCTUnwrap(verifiedAudio.referenceAudioRMS)
+        XCTAssertEqual(outputRMS / referenceRMS, 0.25, accuracy: 0.05)
+        XCTAssertLessThanOrEqual(
+            try XCTUnwrap(verifiedAudio.audioDurationDriftSeconds),
+            0.15
+        )
+
+        let unchangedReport = await verifier.validate(
+            rawURL: inputURL,
+            previewURL: inputURL,
+            plan: editPlan
+        )
+        let unchangedAudio = try XCTUnwrap(
+            unchangedReport.effects.first { $0.effect == .audioMix }
+        )
+        XCTAssertEqual(unchangedAudio.state, .failed)
+        XCTAssertFalse(unchangedReport.isVerified)
     }
 
     @MainActor

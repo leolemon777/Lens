@@ -11,6 +11,8 @@ struct TraceLibraryView: View {
     let onTranscribe: (TraceLibraryEntry) -> Void
     let onOrganize: (TraceLibraryEntry) -> Void
     let onSaveInsights: (TraceLibraryEntry, TraceInsightsCustomization?) -> Void
+    let onDelete: (TraceLibraryEntry) -> Void
+    let onDeleteAll: () -> Void
     let onOpenFolder: () -> Void
     let onClose: () -> Void
 
@@ -86,6 +88,18 @@ struct TraceLibraryView: View {
             .buttonStyle(.plain)
             .help("在 Finder 中打开")
             .accessibilityLabel("在 Finder 中打开屏迹文件夹")
+            Button(action: onDeleteAll) {
+                Label("全部删除", systemImage: "trash")
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 9)
+                    .frame(height: 27)
+                    .background(.red.opacity(0.10), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.red)
+            .disabled(model.entries.allSatisfy { !model.canDelete($0) })
+            .help("把全部可删除项目移到废纸篓")
+            .accessibilityLabel("全部删除屏迹记录")
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
@@ -99,7 +113,7 @@ struct TraceLibraryView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 13)
-        .background(.ultraThinMaterial)
+        .traceGlassSurface(role: .chrome, cornerRadius: 0)
     }
 
     private var filterBar: some View {
@@ -125,7 +139,7 @@ struct TraceLibraryView: View {
         .font(.system(size: 10.5, weight: .medium))
         .padding(.horizontal, 18)
         .padding(.vertical, 9)
-        .background(.thinMaterial)
+        .traceGlassSurface(role: .chrome, cornerRadius: 0)
     }
 
     @ViewBuilder
@@ -153,6 +167,8 @@ struct TraceLibraryView: View {
                             onTranscribe: { onTranscribe(entry) },
                             onOrganize: { onOrganize(entry) },
                             onSaveInsights: { onSaveInsights(entry, $0) },
+                            onDelete: { onDelete(entry) },
+                            canDelete: model.canDelete(entry),
                             isTranscribing: model.isTranscribing(entry.id),
                             isOrganizing: model.isOrganizing(entry.id)
                         )
@@ -188,15 +204,12 @@ private struct TraceLibraryCard: View {
     let onTranscribe: () -> Void
     let onOrganize: () -> Void
     let onSaveInsights: (TraceInsightsCustomization?) -> Void
+    let onDelete: () -> Void
+    let canDelete: Bool
     let isTranscribing: Bool
     let isOrganizing: Bool
 
     @State private var showsInsights = false
-
-    private var thumbnail: NSImage? {
-        guard entry.manifest.kind == .screenshot else { return nil }
-        return NSImage(contentsOf: entry.displayAssetURL)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -296,6 +309,14 @@ private struct TraceLibraryCard: View {
                     .foregroundStyle(.secondary)
                     .help("在 Finder 中显示")
                     .accessibilityLabel("在 Finder 中显示：\(displayTitle)")
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.red.opacity(canDelete ? 0.90 : 0.35))
+                    .disabled(!canDelete)
+                    .help(canDelete ? "移到废纸篓" : "正在录制或处理，暂时不能删除")
+                    .accessibilityLabel("删除：\(displayTitle)")
                 }
             }
             .padding(11)
@@ -352,11 +373,8 @@ private struct TraceLibraryCard: View {
 
     @ViewBuilder
     private var preview: some View {
-        if let thumbnail {
-            Image(nsImage: thumbnail)
-                .resizable()
-                .scaledToFill()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if entry.manifest.kind == .screenshot {
+            TraceLibraryThumbnailView(url: entry.displayAssetURL)
         } else {
             ZStack {
                 LinearGradient(
@@ -383,7 +401,7 @@ private struct TraceLibraryCard: View {
     private var stateTitle: String {
         switch entry.manifest.state {
         case .capturing: "录制中"
-        case .processing: "处理中"
+        case .processing: "智能处理中"
         case .ready: "就绪"
         case .interrupted: "已中断"
         case .failed: "失败"
@@ -412,6 +430,61 @@ private struct TraceLibraryCard: View {
     private func durationText(_ duration: Double) -> String {
         let total = max(Int(duration.rounded()), 0)
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+@MainActor
+private final class TraceLibraryThumbnailCache {
+    static let shared = TraceLibraryThumbnailCache()
+
+    private let images = NSCache<NSURL, NSImage>()
+
+    func image(for url: URL) -> NSImage? {
+        images.object(forKey: url as NSURL)
+    }
+
+    func insert(_ image: NSImage, for url: URL) {
+        images.setObject(image, forKey: url as NSURL, cost: Int(image.size.width * image.size.height))
+    }
+}
+
+private struct TraceLibraryThumbnailView: View {
+    let url: URL
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [.black.opacity(0.72), .cyan.opacity(0.22)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white.opacity(0.75))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task(id: url) {
+            if let cached = TraceLibraryThumbnailCache.shared.image(for: url) {
+                image = cached
+                return
+            }
+            let data = await Task.detached(priority: .utility) {
+                try? Data(contentsOf: url, options: [.mappedIfSafe])
+            }.value
+            guard !Task.isCancelled,
+                  let data,
+                  let loaded = NSImage(data: data) else { return }
+            TraceLibraryThumbnailCache.shared.insert(loaded, for: url)
+            image = loaded
+        }
     }
 }
 
@@ -595,7 +668,7 @@ struct TraceInsightsPopover: View {
             .padding(16)
         }
         .frame(width: 380, height: 520)
-        .background(.ultraThinMaterial)
+        .traceGlassSurface(role: .window, cornerRadius: 20)
         .onChange(of: insights) { _, updated in
             guard !isEditing else { return }
             titleDraft = updated.resolvedTitle

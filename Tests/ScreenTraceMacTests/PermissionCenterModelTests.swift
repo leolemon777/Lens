@@ -87,7 +87,14 @@ final class PermissionCenterModelTests: XCTestCase {
     func testPermissionKindsRemainCompleteAndOrdered() {
         XCTAssertEqual(
             SystemPermissionKind.allCases.map(\.rawValue),
-            ["screenCapture", "microphone", "camera", "speechRecognition", "accessibility"]
+            [
+                "screenCapture",
+                "microphone",
+                "camera",
+                "speechRecognition",
+                "inputMonitoring",
+                "accessibility"
+            ]
         )
     }
 }

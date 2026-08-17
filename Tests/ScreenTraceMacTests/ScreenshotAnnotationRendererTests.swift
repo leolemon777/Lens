@@ -41,6 +41,36 @@ final class ScreenshotAnnotationRendererTests: XCTestCase {
         XCTAssertGreaterThan(countPixels(pixels, matching: { $0.r > 190 && $0.g > 140 && $0.b < 90 }), 100)
     }
 
+    func testGradientArrowRendersBothEndpointColors() throws {
+        let source = try solidImage(width: 500, height: 300, gray: 1)
+        let plan = ScreenshotEditPlan(
+            sourceDimensions: TraceDimensions(width: source.width, height: source.height),
+            annotations: [ScreenshotAnnotation(
+                kind: .arrow,
+                bounds: TraceRect(x: 0.1, y: 0.2, width: 0.8, height: 0.55),
+                start: TracePoint(x: 0.1, y: 0.2),
+                end: TracePoint(x: 0.9, y: 0.75),
+                style: ScreenshotAnnotationStyle(
+                    lineWidth: 0.026,
+                    color: .orange,
+                    gradientEndColor: .pink
+                )
+            )]
+        )
+
+        let pixels = try rgbaPixels(
+            ScreenshotAnnotationRenderer().render(source: source, plan: plan)
+        )
+        XCTAssertGreaterThan(
+            countPixels(pixels, matching: { $0.r > 220 && $0.g > 90 && $0.b < 90 }),
+            250
+        )
+        XCTAssertGreaterThan(
+            countPixels(pixels, matching: { $0.r > 220 && $0.b > 90 && $0.g < 150 }),
+            250
+        )
+    }
+
     func testBlurAndPixelateChangeTargetRegionsButPreserveOutsidePixels() throws {
         let source = try checkerboardImage(width: 400, height: 240, cell: 3)
         let plan = ScreenshotEditPlan(

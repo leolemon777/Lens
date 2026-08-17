@@ -21,23 +21,9 @@ final class AudioLevelMeter: @unchecked Sendable {
     }
 
     func update(sampleBuffer: CMSampleBuffer) {
-        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
+        guard let buffer = try? AudioSampleBufferPCMConverter.convert(sampleBuffer) else {
             return
         }
-        let format = AVAudioFormat(cmAudioFormatDescription: formatDescription)
-        let frameCount = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
-        guard frameCount > 0,
-              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
-            return
-        }
-        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
-            sampleBuffer,
-            at: 0,
-            frameCount: Int32(frameCount),
-            into: buffer.mutableAudioBufferList
-        )
-        guard status == noErr else { return }
-        buffer.frameLength = frameCount
         update(buffer: buffer)
     }
 

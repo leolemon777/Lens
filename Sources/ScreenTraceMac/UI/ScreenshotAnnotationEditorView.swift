@@ -6,6 +6,7 @@ struct ScreenshotAnnotationEditorView: View {
     @ObservedObject var model: ScreenshotAnnotationEditorModel
     let image: NSImage
     let onSave: (ScreenshotEditPlan) -> Void
+    let onCopy: (ScreenshotEditPlan) -> Void
     let onExport: (ScreenshotEditPlan, ScreenshotExportFormat) -> Void
     let onCancel: () -> Void
 
@@ -14,10 +15,13 @@ struct ScreenshotAnnotationEditorView: View {
             header
             Divider().opacity(0.35)
             toolbar
+                .disabled(model.isRendering)
             Divider().opacity(0.35)
             backgroundToolbar
+                .disabled(model.isRendering)
             Divider().opacity(0.35)
             canvas
+                .allowsHitTesting(!model.isRendering)
             footer
         }
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.96))
@@ -43,11 +47,36 @@ struct ScreenshotAnnotationEditorView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            if let feedback = model.clipboardFeedback {
+                Label(
+                    feedback == .copied ? "已复制到剪贴板" : "复制未完成",
+                    systemImage: feedback == .copied
+                        ? "checkmark.circle.fill"
+                        : "exclamationmark.triangle.fill"
+                )
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(feedback == .copied ? .green : .orange)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 6)
+                .background(.primary.opacity(0.055), in: Capsule())
+                .accessibilityLabel(
+                    feedback == .copied
+                        ? "已复制到剪贴板，可使用 Command-V 粘贴"
+                        : "复制未完成"
+                )
+            } else if model.isRendering {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("正在渲染标注结果")
+                Text("正在渲染…")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
             Button(action: model.undo) {
                 Image(systemName: "arrow.uturn.backward")
             }
             .buttonStyle(.borderless)
-            .disabled(!model.canUndo)
+            .disabled(!model.canUndo || model.isRendering)
             .keyboardShortcut("z", modifiers: .command)
             .help("撤销")
             .accessibilityLabel("撤销")
@@ -55,7 +84,7 @@ struct ScreenshotAnnotationEditorView: View {
                 Image(systemName: "arrow.uturn.forward")
             }
             .buttonStyle(.borderless)
-            .disabled(!model.canRedo)
+            .disabled(!model.canRedo || model.isRendering)
             .keyboardShortcut("z", modifiers: [.command, .shift])
             .help("重做")
             .accessibilityLabel("重做")
@@ -74,6 +103,16 @@ struct ScreenshotAnnotationEditorView: View {
                 Label("导出", systemImage: "square.and.arrow.up")
             }
             .menuStyle(.button)
+            .disabled(model.isRendering)
+            Button {
+                onCopy(model.plan)
+            } label: {
+                Label("复制", systemImage: "doc.on.doc")
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.isRendering)
+            .keyboardShortcut("c", modifiers: .command)
+            .help("复制当前标注结果（Command-C），随后可用 Command-V 粘贴")
             Button {
                 onSave(model.plan)
             } label: {
@@ -81,11 +120,12 @@ struct ScreenshotAnnotationEditorView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.cyan)
+            .disabled(model.isRendering)
             .keyboardShortcut(.return, modifiers: .command)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
+        .traceGlassSurface(role: .chrome, cornerRadius: 0)
     }
 
     private var toolbar: some View {
@@ -132,28 +172,58 @@ struct ScreenshotAnnotationEditorView: View {
 
             Divider().frame(height: 25)
 
-            ForEach(editorColors, id: \.name) { item in
-                Button {
-                    model.setColor(item.color)
-                } label: {
-                    Circle()
-                        .fill(item.color.swiftUIColor)
-                        .frame(width: 17, height: 17)
-                        .overlay(
-                            Circle().stroke(
-                                model.selectedColor == item.color ? Color.primary : Color.white.opacity(0.28),
-                                lineWidth: model.selectedColor == item.color ? 2 : 1
-                            )
-                        )
-                        .padding(3)
+            Menu {
+                Section("纯色") {
+                    ForEach(editorColors, id: \.name) { item in
+                        Button {
+                            model.setColor(item.color)
+                        } label: {
+                            Text(item.name)
+                        }
+                    }
                 }
-                .buttonStyle(.plain)
-                .help(item.name)
-                .accessibilityLabel("\(item.name)标注颜色")
-                .accessibilityHint("选择标注颜色")
-                .accessibilityAddTraits(
-                    model.selectedColor == item.color ? .isSelected : []
-                )
+                Section("渐变") {
+                    ForEach(editorGradients, id: \.name) { item in
+                        Button {
+                            model.setGradient(start: item.start, end: item.end)
+                        } label: {
+                            Text(item.name)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(selectedColorStyle)
+                        .frame(width: 25, height: 17)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .stroke(.white.opacity(0.45), lineWidth: 1)
+                        )
+                    Text("颜色")
+                        .font(.system(size: 10.5, weight: .semibold))
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityLabel("标注颜色")
+            .help("选择纯色或渐变标注颜色")
+
+            if activeEffectAnnotation != nil {
+                HStack(spacing: 5) {
+                    Text("强度")
+                        .font(.system(size: 10, weight: .medium))
+                    Slider(
+                        value: Binding(
+                            get: { model.effectIntensity },
+                            set: { model.setEffectIntensity($0) }
+                        ),
+                        in: 0.004...0.06
+                    )
+                    .frame(width: 78)
+                    .accessibilityLabel("\(activeEffectAnnotation?.editorTitle ?? "效果")强度")
+                    .accessibilityValue(String(format: "%.2f", model.effectIntensity))
+                }
             }
 
             if !model.isSelectionMode && model.selectedTool == .text {
@@ -185,7 +255,7 @@ struct ScreenshotAnnotationEditorView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background(.thinMaterial)
+        .traceGlassSurface(role: .chrome, cornerRadius: 0)
     }
 
     private var backgroundToolbar: some View {
@@ -311,7 +381,7 @@ struct ScreenshotAnnotationEditorView: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 17)
         .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
+        .traceGlassSurface(role: .chrome, cornerRadius: 0)
     }
 
     private func annotationGesture(in imageRect: CGRect) -> some Gesture {
@@ -388,29 +458,34 @@ struct ScreenshotAnnotationEditorView: View {
         isDraft: Bool = false
     ) {
         let color = annotation.style.color.swiftUIColor.opacity(isDraft ? 0.72 : 1)
+        let shading = annotationShading(annotation, in: imageRect, opacity: isDraft ? 0.72 : 1)
         let lineWidth = max(2, annotation.style.lineWidth * min(imageRect.width, imageRect.height))
         let rect = viewRect(annotation.bounds, in: imageRect)
         switch annotation.kind {
         case .rectangle:
-            context.fill(Path(roundedRect: rect, cornerRadius: 4), with: .color(color.opacity(0.10)))
-            context.stroke(Path(roundedRect: rect, cornerRadius: 4), with: .color(color), lineWidth: lineWidth)
+            context.fill(Path(roundedRect: rect, cornerRadius: 4), with: annotationShading(annotation, in: rect, opacity: 0.10))
+            context.stroke(Path(roundedRect: rect, cornerRadius: 4), with: shading, lineWidth: lineWidth)
         case .ellipse:
-            context.fill(Path(ellipseIn: rect), with: .color(color.opacity(0.10)))
-            context.stroke(Path(ellipseIn: rect), with: .color(color), lineWidth: lineWidth)
+            context.fill(Path(ellipseIn: rect), with: annotationShading(annotation, in: rect, opacity: 0.10))
+            context.stroke(Path(ellipseIn: rect), with: shading, lineWidth: lineWidth)
         case .arrow:
-            drawArrow(annotation, context: &context, imageRect: imageRect, color: color, lineWidth: lineWidth)
+            drawArrow(annotation, context: &context, imageRect: imageRect, shading: shading, lineWidth: lineWidth)
         case .freehand:
             drawFreehand(
                 annotation,
                 context: &context,
                 imageRect: imageRect,
-                color: color,
+                shading: shading,
                 lineWidth: lineWidth
             )
         case .highlight:
             context.fill(
                 Path(roundedRect: rect, cornerRadius: max(2, rect.height * 0.12)),
-                with: .color(color.opacity(annotation.style.fillColor?.alpha ?? 0.28))
+                with: annotationShading(
+                    annotation,
+                    in: rect,
+                    opacity: annotation.style.fillColor?.alpha ?? 0.28
+                )
             )
         case .step:
             let diameter = min(rect.width, rect.height)
@@ -420,7 +495,7 @@ struct ScreenshotAnnotationEditorView: View {
                 width: diameter,
                 height: diameter
             )
-            context.fill(Path(ellipseIn: circle), with: .color(color))
+            context.fill(Path(ellipseIn: circle), with: annotationShading(annotation, in: circle, opacity: 1))
             context.stroke(
                 Path(ellipseIn: circle.insetBy(dx: 1, dy: 1)),
                 with: .color(.white.opacity(0.85)),
@@ -456,7 +531,7 @@ struct ScreenshotAnnotationEditorView: View {
         _ annotation: ScreenshotAnnotation,
         context: inout GraphicsContext,
         imageRect: CGRect,
-        color: Color,
+        shading: GraphicsContext.Shading,
         lineWidth: CGFloat
     ) {
         guard let points = annotation.points, let first = points.first else { return }
@@ -467,7 +542,7 @@ struct ScreenshotAnnotationEditorView: View {
         }
         context.stroke(
             path,
-            with: .color(color),
+            with: shading,
             style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
         )
     }
@@ -476,7 +551,7 @@ struct ScreenshotAnnotationEditorView: View {
         _ annotation: ScreenshotAnnotation,
         context: inout GraphicsContext,
         imageRect: CGRect,
-        color: Color,
+        shading: GraphicsContext.Shading,
         lineWidth: CGFloat
     ) {
         let start = viewPoint(
@@ -493,7 +568,7 @@ struct ScreenshotAnnotationEditorView: View {
         var line = Path()
         line.move(to: start)
         line.addLine(to: end)
-        context.stroke(line, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+        context.stroke(line, with: shading, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
 
         let angle = atan2(end.y - start.y, end.x - start.x)
         let length = max(10, lineWidth * 4)
@@ -509,7 +584,7 @@ struct ScreenshotAnnotationEditorView: View {
             x: end.x - length * cos(angle + spread),
             y: end.y - length * sin(angle + spread)
         ))
-        context.stroke(head, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+        context.stroke(head, with: shading, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
     }
 
     private func viewRect(_ rect: TraceRect, in imageRect: CGRect) -> CGRect {
@@ -555,10 +630,61 @@ struct ScreenshotAnnotationEditorView: View {
             ("红色", .red),
             ("橙色", .orange),
             ("黄色", .yellow),
+            ("绿色", .green),
+            ("青色", .cyan),
             ("蓝色", .blue),
+            ("紫色", .purple),
+            ("粉色", .pink),
             ("白色", .white),
             ("黑色", .black)
         ]
+    }
+
+    private var editorGradients: [(name: String, start: TraceColor, end: TraceColor)] {
+        [
+            ("日落橙粉", .orange, .pink),
+            ("海蓝青紫", .cyan, .purple),
+            ("暖阳红橙", .red, .orange),
+            ("薄荷青蓝", .green, .blue)
+        ]
+    }
+
+    private var selectedColorStyle: AnyShapeStyle {
+        if let end = model.selectedGradientEndColor {
+            return AnyShapeStyle(LinearGradient(
+                colors: [model.selectedColor.swiftUIColor, end.swiftUIColor],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ))
+        }
+        return AnyShapeStyle(model.selectedColor.swiftUIColor)
+    }
+
+    private var activeEffectAnnotation: ScreenshotAnnotationKind? {
+        if model.isSelectionMode {
+            guard let kind = model.selectedAnnotation?.kind,
+                  kind == .blur || kind == .pixelate else { return nil }
+            return kind
+        }
+        return model.selectedTool == .blur || model.selectedTool == .pixelate
+            ? model.selectedTool
+            : nil
+    }
+
+    private func annotationShading(
+        _ annotation: ScreenshotAnnotation,
+        in rect: CGRect,
+        opacity: Double
+    ) -> GraphicsContext.Shading {
+        let start = annotation.style.color.swiftUIColor.opacity(opacity)
+        guard let endColor = annotation.style.gradientEndColor else {
+            return .color(start)
+        }
+        return .linearGradient(
+            Gradient(colors: [start, endColor.swiftUIColor.opacity(opacity)]),
+            startPoint: CGPoint(x: rect.minX, y: rect.minY),
+            endPoint: CGPoint(x: rect.maxX, y: rect.maxY)
+        )
     }
 
 }

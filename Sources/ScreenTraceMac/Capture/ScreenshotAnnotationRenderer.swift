@@ -21,7 +21,13 @@ enum ScreenshotAnnotationRendererError: LocalizedError {
     }
 }
 
-struct ScreenshotAnnotationRenderer {
+struct ScreenshotAnnotationRenderer: Sendable {
+    // CIContext is designed for reuse and is thread-safe. Keeping one context
+    // avoids rebuilding Core Image state for every Copy, Save, or Export.
+    private static let sharedContext = CIContext(
+        options: [.cacheIntermediates: false]
+    )
+
     func render(source: CGImage, plan: ScreenshotEditPlan) throws -> CGImage {
         guard source.width == plan.sourceDimensions.width,
               source.height == plan.sourceDimensions.height else {
@@ -214,8 +220,7 @@ struct ScreenshotAnnotationRenderer {
                 .cropped(to: extent)
         }
 
-        let context = CIContext(options: [.cacheIntermediates: false])
-        guard let output = context.createCGImage(current, from: extent) else {
+        guard let output = Self.sharedContext.createCGImage(current, from: extent) else {
             throw ScreenshotAnnotationRendererError.unableToRenderEffects
         }
         return output
@@ -265,22 +270,97 @@ struct ScreenshotAnnotationRenderer {
                 width: CGFloat(width),
                 height: CGFloat(height)
             )
+            let gradientEnd = annotation.style.gradientEndColor
             switch annotation.kind {
             case .rectangle:
-                if annotation.style.fillColor != nil { context.fill(rect) }
-                context.stroke(rect)
+                let path = CGPath(rect: rect, transform: nil)
+                if annotation.style.fillColor != nil {
+                    if let gradientEnd {
+                        drawGradient(
+                            path: path,
+                            start: annotation.style.color.withAlpha(annotation.style.fillColor?.alpha ?? 0.10),
+                            end: gradientEnd.withAlpha(annotation.style.fillColor?.alpha ?? 0.10),
+                            in: context,
+                            bounds: rect
+                        )
+                    } else {
+                        context.fill(rect)
+                    }
+                }
+                if let gradientEnd {
+                    drawGradient(
+                        path: path,
+                        start: annotation.style.color,
+                        end: gradientEnd,
+                        in: context,
+                        bounds: rect,
+                        strokeWidth: lineWidth
+                    )
+                } else {
+                    context.stroke(rect)
+                }
             case .ellipse:
-                if annotation.style.fillColor != nil { context.fillEllipse(in: rect) }
-                context.strokeEllipse(in: rect)
+                let path = CGPath(ellipseIn: rect, transform: nil)
+                if annotation.style.fillColor != nil {
+                    if let gradientEnd {
+                        drawGradient(
+                            path: path,
+                            start: annotation.style.color.withAlpha(annotation.style.fillColor?.alpha ?? 0.10),
+                            end: gradientEnd.withAlpha(annotation.style.fillColor?.alpha ?? 0.10),
+                            in: context,
+                            bounds: rect
+                        )
+                    } else {
+                        context.fillEllipse(in: rect)
+                    }
+                }
+                if let gradientEnd {
+                    drawGradient(
+                        path: path,
+                        start: annotation.style.color,
+                        end: gradientEnd,
+                        in: context,
+                        bounds: rect,
+                        strokeWidth: lineWidth
+                    )
+                } else {
+                    context.strokeEllipse(in: rect)
+                }
             case .arrow:
-                drawArrow(annotation, in: context, width: CGFloat(width), height: CGFloat(height), lineWidth: lineWidth)
+                if let gradientEnd {
+                    drawGradient(
+                        path: arrowPath(annotation, width: CGFloat(width), height: CGFloat(height), lineWidth: lineWidth),
+                        start: annotation.style.color,
+                        end: gradientEnd,
+                        in: context,
+                        bounds: rect,
+                        strokeWidth: lineWidth
+                    )
+                } else {
+                    drawArrow(annotation, in: context, width: CGFloat(width), height: CGFloat(height), lineWidth: lineWidth)
+                }
             case .freehand:
-                drawFreehand(
+                if let gradientEnd, let path = freehandPath(
                     annotation,
-                    in: context,
                     width: CGFloat(width),
                     height: CGFloat(height)
-                )
+                ) {
+                    drawGradient(
+                        path: path,
+                        start: annotation.style.color,
+                        end: gradientEnd,
+                        in: context,
+                        bounds: rect,
+                        strokeWidth: lineWidth
+                    )
+                } else {
+                    drawFreehand(
+                        annotation,
+                        in: context,
+                        width: CGFloat(width),
+                        height: CGFloat(height)
+                    )
+                }
             case .highlight:
                 context.setFillColor(cgColor(
                     annotation.style.fillColor
@@ -291,13 +371,25 @@ struct ScreenshotAnnotationRenderer {
                             alpha: 0.28
                         )
                 ))
-                context.addPath(CGPath(
+                let path = CGPath(
                     roundedRect: rect,
                     cornerWidth: max(2, rect.height * 0.12),
                     cornerHeight: max(2, rect.height * 0.12),
                     transform: nil
-                ))
-                context.fillPath()
+                )
+                if let gradientEnd {
+                    let alpha = annotation.style.fillColor?.alpha ?? 0.28
+                    drawGradient(
+                        path: path,
+                        start: annotation.style.color.withAlpha(alpha),
+                        end: gradientEnd.withAlpha(alpha),
+                        in: context,
+                        bounds: rect
+                    )
+                } else {
+                    context.addPath(path)
+                    context.fillPath()
+                }
             case .step:
                 drawStep(annotation, in: context, rect: rect)
             case .text:
@@ -320,12 +412,23 @@ struct ScreenshotAnnotationRenderer {
         width: CGFloat,
         height: CGFloat
     ) {
-        guard let points = annotation.points, let first = points.first else { return }
-        context.move(to: topLeftPoint(first, width: width, height: height))
-        for point in points.dropFirst() {
-            context.addLine(to: topLeftPoint(point, width: width, height: height))
-        }
+        guard let path = freehandPath(annotation, width: width, height: height) else { return }
+        context.addPath(path)
         context.strokePath()
+    }
+
+    private func freehandPath(
+        _ annotation: ScreenshotAnnotation,
+        width: CGFloat,
+        height: CGFloat
+    ) -> CGPath? {
+        guard let points = annotation.points, let first = points.first else { return nil }
+        let path = CGMutablePath()
+        path.move(to: topLeftPoint(first, width: width, height: height))
+        for point in points.dropFirst() {
+            path.addLine(to: topLeftPoint(point, width: width, height: height))
+        }
+        return path
     }
 
     private func drawStep(
@@ -376,6 +479,16 @@ struct ScreenshotAnnotationRenderer {
         height: CGFloat,
         lineWidth: CGFloat
     ) {
+        context.addPath(arrowPath(annotation, width: width, height: height, lineWidth: lineWidth))
+        context.strokePath()
+    }
+
+    private func arrowPath(
+        _ annotation: ScreenshotAnnotation,
+        width: CGFloat,
+        height: CGFloat,
+        lineWidth: CGFloat
+    ) -> CGPath {
         let fallbackStart = TracePoint(x: annotation.bounds.x, y: annotation.bounds.y)
         let fallbackEnd = TracePoint(
             x: annotation.bounds.x + annotation.bounds.width,
@@ -383,24 +496,55 @@ struct ScreenshotAnnotationRenderer {
         )
         let start = topLeftPoint(annotation.start ?? fallbackStart, width: width, height: height)
         let end = topLeftPoint(annotation.end ?? fallbackEnd, width: width, height: height)
-        context.move(to: start)
-        context.addLine(to: end)
-        context.strokePath()
+        let path = CGMutablePath()
+        path.move(to: start)
+        path.addLine(to: end)
 
         let angle = atan2(end.y - start.y, end.x - start.x)
         let headLength = max(12, lineWidth * 4.2)
         let spread = CGFloat.pi / 6.5
-        context.move(to: end)
-        context.addLine(to: CGPoint(
+        path.move(to: end)
+        path.addLine(to: CGPoint(
             x: end.x - headLength * cos(angle - spread),
             y: end.y - headLength * sin(angle - spread)
         ))
-        context.move(to: end)
-        context.addLine(to: CGPoint(
+        path.move(to: end)
+        path.addLine(to: CGPoint(
             x: end.x - headLength * cos(angle + spread),
             y: end.y - headLength * sin(angle + spread)
         ))
-        context.strokePath()
+        return path
+    }
+
+    private func drawGradient(
+        path: CGPath,
+        start: TraceColor,
+        end: TraceColor,
+        in context: CGContext,
+        bounds: CGRect,
+        strokeWidth: CGFloat? = nil
+    ) {
+        let colors = [cgColor(start), cgColor(end)] as CFArray
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let gradient = CGGradient(colorsSpace: colorSpace, colors: colors, locations: [0, 1]) else {
+            return
+        }
+        context.saveGState()
+        context.addPath(path)
+        if let strokeWidth {
+            context.setLineWidth(strokeWidth)
+            context.setLineCap(.round)
+            context.setLineJoin(.round)
+            context.replacePathWithStrokedPath()
+        }
+        context.clip()
+        context.drawLinearGradient(
+            gradient,
+            start: CGPoint(x: bounds.minX, y: bounds.maxY),
+            end: CGPoint(x: bounds.maxX, y: bounds.minY),
+            options: [.drawsBeforeStartLocation, .drawsAfterEndLocation]
+        )
+        context.restoreGState()
     }
 
     private func drawText(

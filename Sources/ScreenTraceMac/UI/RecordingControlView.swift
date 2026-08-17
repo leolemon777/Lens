@@ -19,8 +19,10 @@ final class RecordingControlModel: ObservableObject {
     @Published var capturesMicrophone = false
     @Published var capturesCamera = false
     @Published var isTransitioning = false
-    @Published var systemAudioLevel: Double = 0
-    @Published var microphoneAudioLevel: Double = 0
+    private(set) var systemAudioLevel: Double = 0
+    private(set) var microphoneAudioLevel: Double = 0
+    private(set) var eventCaptureHealth: EventCaptureHealth = .checking
+    private(set) var capturePerformance: CapturePerformanceSnapshot?
     @Published private(set) var availableStorageBytes: Int64?
     @Published private(set) var storageLevel: RecordingStorageLevel = .unknown
 
@@ -44,13 +46,56 @@ final class RecordingControlModel: ObservableObject {
         isTransitioning = false
         systemAudioLevel = 0
         microphoneAudioLevel = 0
+        eventCaptureHealth = .checking
+        capturePerformance = nil
         availableStorageBytes = nil
         storageLevel = .unknown
     }
 
     func updateAudioLevels(system: Double, microphone: Double) {
-        systemAudioLevel = min(max(system, 0), 1)
-        microphoneAudioLevel = min(max(microphone, 0), 1)
+        updateLiveStatus(
+            system: system,
+            microphone: microphone,
+            eventHealth: eventCaptureHealth,
+            performance: capturePerformance
+        )
+    }
+
+    func updateEventCaptureHealth(_ health: EventCaptureHealth) {
+        updateLiveStatus(
+            system: systemAudioLevel,
+            microphone: microphoneAudioLevel,
+            eventHealth: health,
+            performance: capturePerformance
+        )
+    }
+
+    func updateCapturePerformance(_ snapshot: CapturePerformanceSnapshot?) {
+        updateLiveStatus(
+            system: systemAudioLevel,
+            microphone: microphoneAudioLevel,
+            eventHealth: eventCaptureHealth,
+            performance: snapshot
+        )
+    }
+
+    func updateLiveStatus(
+        system: Double,
+        microphone: Double,
+        eventHealth: EventCaptureHealth,
+        performance: CapturePerformanceSnapshot?
+    ) {
+        let system = min(max(system.isFinite ? system : 0, 0), 1)
+        let microphone = min(max(microphone.isFinite ? microphone : 0, 0), 1)
+        guard systemAudioLevel != system
+                || microphoneAudioLevel != microphone
+                || eventCaptureHealth != eventHealth
+                || capturePerformance != performance else { return }
+        objectWillChange.send()
+        systemAudioLevel = system
+        microphoneAudioLevel = microphone
+        eventCaptureHealth = eventHealth
+        capturePerformance = performance
     }
 
     @discardableResult
@@ -108,6 +153,52 @@ final class RecordingControlModel: ObservableObject {
         "\(storageLabel)，\(storageHelp)"
     }
 
+    var eventCaptureHelp: String {
+        switch eventCaptureHealth {
+        case .checking:
+            "正在检查智能光标与点击事件"
+        case .waitingForActivity:
+            "等待光标活动，原始录屏正常进行"
+        case let .healthy(pointerCount, clickCount):
+            "智能跟踪正常：\(pointerCount) 个光标点，\(clickCount) 个点击事件"
+        case let .degraded(failure):
+            failure.userFacingDescription
+        }
+    }
+
+    var frameRateLabel: String {
+        guard let capturePerformance else { return "FPS --" }
+        if let measured = capturePerformance.measuredWrittenFramesPerSecond
+            ?? capturePerformance.measuredReceivedFramesPerSecond {
+            return String(format: "%.0f FPS", measured)
+        }
+        return "\(capturePerformance.requestedFramesPerSecond) FPS"
+    }
+
+    var frameRateHelp: String {
+        guard let capturePerformance else { return "正在等待屏幕帧" }
+        guard let received = capturePerformance.measuredReceivedFramesPerSecond else {
+            return "目标 \(capturePerformance.requestedFramesPerSecond) FPS，正在取样"
+        }
+        if let written = capturePerformance.measuredWrittenFramesPerSecond {
+            return String(
+                format: "目标 %d FPS，写入 %.1f FPS，采集 %.1f FPS，共 %d 帧，丢帧 %d",
+                capturePerformance.requestedFramesPerSecond,
+                written,
+                received,
+                capturePerformance.writtenFrameCount,
+                capturePerformance.droppedFrameCount
+            )
+        }
+        return String(
+            format: "目标 %d FPS，采集 %.1f FPS，已写入 %d 帧，丢帧 %d",
+            capturePerformance.requestedFramesPerSecond,
+            received,
+            capturePerformance.writtenFrameCount,
+            capturePerformance.droppedFrameCount
+        )
+    }
+
     func elapsedAccessibilityValue(at date: Date) -> String {
         Self.formatDuration(elapsed(at: date))
     }
@@ -152,12 +243,14 @@ final class RecordingControlModel: ObservableObject {
 
 struct RecordingControlView: View {
     @ObservedObject var model: RecordingControlModel
+    let onHide: () -> Void
     let onPauseToggle: () -> Void
     let onDiscardAndRestart: () -> Void
     let onStop: () -> Void
+    @State private var showsDetails = false
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             Circle()
                 .fill(model.isPaused ? .orange : .red)
                 .frame(width: 10, height: 10)
@@ -176,56 +269,43 @@ struct RecordingControlView: View {
 
             Divider().frame(height: 20)
 
-            HStack(spacing: 4) {
-                Image(systemName: "speaker.wave.2.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                AudioLevelBars(level: model.capturesSystemAudio ? model.systemAudioLevel : 0)
-            }
-            .foregroundStyle(model.capturesSystemAudio ? .green : .secondary)
-            .opacity(model.capturesSystemAudio ? 1 : 0.35)
-            .frame(width: 44)
-            .help(model.capturesSystemAudio ? "正在录制系统声音" : "系统声音已关闭")
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("系统声音")
-            .accessibilityValue(model.systemAudioAccessibilityValue)
+            Text(model.sourceTitle)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(minWidth: 58, maxWidth: 92, alignment: .leading)
+                .accessibilityLabel("录制来源")
+                .accessibilityValue(model.sourceTitle)
 
-            if model.capturesMicrophone {
-                HStack(spacing: 4) {
-                    Image(systemName: "mic.fill")
-                        .font(.system(size: 12, weight: .semibold))
-                    AudioLevelBars(level: model.microphoneAudioLevel)
-                }
-                    .foregroundStyle(.green)
-                    .frame(width: 38)
-                    .help("麦克风正在单独分轨录制")
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("麦克风")
-                    .accessibilityValue(model.microphoneAccessibilityValue)
-            }
+            compactStatusIndicators
 
-            if model.capturesCamera {
-                Image(systemName: "video.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.green)
-                    .frame(width: 24)
-                    .help("摄像头正在单独分轨录制")
-                    .accessibilityLabel("摄像头")
-                    .accessibilityValue("单独分轨录制中")
+            Button {
+                showsDetails.toggle()
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 12, weight: .bold))
+                    .frame(width: 28, height: 28)
+                    .background(.primary.opacity(showsDetails ? 0.12 : 0.07), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .help("查看声音、帧率、磁盘和重录选项")
+            .accessibilityLabel("录制详情")
+            .accessibilityValue(showsDetails ? "已展开" : "已收起")
+            .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
+                recordingDetails
             }
 
-            HStack(spacing: 4) {
-                Image(systemName: storageSymbol)
-                    .font(.system(size: 10, weight: .semibold))
-                Text(model.storageLabel)
-                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
-                    .lineLimit(1)
+            Button(action: onHide) {
+                Image(systemName: "eye.slash.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: 28, height: 28)
+                    .background(.primary.opacity(0.07), in: Circle())
             }
-            .foregroundStyle(storageColor)
-            .frame(minWidth: 68)
-            .help(model.storageHelp)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("项目磁盘可用空间")
-            .accessibilityValue(model.storageAccessibilityValue)
+            .buttonStyle(.plain)
+            .help("隐藏浮标；录制仍会继续")
+            .accessibilityLabel("隐藏录屏浮标")
+            .accessibilityHint("录制继续；按 Fn 加空格或从菜单栏恢复")
 
             Button {
                 onPauseToggle()
@@ -241,20 +321,6 @@ struct RecordingControlView: View {
             .accessibilityLabel(model.pauseActionTitle)
             .accessibilityHint(model.isPaused ? "继续并写入新分片" : "暂停并安全完成当前分片")
 
-            Button(action: onDiscardAndRestart) {
-                Image(systemName: "arrow.counterclockwise")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.red)
-                    .frame(width: 28, height: 28)
-                    .background(.primary.opacity(0.07), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .disabled(model.isTransitioning)
-            .opacity(model.isTransitioning ? 0.38 : 1)
-            .help("丢弃并重新录制")
-            .accessibilityLabel("丢弃并重新录制")
-            .accessibilityHint("停止当前录制，移到废纸篓后按相同来源重新开始")
-
             Button(action: onStop) {
                 Image(systemName: "stop.fill")
                     .font(.system(size: 10, weight: .bold))
@@ -268,17 +334,156 @@ struct RecordingControlView: View {
             .help("停止")
             .accessibilityLabel("停止录制")
             .accessibilityHint("安全完成当前分片并生成预览")
-
-            Text(model.sourceTitle)
-                .font(.system(size: 9.5, weight: .medium))
-                .foregroundStyle(.tertiary)
-                .accessibilityLabel("录制来源")
-                .accessibilityValue(model.sourceTitle)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 15)
         .padding(.vertical, 10)
-        .traceGlassPanel(cornerRadius: 24)
-        .padding(28)
+        .traceGlassSurface(role: .panel, cornerRadius: TraceGlassMetrics.panelCornerRadius)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 30)
+    }
+
+    private var compactStatusIndicators: some View {
+        HStack(spacing: 2) {
+            Image(systemName: model.capturesSystemAudio
+                ? "speaker.wave.2.fill"
+                : "speaker.slash.fill")
+                .foregroundStyle(model.capturesSystemAudio ? .green : .secondary)
+                .opacity(model.capturesSystemAudio ? 1 : 0.45)
+                .help(model.capturesSystemAudio ? "正在录制系统声音" : "系统声音已关闭")
+                .accessibilityLabel("系统声音")
+                .accessibilityValue(model.systemAudioAccessibilityValue)
+
+            if model.capturesMicrophone {
+                Image(systemName: "mic.fill")
+                    .foregroundStyle(.green)
+                    .help("麦克风正在单独分轨录制")
+                    .accessibilityLabel("麦克风")
+                    .accessibilityValue(model.microphoneAccessibilityValue)
+            }
+
+            if model.capturesCamera {
+                Image(systemName: "video.fill")
+                    .foregroundStyle(.green)
+                    .help("摄像头正在单独分轨录制")
+                    .accessibilityLabel("摄像头")
+                    .accessibilityValue("单独分轨录制中")
+            }
+
+            Image(systemName: eventCaptureSymbol)
+                .foregroundStyle(eventCaptureColor)
+                .help(model.eventCaptureHelp)
+                .accessibilityLabel("光标与点击跟踪")
+                .accessibilityValue(model.eventCaptureHelp)
+        }
+        .font(.system(size: 11.5, weight: .semibold))
+        .frame(height: 24)
+    }
+
+    private var recordingDetails: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("录制详情")
+                .font(.headline)
+
+            Divider()
+
+            HStack(spacing: 10) {
+                Label("录制来源", systemImage: "rectangle.dashed.badge.record")
+                Spacer(minLength: 18)
+                Text(model.sourceTitle)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            HStack(spacing: 10) {
+                Label("系统声音", systemImage: "speaker.wave.2.fill")
+                Spacer(minLength: 18)
+                AudioLevelBars(level: model.capturesSystemAudio ? model.systemAudioLevel : 0)
+                Text(model.capturesSystemAudio ? "录制中" : "已关闭")
+                    .foregroundStyle(model.capturesSystemAudio ? .green : .secondary)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("系统声音")
+            .accessibilityValue(model.systemAudioAccessibilityValue)
+
+            if model.capturesMicrophone {
+                HStack(spacing: 10) {
+                    Label("麦克风", systemImage: "mic.fill")
+                    Spacer(minLength: 18)
+                    AudioLevelBars(level: model.microphoneAudioLevel)
+                    Text("分轨录制")
+                        .foregroundStyle(.green)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("麦克风")
+                .accessibilityValue(model.microphoneAccessibilityValue)
+            }
+
+            if model.capturesCamera {
+                HStack(spacing: 10) {
+                    Label("摄像头", systemImage: "video.fill")
+                    Spacer(minLength: 18)
+                    Text("分轨录制")
+                        .foregroundStyle(.green)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 10) {
+                    Label("智能跟踪", systemImage: eventCaptureSymbol)
+                    Spacer(minLength: 18)
+                    Circle()
+                        .fill(eventCaptureColor)
+                        .frame(width: 7, height: 7)
+                }
+                Text(model.eventCaptureHelp)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("光标与点击跟踪")
+            .accessibilityValue(model.eventCaptureHelp)
+
+            HStack(spacing: 10) {
+                Label("录制帧率", systemImage: "speedometer")
+                Spacer(minLength: 18)
+                Text(model.frameRateLabel)
+                    .font(.system(.body, design: .monospaced, weight: .semibold))
+                    .foregroundStyle(frameRateColor)
+            }
+            .help(model.frameRateHelp)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("实时录制帧率")
+            .accessibilityValue(model.frameRateHelp)
+
+            HStack(spacing: 10) {
+                Label("可用空间", systemImage: storageSymbol)
+                Spacer(minLength: 18)
+                Text(model.storageLabel.replacingOccurrences(of: "磁盘 ", with: ""))
+                    .foregroundStyle(storageColor)
+            }
+            .help(model.storageHelp)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("项目磁盘可用空间")
+            .accessibilityValue(model.storageAccessibilityValue)
+
+            Divider()
+
+            Button(role: .destructive) {
+                showsDetails = false
+                onDiscardAndRestart()
+            } label: {
+                Label("丢弃并重新录制", systemImage: "arrow.counterclockwise")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .disabled(model.isTransitioning)
+            .opacity(model.isTransitioning ? 0.38 : 1)
+            .accessibilityHint("停止当前录制，移到废纸篓后按相同来源重新开始")
+        }
+        .font(.system(size: 12, weight: .medium))
+        .padding(16)
+        .frame(width: 310)
     }
 
     private var storageColor: Color {
@@ -296,6 +501,32 @@ struct RecordingControlView: View {
         case .warning: "internaldrive.fill.trianglebadge.exclamationmark"
         case .critical: "externaldrive.fill.badge.exclamationmark"
         }
+    }
+
+    private var eventCaptureColor: Color {
+        switch model.eventCaptureHealth {
+        case .checking, .waitingForActivity: .secondary
+        case .healthy: .green
+        case .degraded: .orange
+        }
+    }
+
+    private var eventCaptureSymbol: String {
+        switch model.eventCaptureHealth {
+        case .checking: "ellipsis.circle.fill"
+        case .waitingForActivity: "cursorarrow.motionlines"
+        case .healthy: "cursorarrow.rays"
+        case .degraded: "cursorarrow.slash"
+        }
+    }
+
+    private var frameRateColor: Color {
+        guard let performance = model.capturePerformance,
+              performance.writtenFrameCount >= 15,
+              let meetingTarget = performance.isMeetingRequestedFrameRate else {
+            return .secondary
+        }
+        return meetingTarget ? .green : .orange
     }
 }
 

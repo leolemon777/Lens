@@ -9,6 +9,7 @@ enum SystemPermissionKind: String, CaseIterable, Identifiable {
     case microphone
     case camera
     case speechRecognition
+    case inputMonitoring
     case accessibility
 
     var id: String { rawValue }
@@ -19,6 +20,7 @@ enum SystemPermissionKind: String, CaseIterable, Identifiable {
         case .microphone: "麦克风"
         case .camera: "摄像头"
         case .speechRecognition: "本地语音识别"
+        case .inputMonitoring: "输入监控"
         case .accessibility: "辅助功能"
         }
     }
@@ -29,7 +31,8 @@ enum SystemPermissionKind: String, CaseIterable, Identifiable {
         case .microphone: "录制讲解声音，可随时关闭"
         case .camera: "可选的人像摄像头轨道"
         case .speechRecognition: "在本机生成录屏转写与字幕"
-        case .accessibility: "全局快捷键与后续键盘事件轨"
+        case .inputMonitoring: "光标跟踪、点击效果和快捷键事件轨"
+        case .accessibility: "全局快捷键与系统级辅助操作"
         }
     }
 
@@ -39,6 +42,7 @@ enum SystemPermissionKind: String, CaseIterable, Identifiable {
         case .microphone: "mic.fill"
         case .camera: "video.fill"
         case .speechRecognition: "captions.bubble.fill"
+        case .inputMonitoring: "cursorarrow.motionlines"
         case .accessibility: "accessibility"
         }
     }
@@ -141,6 +145,7 @@ final class PermissionCenterModel: ObservableObject {
             .speechRecognition: PermissionAccessState(
                 speechAuthorizationStatus: SFSpeechRecognizer.authorizationStatus()
             ),
+            .inputMonitoring: CGPreflightListenEventAccess() ? .granted : .denied,
             .accessibility: AXIsProcessTrusted() ? .granted : .denied
         ]
     }
@@ -184,6 +189,14 @@ final class PermissionCenterModel: ObservableObject {
                 )
             } else if state != .granted {
                 openPrivacyPane("Privacy_SpeechRecognition")
+            }
+        case .inputMonitoring:
+            if state == .granted { return }
+            if CGRequestListenEventAccess() {
+                refresh()
+            } else {
+                openPrivacyPane("Privacy_ListenEvent")
+                scheduleRefresh()
             }
         case .accessibility:
             if state == .granted { return }

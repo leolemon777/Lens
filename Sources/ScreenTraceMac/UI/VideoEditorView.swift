@@ -1,5 +1,4 @@
 import AVKit
-import Combine
 import ScreenTraceCore
 import SwiftUI
 
@@ -13,38 +12,46 @@ struct VideoEditorView: View {
     @ObservedObject var playback: VideoEditorPlaybackController
     let title: String
     let initialInspectorSection: VideoEditorInspectorSection?
+    let onRegenerateCamera: () -> Void
+    let onRefreshPreview: () -> Void
     let onSave: () -> Void
+    let onExport: () -> Void
     let onClose: () -> Void
 
     @State private var presenterDragStart: PresenterCameraFrameState?
     @State private var presenterResizeStart: PresenterCameraFrameState?
     @State private var inspectorScrollPosition: VideoEditorInspectorSection?
     @State private var isCaptionCueEditorExpanded: Bool
-
-    private let playbackTimer = Timer.publish(
-        every: 0.1,
-        on: .main,
-        in: .common
-    ).autoconnect()
+    @State private var isAdvancedCameraExpanded = false
+    @State private var isCursorDetailExpanded = false
+    @State private var isClickDetailExpanded = false
+    @State private var showsAdvancedEditingTools: Bool
 
     init(
         model: VideoEditorModel,
         playback: VideoEditorPlaybackController,
         title: String,
         initialInspectorSection: VideoEditorInspectorSection? = nil,
+        onRegenerateCamera: @escaping () -> Void = {},
+        onRefreshPreview: @escaping () -> Void = {},
         onSave: @escaping () -> Void,
+        onExport: @escaping () -> Void,
         onClose: @escaping () -> Void
     ) {
         self.model = model
         self.playback = playback
         self.title = title
         self.initialInspectorSection = initialInspectorSection
+        self.onRegenerateCamera = onRegenerateCamera
+        self.onRefreshPreview = onRefreshPreview
         self.onSave = onSave
+        self.onExport = onExport
         self.onClose = onClose
         _inspectorScrollPosition = State(initialValue: initialInspectorSection)
         _isCaptionCueEditorExpanded = State(
             initialValue: initialInspectorSection == .captions
         )
+        _showsAdvancedEditingTools = State(initialValue: initialInspectorSection != nil)
     }
 
     var body: some View {
@@ -68,7 +75,21 @@ struct VideoEditorView: View {
                 endPoint: .bottom
             )
         )
-        .onReceive(playbackTimer) { _ in playback.refreshTime() }
+        .task(id: playback.isPlaying) {
+            guard playback.isPlaying else { return }
+            while !Task.isCancelled {
+                playback.refreshTime()
+                do {
+                    try await Task.sleep(for: .milliseconds(100))
+                } catch {
+                    return
+                }
+            }
+        }
+        .onChange(of: model.plan) { previous, updated in
+            guard previous != updated else { return }
+            playback.invalidateRenderedPreview()
+        }
     }
 
     private var header: some View {
@@ -127,6 +148,12 @@ struct VideoEditorView: View {
                 .tint(.cyan)
                 .disabled(model.isProcessing)
                 .keyboardShortcut("s", modifiers: .command)
+            Button(action: onExport) {
+                Label("导出 MP4", systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.isProcessing)
+            .help("按当前质量预设生成并导出 MP4")
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .font(.system(size: 10, weight: .bold))
@@ -140,7 +167,7 @@ struct VideoEditorView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
+        .traceGlassSurface(role: .chrome, cornerRadius: 0)
     }
 
     private var workspace: some View {
@@ -172,7 +199,16 @@ struct VideoEditorView: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.68))
             } else {
-                VideoEditorPlayerView(player: playback.player)
+                VideoEditorCanvasPreview(
+                    player: playback.player,
+                    canvas: playback.isShowingRenderedPreview ? nil : model.plan.canvas,
+                    camera: playback.isShowingRenderedPreview ? nil : model.plan.camera,
+                    cursor: playback.isShowingRenderedPreview ? nil : model.plan.cursor,
+                    interaction: playback.isShowingRenderedPreview
+                        ? nil
+                        : model.plan.interaction,
+                    timeline: model.plan.timeline
+                )
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .padding(8)
             }
@@ -184,20 +220,62 @@ struct VideoEditorView: View {
                         width: max(proxy.size.width - 16, 1),
                         height: max(proxy.size.height - 16, 1)
                     )
-                    VideoAnnotationOverlayView(
-                        model: model,
-                        playback: playback,
-                        contentRect: contentRect
-                    )
+                    if !model.videoAnnotations.isEmpty || model.isVideoAnnotationEditing {
+                        VideoAnnotationOverlayView(
+                            model: model,
+                            playback: playback,
+                            contentRect: contentRect
+                        )
+                        .allowsHitTesting(!model.isManualCameraFocusEditing)
+                    }
                 }
                 if model.hasCameraTrack,
                    model.presenterEnabled,
                    proxy.size.width > 20,
                    proxy.size.height > 20 {
-                    presenterOverlay(in: proxy.size)
-                        .allowsHitTesting(!model.isVideoAnnotationEditing)
+                    VideoEditorPlaybackClockView(clock: playback.clock) { currentTime in
+                        presenterOverlay(
+                            in: proxy.size,
+                            currentTimeSeconds: currentTime
+                        )
+                    }
+                    .allowsHitTesting(
+                        !model.isVideoAnnotationEditing
+                            && !model.isManualCameraFocusEditing
+                    )
+                }
+                if model.isManualCameraFocusEditing,
+                   proxy.size.width > 20,
+                   proxy.size.height > 20 {
+                    let contentRect = CGRect(
+                        x: 8,
+                        y: 8,
+                        width: max(proxy.size.width - 16, 1),
+                        height: max(proxy.size.height - 16, 1)
+                    )
+                    manualCameraFocusOverlay(in: contentRect)
                 }
             }
+            VStack {
+                HStack {
+                    Label(
+                        playback.isShowingRenderedPreview ? "已生成效果" : "实时编辑",
+                        systemImage: playback.isShowingRenderedPreview
+                            ? "sparkles.tv"
+                            : "bolt.fill"
+                    )
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(TraceGlassPalette.midnight.opacity(0.68), in: Capsule())
+                    .overlay(Capsule().stroke(.white.opacity(0.18), lineWidth: 0.6))
+                    Spacer()
+                }
+                Spacer()
+            }
+            .padding(14)
+            .allowsHitTesting(false)
         }
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -208,7 +286,60 @@ struct VideoEditorView: View {
         .frame(maxHeight: 460)
     }
 
-    private func presenterOverlay(in canvasSize: CGSize) -> some View {
+    private func manualCameraFocusOverlay(in contentRect: CGRect) -> some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.cyan.opacity(0.001))
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onEnded { value in
+                            playback.pause()
+                            let added = model.addManualCameraFocus(
+                                center: TracePoint(
+                                    x: min(max(
+                                        value.location.x / max(contentRect.width, 1),
+                                        0
+                                    ), 1),
+                                    y: min(max(
+                                        value.location.y / max(contentRect.height, 1),
+                                        0
+                                    ), 1)
+                                ),
+                                atOutputTime: playback.currentTimeSeconds
+                            )
+                            if added { onRefreshPreview() }
+                        }
+                )
+
+            VStack {
+                Label("点击画面设置缩放焦点", systemImage: "scope")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(TraceGlassPalette.midnight.opacity(0.78), in: Capsule())
+                    .overlay(Capsule().stroke(.cyan.opacity(0.72), lineWidth: 1))
+                    .padding(12)
+                Spacer()
+            }
+
+            Image(systemName: "scope")
+                .font(.system(size: 36, weight: .light))
+                .foregroundStyle(.cyan.opacity(0.72))
+                .allowsHitTesting(false)
+        }
+        .frame(width: contentRect.width, height: contentRect.height)
+        .position(x: contentRect.midX, y: contentRect.midY)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("手动缩放焦点画布")
+        .accessibilityHint("点击画面位置，在当前播放头添加缩放")
+    }
+
+    private func presenterOverlay(
+        in canvasSize: CGSize,
+        currentTimeSeconds: Double
+    ) -> some View {
         let inset: CGFloat = 8
         let contentSize = CGSize(
             width: max(canvasSize.width - inset * 2, 1),
@@ -216,7 +347,7 @@ struct VideoEditorView: View {
         )
         let aspectRatio = Double(contentSize.width / max(contentSize.height, 1))
         let state = model.presenterState(
-            atOutputTime: playback.currentTimeSeconds,
+            atOutputTime: currentTimeSeconds,
             canvasAspectRatio: aspectRatio
         )
         let layout = model.plan.presenterCamera ?? .init()
@@ -245,7 +376,7 @@ struct VideoEditorView: View {
                 ))
 
             Circle()
-                .fill(.ultraThinMaterial)
+                .fill(TraceGlassPalette.midnight.opacity(0.72))
                 .frame(width: 23, height: 23)
                 .overlay(Circle().stroke(.white.opacity(0.62), lineWidth: 1))
                 .overlay(
@@ -263,9 +394,9 @@ struct VideoEditorView: View {
 
             HStack(spacing: 4) {
                 Image(systemName: model.hasPresenterKeyframe(
-                    nearOutputTime: playback.currentTimeSeconds
+                    nearOutputTime: currentTimeSeconds
                 ) ? "diamond.fill" : "hand.draw")
-                Text(model.hasPresenterKeyframe(nearOutputTime: playback.currentTimeSeconds)
+                Text(model.hasPresenterKeyframe(nearOutputTime: currentTimeSeconds)
                     ? "关键帧"
                     : "拖动定位")
             }
@@ -273,7 +404,8 @@ struct VideoEditorView: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
-            .background(.ultraThinMaterial, in: Capsule())
+            .background(TraceGlassPalette.midnight.opacity(0.72), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(0.22), lineWidth: 1))
             .offset(y: -height / 2 - 15)
             .allowsHitTesting(false)
         }
@@ -294,7 +426,7 @@ struct VideoEditorView: View {
                 .scaleEffect(x: layout.isMirrored ? -1 : 1, y: 1)
         } else {
             ZStack {
-                Rectangle().fill(.ultraThinMaterial)
+                Rectangle().fill(TraceGlassPalette.midnight.opacity(0.78))
                 LinearGradient(
                     colors: [.cyan.opacity(0.28), .indigo.opacity(0.24)],
                     startPoint: .topLeading,
@@ -374,19 +506,7 @@ struct VideoEditorView: View {
             .buttonStyle(.plain)
             .disabled(playback.isLoading || playback.durationSeconds <= 0)
             .accessibilityLabel(playback.isPlaying ? "暂停预览" : "播放预览")
-            Text(timeText(playback.currentTimeSeconds))
-                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .frame(width: 52, alignment: .trailing)
-            Slider(
-                value: Binding(
-                    get: { playback.currentTimeSeconds },
-                    set: { playback.seek(to: $0) }
-                ),
-                in: 0...max(playback.durationSeconds, 0.01)
-            )
-            .accessibilityLabel("预览播放位置")
-            .accessibilityValue("\(timeText(playback.currentTimeSeconds)) / \(timeText(playback.durationSeconds))")
+            VideoEditorTransportClockControls(playback: playback)
             Text(timeText(playback.durationSeconds))
                 .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -397,6 +517,23 @@ struct VideoEditorView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
                 .background(.cyan.opacity(0.11), in: Capsule())
+            Button(action: playback.togglePreviewMode) {
+                Label(
+                    playback.isShowingRenderedPreview ? "已生成效果" : "实时编辑",
+                    systemImage: playback.isShowingRenderedPreview ? "sparkles.tv" : "film"
+                )
+                .font(.system(size: 9.5, weight: .bold))
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(playback.isShowingRenderedPreview ? .orange : .secondary)
+            .disabled(
+                !playback.canShowRenderedPreview
+                    || playback.isLoading
+                    || model.isManualCameraFocusEditing
+            )
+            .help(playback.isShowingRenderedPreview
+                ? "当前播放上次保存后生成的完整成片；修改参数后会自动切换实时编辑"
+                : "当前使用原始素材实时显示运镜、光标和点击；后台成片完成后不会在播放途中强制换源")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
@@ -534,6 +671,30 @@ struct VideoEditorView: View {
                         .accessibilityValue("\(captionTimeText(band.range.startSeconds)) 开始")
                     }
                     ForEach(
+                        Array(model.manualCameraFocusOutputTimes.enumerated()),
+                        id: \.offset
+                    ) { _, focusTime in
+                        let progress = min(max(focusTime / total, 0), 1)
+                        let markerCenter = min(max(
+                            availableWidth * progress,
+                            7
+                        ), max(availableWidth - 7, 7))
+                        Button {
+                            playback.seek(to: focusTime)
+                        } label: {
+                            Image(systemName: "scope")
+                                .font(.system(size: 8.5, weight: .bold))
+                                .foregroundStyle(.cyan)
+                                .shadow(color: .black.opacity(0.45), radius: 2)
+                                .frame(width: 14, height: 58)
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: markerCenter - 7)
+                        .help("手动缩放 · \(captionTimeText(focusTime))")
+                        .accessibilityLabel("手动缩放关键帧")
+                        .accessibilityValue(captionTimeText(focusTime))
+                    }
+                    ForEach(
                         Array(model.presenterKeyframeOutputTimes.enumerated()),
                         id: \.offset
                     ) { _, keyframeTime in
@@ -557,15 +718,12 @@ struct VideoEditorView: View {
                         .accessibilityLabel("讲解人像关键帧")
                         .accessibilityValue(captionTimeText(keyframeTime))
                     }
-                    Rectangle()
-                        .fill(.white)
-                        .frame(width: 2)
-                        .shadow(color: .black.opacity(0.45), radius: 2)
-                        .offset(x: availableWidth * min(
-                            max(playback.currentTimeSeconds / total, 0),
-                            1
-                        ))
-                        .allowsHitTesting(false)
+                    VideoEditorTimelinePlayhead(
+                        player: playback.player,
+                        durationSeconds: total
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
                 }
             }
             .frame(height: 58)
@@ -626,6 +784,12 @@ struct VideoEditorView: View {
                                 in: 0.15...1.2
                             )
                             .frame(width: 112)
+                            .accessibilityLabel("转场时长")
+                            .accessibilityValue(String(
+                                format: "%.2f 秒%@",
+                                resolvedDuration,
+                                wasClamped ? "，已限幅" : ""
+                            ))
                             Text(String(
                                 format: wasClamped ? "%.2f s · 已限幅" : "%.2f s",
                                 resolvedDuration
@@ -651,6 +815,18 @@ struct VideoEditorView: View {
         ScrollView {
             VStack(spacing: 12) {
                 inspectorSection("画面", symbol: "rectangle.inset.filled") {
+                    Label(
+                        playback.isShowingRenderedPreview
+                            ? "当前是上次生成的成片；调整后自动切到实时预览"
+                            : "画布正在实时预览",
+                        systemImage: playback.isShowingRenderedPreview
+                            ? "clock.arrow.circlepath"
+                            : "bolt.fill"
+                    )
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(
+                        playback.isShowingRenderedPreview ? Color.secondary : Color.cyan
+                    )
                     Toggle("背景画布", isOn: Binding(
                         get: { model.canvasEnabled },
                         set: { model.setCanvasEnabled($0) }
@@ -671,20 +847,41 @@ struct VideoEditorView: View {
                         ),
                         range: 0...0.12
                     )
-                    HStack {
-                        Text("背景")
-                        Spacer()
-                        presetButton(colors: [.gray, .teal], accessibilityName: "灰绿") {
-                            model.setCanvasPreset(topHex: "#D9D6CF", bottomHex: "#9EA9A7")
+                    valueSlider(
+                        "阴影",
+                        value: Binding(
+                            get: { model.plan.canvas?.shadowOpacity ?? 0.24 },
+                            set: { model.setCanvasShadowOpacity($0) }
+                        ),
+                        range: 0...0.65
+                    )
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("背景")
+                            Spacer()
+                            Text(selectedCanvasPresetTitle)
+                                .font(.system(size: 8.5, weight: .medium))
+                                .foregroundStyle(.secondary)
                         }
-                        presetButton(colors: [.indigo, .purple], accessibilityName: "蓝紫") {
-                            model.setCanvasPreset(topHex: "#667EEA", bottomHex: "#764BA2")
-                        }
-                        presetButton(colors: [.orange, .pink], accessibilityName: "日落") {
-                            model.setCanvasPreset(topHex: "#F6D365", bottomHex: "#FDA085")
-                        }
-                        presetButton(colors: [.black, .gray], accessibilityName: "深色") {
-                            model.setCanvasPreset(topHex: "#232526", bottomHex: "#414345")
+                        LazyVGrid(
+                            columns: [GridItem(
+                                .adaptive(minimum: 28, maximum: 28),
+                                spacing: 10
+                            )],
+                            alignment: .leading,
+                            spacing: 8
+                        ) {
+                            ForEach(VideoEditorCanvasBackgroundPreset.all) { preset in
+                                canvasPresetButton(
+                                    preset,
+                                    selected: preset.matches(model.plan.canvas)
+                                ) {
+                                    model.setCanvasPreset(
+                                        topHex: preset.topHex,
+                                        bottomHex: preset.bottomHex
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -692,35 +889,423 @@ struct VideoEditorView: View {
                 inspectorSection("运镜与交互", symbol: "camera.metering.center.weighted") {
                     Toggle("自动运镜", isOn: Binding(
                         get: { model.cameraMotionEnabled },
-                        set: { model.setCameraMotionEnabled($0) }
+                        set: {
+                            model.setCameraMotionEnabled($0)
+                            onRefreshPreview()
+                        }
+                    ))
+                    Toggle("点击自动推近", isOn: Binding(
+                        get: { model.plan.camera.clickToZoom },
+                        set: {
+                            model.setClickToZoomEnabled($0)
+                            onRegenerateCamera()
+                        }
+                    ))
+                    Toggle("无点击时跟随光标", isOn: Binding(
+                        get: { model.plan.camera.followPointer },
+                        set: {
+                            model.setCameraFollowPointerEnabled($0)
+                            onRegenerateCamera()
+                        }
                     ))
                     valueSlider(
-                        "缩放强度",
+                        "推近倍率",
                         value: Binding(
-                            get: { model.plan.camera.zoomIntensity },
-                            set: { model.setZoomIntensity($0) }
+                            get: { model.plan.camera.resolvedZoomScale },
+                            set: {
+                                model.setAutomaticZoomScale($0)
+                                onRegenerateCamera()
+                            }
                         ),
-                        range: 0...1
+                        range: 1...3,
+                        step: 0.05,
+                        suffix: "×"
                     )
-                    Toggle("重绘光标", isOn: Binding(
-                        get: { model.cursorEnabled },
-                        set: { model.setCursorEnabled($0) }
-                    ))
-                    valueSlider(
-                        "光标大小",
-                        value: Binding(
-                            get: { model.plan.cursor.scale },
-                            set: { model.setCursorScale($0) }
-                        ),
-                        range: 0.7...2.2
-                    )
-                    Toggle("点击反馈", isOn: Binding(
-                        get: { model.clickPulseEnabled },
-                        set: { model.setClickPulseEnabled($0) }
-                    ))
+                    Picker(
+                        "生成强度",
+                        selection: Binding(
+                            get: { model.plan.camera.generationStrength },
+                            set: {
+                                model.setAutomaticCameraGenerationStrength($0)
+                                onRegenerateCamera()
+                            }
+                        )
+                    ) {
+                        Text("克制").tag(AutoEditPlan.Camera.GenerationStrength.restrained)
+                        Text("适中").tag(AutoEditPlan.Camera.GenerationStrength.balanced)
+                        Text("积极").tag(AutoEditPlan.Camera.GenerationStrength.active)
+                    }
+                    .pickerStyle(.segmented)
+                    Button(action: onRegenerateCamera) {
+                        HStack(spacing: 6) {
+                            if model.isRegeneratingCamera || model.isProcessing {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+                            }
+                            Text(cameraGenerationButtonTitle)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(model.isRegeneratingCamera || model.isProcessing)
+                    .help("点击后把目标平滑带到视觉中心；无点击演示才跟随光标")
+                    Text(automaticCameraPlanSummary)
+                        .font(.system(size: 8.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    DisclosureGroup(isExpanded: $isAdvancedCameraExpanded) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            valueSlider(
+                                "运动模糊",
+                                value: Binding(
+                                    get: { model.plan.camera.motionBlurStrength },
+                                    set: {
+                                        model.setCameraMotionBlurStrength($0)
+                                        onRefreshPreview()
+                                    }
+                                ),
+                                range: 0...1
+                            )
+                            Divider().opacity(0.28)
+                            Label("手动点选镜头（不改变自动运镜）", systemImage: "scope")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            valueSlider(
+                                "点选倍率",
+                                value: $model.manualCameraScale,
+                                range: 1.2...3
+                            )
+                            valueSlider(
+                                "点选停留",
+                                value: $model.manualCameraHoldSeconds,
+                                range: 0.3...4
+                            )
+                            HStack(spacing: 6) {
+                                Button {
+                                    if model.isManualCameraFocusEditing {
+                                        model.cancelManualCameraFocusEditing()
+                                    } else {
+                                        playback.showRawPreview()
+                                        model.activateManualCameraFocusEditing()
+                                    }
+                                } label: {
+                                    Label(
+                                        model.isManualCameraFocusEditing
+                                            ? "取消点选"
+                                            : "点选缩放位置",
+                                        systemImage: model.isManualCameraFocusEditing
+                                            ? "xmark.circle"
+                                            : "scope"
+                                    )
+                                    .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(model.isManualCameraFocusEditing ? .orange : .cyan)
+                                if model.manualCameraFocusCount > 0 {
+                                    Button("清除 \(model.manualCameraFocusCount) 处") {
+                                        model.clearManualCameraFocuses()
+                                        onRefreshPreview()
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                            Text(model.isManualCameraFocusEditing
+                                ? "已切到原始画面；点击预览即在当前播放头添加缩放。"
+                                : "有点击时，镜头只以被点击目标构图并稳定停留；没有点击时，才会响应明确的光标移动。")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 7)
+                    } label: {
+                        Label("高级运镜", systemImage: "slider.horizontal.3")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
                 }
 
-                inspectorSection("视频标注", symbol: "pencil.and.outline") {
+                inspectorSection("光标与点击", symbol: "cursorarrow.rays") {
+                    Toggle("重绘光标", isOn: Binding(
+                        get: { model.cursorEnabled },
+                        set: {
+                            model.setCursorEnabled($0)
+                            onRefreshPreview()
+                        }
+                    ))
+
+                    DisclosureGroup(isExpanded: $isCursorDetailExpanded) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 8) {
+                                Text("实际样式")
+                                    .frame(width: 62, alignment: .leading)
+                                Picker("实际样式", selection: Binding(
+                                    get: { model.plan.cursor.appearance },
+                                    set: {
+                                        model.setCursorAppearance($0)
+                                        onRefreshPreview()
+                                    }
+                                )) {
+                                    ForEach(cursorAppearanceOptions, id: \.value) { option in
+                                        Text(option.title).tag(option.value)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
+                            Text(cursorAppearanceDescription)
+                                .font(.system(size: 8.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+
+                            valueSlider(
+                                "光标大小",
+                                value: Binding(
+                                    get: { model.plan.cursor.scale },
+                                    set: { model.setCursorScale($0) }
+                                ),
+                                range: 0.7...2.2,
+                                onEditingEnded: onRefreshPreview
+                            )
+                            HStack(spacing: 8) {
+                                Text("移动特效")
+                                    .frame(width: 62, alignment: .leading)
+                                Picker("移动特效", selection: Binding(
+                                    get: { model.plan.cursor.motionEffect },
+                                    set: {
+                                        model.setCursorMotionEffect($0)
+                                        onRefreshPreview()
+                                    }
+                                )) {
+                                    ForEach(cursorMotionEffectOptions, id: \.value) { option in
+                                        Text(option.title).tag(option.value)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
+                            valueSlider(
+                                "特效强度",
+                                value: Binding(
+                                    get: { model.plan.cursor.motionEffectStrength },
+                                    set: { model.setCursorMotionEffectStrength($0) }
+                                ),
+                                range: 0.1...1,
+                                onEditingEnded: onRefreshPreview
+                            )
+                            .disabled(model.plan.cursor.motionEffect == .none)
+                            .opacity(model.plan.cursor.motionEffect == .none ? 0.45 : 1)
+                            HStack(spacing: 10) {
+                                Text("特效颜色")
+                                    .frame(width: 62, alignment: .leading)
+                                ForEach(cursorAccentColors, id: \.hex) { option in
+                                    Button {
+                                        model.setCursorAccentColorHex(option.hex)
+                                        onRefreshPreview()
+                                    } label: {
+                                        Circle()
+                                            .fill(VideoEditorCanvasColor.color(
+                                                hex: option.hex,
+                                                fallback: .cyan
+                                            ))
+                                            .frame(width: 18, height: 18)
+                                            .overlay(Circle().stroke(
+                                                .white.opacity(0.35),
+                                                lineWidth: 0.8
+                                            ))
+                                            .overlay {
+                                                if model.plan.cursor.accentColorHex == option.hex {
+                                                    Circle().stroke(.cyan, lineWidth: 2)
+                                                        .frame(width: 23, height: 23)
+                                                }
+                                            }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(option.name)
+                                }
+                            }
+                            HStack(spacing: 8) {
+                                Text("平滑窗口")
+                                    .frame(width: 62, alignment: .leading)
+                                Slider(
+                                    value: Binding(
+                                        get: {
+                                            model.plan.cursor.resolvedSmoothingWindowMilliseconds
+                                        },
+                                        set: {
+                                            model.setCursorSmoothingWindowMilliseconds($0)
+                                        }
+                                    ),
+                                    in: 0...120,
+                                    onEditingChanged: { isEditing in
+                                        if !isEditing { onRefreshPreview() }
+                                    }
+                                )
+                                .accessibilityLabel("光标平滑窗口")
+                                .accessibilityValue(String(
+                                    format: "%.0f 毫秒",
+                                    model.plan.cursor.resolvedSmoothingWindowMilliseconds
+                                ))
+                                Text(String(
+                                    format: "%.0fms",
+                                    model.plan.cursor.resolvedSmoothingWindowMilliseconds
+                                ))
+                                .font(.system(
+                                    size: 8.5,
+                                    weight: .medium,
+                                    design: .monospaced
+                                ))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 38, alignment: .trailing)
+                            }
+                            Toggle("静止时隐藏", isOn: Binding(
+                                get: { model.plan.cursor.hidesWhenIdle },
+                                set: {
+                                    model.setCursorHidesWhenIdle($0)
+                                    onRefreshPreview()
+                                }
+                            ))
+                        }
+                        .padding(.top, 7)
+                    } label: {
+                        Label("光标细节", systemImage: "cursorarrow.motionlines")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .disabled(!model.cursorEnabled)
+                    .opacity(model.cursorEnabled ? 1 : 0.48)
+
+                    Toggle("点击反馈", isOn: Binding(
+                        get: { model.clickPulseEnabled },
+                        set: {
+                            model.setClickPulseEnabled($0)
+                            onRefreshPreview()
+                        }
+                    ))
+
+                    DisclosureGroup(isExpanded: $isClickDetailExpanded) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack(spacing: 8) {
+                                Text("点击效果")
+                                    .frame(width: 62, alignment: .leading)
+                                Picker("点击效果", selection: Binding(
+                                    get: {
+                                        model.plan.interaction?.clickEffect ?? .ripple
+                                    },
+                                    set: {
+                                        model.setClickEffect($0)
+                                        onRefreshPreview()
+                                    }
+                                )) {
+                                    ForEach(clickEffectOptions, id: \.value) { option in
+                                        Text(option.title).tag(option.value)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.menu)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            }
+                            valueSlider(
+                                "效果强度",
+                                value: Binding(
+                                    get: {
+                                        model.plan.interaction?.clickEffectStrength ?? 1
+                                    },
+                                    set: { model.setClickEffectStrength($0) }
+                                ),
+                                range: 0.1...1,
+                                onEditingEnded: onRefreshPreview
+                            )
+                            valueSlider(
+                                "效果大小",
+                                value: Binding(
+                                    get: { model.plan.interaction?.clickPulseScale ?? 1.25 },
+                                    set: { model.setClickPulseScale($0) }
+                                ),
+                                range: 0.5...2,
+                                onEditingEnded: onRefreshPreview
+                            )
+                            valueSlider(
+                                "效果时长",
+                                value: Binding(
+                                    get: { model.plan.interaction?.clickPulseDuration ?? 0.62 },
+                                    set: { model.setClickPulseDuration($0) }
+                                ),
+                                range: 0.15...1.2,
+                                onEditingEnded: onRefreshPreview
+                            )
+                            HStack(spacing: 10) {
+                                Text("效果颜色")
+                                    .frame(width: 62, alignment: .leading)
+                                ForEach(clickPulseColors, id: \.hex) { option in
+                                    Button {
+                                        model.setClickPulseColorHex(option.hex)
+                                        onRefreshPreview()
+                                    } label: {
+                                        Circle()
+                                            .fill(VideoEditorCanvasColor.color(
+                                                hex: option.hex,
+                                                fallback: .cyan
+                                            ))
+                                            .frame(width: 18, height: 18)
+                                            .overlay(Circle().stroke(
+                                                .white.opacity(0.35),
+                                                lineWidth: 0.8
+                                            ))
+                                            .overlay {
+                                                if model.plan.interaction?.clickPulseColorHex
+                                                    == option.hex {
+                                                    Circle().stroke(.cyan, lineWidth: 2)
+                                                        .frame(width: 23, height: 23)
+                                                }
+                                            }
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help(option.name)
+                                }
+                            }
+                        }
+                        .padding(.top, 7)
+                    } label: {
+                        Label("点击特效细节", systemImage: "cursorarrow.click.2")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .disabled(!model.clickPulseEnabled)
+                    .opacity(model.clickPulseEnabled ? 1 : 0.48)
+                }
+
+                Button {
+                    showsAdvancedEditingTools.toggle()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "wand.and.stars")
+                            .foregroundStyle(.cyan)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(showsAdvancedEditingTools ? "收起更多工具" : "更多编辑工具")
+                                .font(.system(size: 10.5, weight: .semibold))
+                            Text("视频标注 · 讲解人像 · 字幕 · 导出预设")
+                                .font(.system(size: 8.5, weight: .medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: showsAdvancedEditingTools
+                            ? "chevron.up"
+                            : "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(11)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        Color.primary.opacity(0.045),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(showsAdvancedEditingTools
+                    ? "收起更多编辑工具"
+                    : "展开更多编辑工具")
+
+                if showsAdvancedEditingTools {
+                    inspectorSection("视频标注", symbol: "pencil.and.outline") {
                     HStack(spacing: 6) {
                         Button {
                             model.activateVideoAnnotationSelection()
@@ -871,7 +1456,7 @@ struct VideoEditorView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                inspectorSection("讲解人像", symbol: "person.crop.circle") {
+                    inspectorSection("讲解人像", symbol: "person.crop.circle") {
                     Toggle("显示摄像头", isOn: Binding(
                         get: { model.presenterEnabled },
                         set: { model.setPresenterEnabled($0) }
@@ -1009,12 +1594,16 @@ struct VideoEditorView: View {
                             .font(.system(size: 9.5, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
+                    }
                 }
 
                 inspectorSection("声音", symbol: "waveform") {
                     Toggle("启用混音", isOn: Binding(
                         get: { model.audioEnabled },
-                        set: { model.setAudioEnabled($0) }
+                        set: {
+                            model.setAudioEnabled($0)
+                            onRefreshPreview()
+                        }
                     ))
                     valueSlider(
                         "系统声音",
@@ -1022,7 +1611,8 @@ struct VideoEditorView: View {
                             get: { model.plan.audio?.systemVolume ?? 1 },
                             set: { model.setSystemVolume($0) }
                         ),
-                        range: 0...1.5
+                        range: 0...1.5,
+                        onEditingEnded: onRefreshPreview
                     )
                     if model.hasMicrophoneTrack {
                         valueSlider(
@@ -1031,11 +1621,15 @@ struct VideoEditorView: View {
                                 get: { model.plan.audio?.microphoneVolume ?? 1 },
                                 set: { model.setMicrophoneVolume($0) }
                             ),
-                            range: 0...1.5
+                            range: 0...1.5,
+                            onEditingEnded: onRefreshPreview
                         )
                         Toggle("降低环境噪声", isOn: Binding(
                             get: { model.microphoneNoiseReductionEnabled },
-                            set: { model.setMicrophoneNoiseReductionEnabled($0) }
+                            set: {
+                                model.setMicrophoneNoiseReductionEnabled($0)
+                                onRefreshPreview()
+                            }
                         ))
                         if model.microphoneNoiseReductionEnabled {
                             valueSlider(
@@ -1044,17 +1638,24 @@ struct VideoEditorView: View {
                                     get: { model.plan.audio?.noiseReductionAmount ?? 0.55 },
                                     set: { model.setNoiseReductionAmount($0) }
                                 ),
-                                range: 0...1
+                                range: 0...1,
+                                onEditingEnded: onRefreshPreview
                             )
                         }
                         Toggle("统一人声与系统响度", isOn: Binding(
                             get: { model.loudnessNormalizationEnabled },
-                            set: { model.setLoudnessNormalizationEnabled($0) }
+                            set: {
+                                model.setLoudnessNormalizationEnabled($0)
+                                onRefreshPreview()
+                            }
                         ))
                         if model.loudnessNormalizationEnabled {
                             Picker("人声目标响度", selection: Binding(
                                 get: { model.plan.audio?.targetLoudnessLUFS ?? -16 },
-                                set: { model.setTargetLoudnessLUFS($0) }
+                                set: {
+                                    model.setTargetLoudnessLUFS($0)
+                                    onRefreshPreview()
+                                }
                             )) {
                                 Text("响亮 · −14 LUFS").tag(-14.0)
                                 Text("标准 · −16 LUFS").tag(-16.0)
@@ -1065,7 +1666,10 @@ struct VideoEditorView: View {
                         }
                         Toggle("讲话时自动压低系统声", isOn: Binding(
                             get: { model.plan.audio?.ducksSystemUnderNarration != false },
-                            set: { model.setDuckingEnabled($0) }
+                            set: {
+                                model.setDuckingEnabled($0)
+                                onRefreshPreview()
+                            }
                         ))
                         Text("降噪与响度处理仅作用于生成的预览，原始麦克风轨保持不变。")
                             .font(.system(size: 9, weight: .medium))
@@ -1073,10 +1677,14 @@ struct VideoEditorView: View {
                     }
                 }
 
-                inspectorSection("字幕", symbol: "captions.bubble") {
+                if showsAdvancedEditingTools {
+                    inspectorSection("字幕", symbol: "captions.bubble") {
                     Toggle("烧录字幕", isOn: Binding(
                         get: { model.captionsEnabled },
-                        set: { model.setCaptionsEnabled($0) }
+                        set: {
+                            model.setCaptionsEnabled($0)
+                            onRefreshPreview()
+                        }
                     ))
                     .disabled(!model.hasTranscript)
                     if model.hasTranscript {
@@ -1088,18 +1696,21 @@ struct VideoEditorView: View {
                                 selected: (model.plan.captions?.style ?? .glass) == .glass
                             ) {
                                 model.setCaptionStyle(.glass)
+                                onRefreshPreview()
                             }
                             choiceButton(
                                 "简洁",
                                 selected: model.plan.captions?.style == .clean
                             ) {
                                 model.setCaptionStyle(.clean)
+                                onRefreshPreview()
                             }
                             choiceButton(
                                 "高对比",
                                 selected: model.plan.captions?.style == .highContrast
                             ) {
                                 model.setCaptionStyle(.highContrast)
+                                onRefreshPreview()
                             }
                         }
                         HStack(spacing: 5) {
@@ -1115,6 +1726,7 @@ struct VideoEditorView: View {
                                     selected: (model.plan.captions?.position ?? .bottom) == item.1
                                 ) {
                                     model.setCaptionPosition(item.1)
+                                    onRefreshPreview()
                                 }
                             }
                         }
@@ -1124,7 +1736,8 @@ struct VideoEditorView: View {
                                 get: { model.plan.captions?.fontScale ?? 1 },
                                 set: { model.setCaptionFontScale($0) }
                             ),
-                            range: 0.75...1.5
+                            range: 0.75...1.5,
+                            onEditingEnded: onRefreshPreview
                         )
                         Text("时码基于原始录屏；剪切、变速、重排后会自动映射到成片。")
                             .font(.system(size: 9, weight: .medium))
@@ -1187,6 +1800,7 @@ struct VideoEditorView: View {
                                             .multilineTextAlignment(.trailing)
                                             .textFieldStyle(.roundedBorder)
                                             .frame(width: 45)
+                                            .onSubmit(onRefreshPreview)
                                             Text("出")
                                                 .font(.system(size: 7.5, weight: .medium))
                                                 .foregroundStyle(.tertiary)
@@ -1202,6 +1816,7 @@ struct VideoEditorView: View {
                                             .multilineTextAlignment(.trailing)
                                             .textFieldStyle(.roundedBorder)
                                             .frame(width: 45)
+                                            .onSubmit(onRefreshPreview)
                                         }
                                         TextField("留空可隐藏这条字幕", text: Binding(
                                             get: {
@@ -1213,6 +1828,7 @@ struct VideoEditorView: View {
                                             set: { model.setCaptionCueText($0, at: index) }
                                         ))
                                         .textFieldStyle(.roundedBorder)
+                                        .onSubmit(onRefreshPreview)
                                         HStack(spacing: 10) {
                                             Button("在播放头分割") {
                                                 model.selectCaptionCue(at: index)
@@ -1220,6 +1836,7 @@ struct VideoEditorView: View {
                                                     at: index,
                                                     atOutputTime: playback.currentTimeSeconds
                                                 )
+                                                onRefreshPreview()
                                             }
                                             .disabled(!model.canSplitCaptionCue(
                                                 at: index,
@@ -1228,11 +1845,13 @@ struct VideoEditorView: View {
                                             Button("与下一条合并") {
                                                 model.selectCaptionCue(at: index)
                                                 model.mergeCaptionCueWithNext(at: index)
+                                                onRefreshPreview()
                                             }
                                             .disabled(index + 1 >= model.captionSourceCues.count)
                                             Spacer()
                                             Button(role: .destructive) {
                                                 model.deleteCaptionCue(at: index)
+                                                onRefreshPreview()
                                             } label: {
                                                 Image(systemName: "trash")
                                             }
@@ -1269,7 +1888,10 @@ struct VideoEditorView: View {
                                 .font(.system(size: 9.5, weight: .semibold))
                         }
                         if model.plan.captions?.customCues != nil {
-                            Button("恢复本机转写原文", action: model.restoreAutomaticCaptionText)
+                            Button("恢复本机转写原文") {
+                                model.restoreAutomaticCaptionText()
+                                onRefreshPreview()
+                            }
                                 .buttonStyle(.borderless)
                         }
                     } else {
@@ -1278,9 +1900,9 @@ struct VideoEditorView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .id(VideoEditorInspectorSection.captions)
+                    .id(VideoEditorInspectorSection.captions)
 
-                inspectorSection("导出", symbol: "square.and.arrow.up") {
+                    inspectorSection("导出", symbol: "square.and.arrow.up") {
                     Picker("质量预设", selection: Binding(
                         get: { model.exportPreset },
                         set: { model.setExportPreset($0) }
@@ -1301,7 +1923,8 @@ struct VideoEditorView: View {
                     .font(.system(size: 8.5, weight: .semibold))
                     .foregroundStyle(.cyan)
                 }
-                .id(VideoEditorInspectorSection.export)
+                    .id(VideoEditorInspectorSection.export)
+                }
 
                 Button("恢复到打开时的方案", action: model.resetToAutomaticPlan)
                     .buttonStyle(.borderless)
@@ -1313,7 +1936,7 @@ struct VideoEditorView: View {
         .scrollPosition(id: $inspectorScrollPosition, anchor: .top)
         .defaultScrollAnchor(initialInspectorSection == nil ? .top : .bottom)
         .frame(width: 292)
-        .background(.thinMaterial)
+        .traceGlassSurface(role: .chrome, cornerRadius: 0)
     }
 
     private func inspectorSection<Content: View>(
@@ -1329,7 +1952,7 @@ struct VideoEditorView: View {
                 .font(.system(size: 10.5, weight: .medium))
         }
         .padding(12)
-        .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 14))
+        .traceGlassSurface(role: .card, cornerRadius: 14)
     }
 
     private func annotationToolButton(
@@ -1365,39 +1988,194 @@ struct VideoEditorView: View {
         ]
     }
 
+    private var clickPulseColors: [(name: String, hex: String)] {
+        [
+            ("青色", "#00D9FF"),
+            ("珊瑚", "#FF684D"),
+            ("紫色", "#A855F7"),
+            ("黄色", "#FACC15"),
+            ("白色", "#FFFFFF")
+        ]
+    }
+
+    private var cursorAccentColors: [(name: String, hex: String)] {
+        [
+            ("冰蓝", "#5BD6FF"),
+            ("珊瑚", "#FF684D"),
+            ("紫色", "#A855F7"),
+            ("青柠", "#A3E635"),
+            ("白色", "#FFFFFF")
+        ]
+    }
+
+    private var cursorAppearanceOptions: [(
+        value: AutoEditPlan.Cursor.Appearance,
+        title: String
+    )] {
+        [
+            (.recorded, "跟随系统"),
+            (.macOS, "macOS 箭头"),
+            (.highContrast, "高对比"),
+            (.minimalDot, "极简圆点")
+        ]
+    }
+
+    private var cursorMotionEffectOptions: [(
+        value: AutoEditPlan.Cursor.MotionEffect,
+        title: String
+    )] {
+        [
+            (.none, "无"),
+            (.halo, "柔光"),
+            (.trail, "平滑拖尾"),
+            (.spotlight, "聚光")
+        ]
+    }
+
+    private var clickEffectOptions: [(
+        value: AutoEditPlan.Interaction.ClickEffect,
+        title: String
+    )] {
+        [
+            (.ripple, "双层波纹"),
+            (.pulse, "触点脉冲"),
+            (.spotlight, "聚光点击")
+        ]
+    }
+
+    private var cursorAppearanceDescription: String {
+        switch model.plan.cursor.appearance {
+        case .recorded:
+            model.plan.cursor.shapeKeyframes.isEmpty
+                ? "这条旧录屏没有形态轨道，将安全回退为 macOS 箭头。"
+                : "按录制时状态还原箭头、手形、文本和缩放光标。"
+        case .macOS:
+            "始终使用系统箭头，适合风格统一的产品演示。"
+        case .highContrast:
+            "白色高对比箭头，在深色和复杂画面上都清楚。"
+        case .minimalDot:
+            "用强调色圆点替代箭头，适合简洁的教程成片。"
+        }
+    }
+
     private func valueSlider(
         _ title: String,
         value: Binding<Double>,
-        range: ClosedRange<Double>
+        range: ClosedRange<Double>,
+        step: Double? = nil,
+        suffix: String = "",
+        onEditingEnded: (() -> Void)? = nil
     ) -> some View {
         HStack(spacing: 8) {
             Text(title)
                 .frame(width: 62, alignment: .leading)
-            Slider(value: value, in: range)
-            Text(String(format: "%.2f", value.wrappedValue))
+            if let step {
+                Slider(
+                    value: value,
+                    in: range,
+                    step: step,
+                    onEditingChanged: { isEditing in
+                        if !isEditing { onEditingEnded?() }
+                    }
+                )
+                .accessibilityLabel(title)
+                .accessibilityValue(String(
+                    format: "%.2f%@",
+                    value.wrappedValue,
+                    suffix
+                ))
+            } else {
+                Slider(
+                    value: value,
+                    in: range,
+                    onEditingChanged: { isEditing in
+                        if !isEditing { onEditingEnded?() }
+                    }
+                )
+                .accessibilityLabel(title)
+                .accessibilityValue(String(
+                    format: "%.2f%@",
+                    value.wrappedValue,
+                    suffix
+                ))
+            }
+            Text(String(format: "%.2f%@", value.wrappedValue, suffix))
                 .font(.system(size: 8.5, weight: .medium, design: .monospaced))
                 .foregroundStyle(.secondary)
-                .frame(width: 32, alignment: .trailing)
+                .frame(width: suffix.isEmpty ? 32 : 40, alignment: .trailing)
         }
     }
 
-    private func presetButton(
-        colors: [Color],
-        accessibilityName: String,
+    private var selectedCanvasPresetTitle: String {
+        VideoEditorCanvasBackgroundPreset.all.first {
+            $0.matches(model.plan.canvas)
+        }?.title ?? "自定义"
+    }
+
+    private var cameraGenerationButtonTitle: String {
+        if model.isRegeneratingCamera { return "正在分析点击与光标" }
+        if model.isProcessing { return "镜头已更新 · 正在生成预览" }
+        return "重新分析点击与光标"
+    }
+
+    private var automaticCameraPlanSummary: String {
+        let automaticFrames = model.plan.camera.keyframes.filter {
+            switch $0.reason {
+            case .manualAnchor, .manualFocus, .manualHold, .manualReturn:
+                false
+            default:
+                true
+            }
+        }
+        let clickFocuses = automaticFrames.filter { $0.reason == .clickFocus }.count
+        let pointerFrames = automaticFrames.filter { $0.reason == .pointerFollow }.count
+        if clickFocuses == 0, pointerFrames == 0 {
+            return "当前没有符合条件的点击或明确光标移动"
+        }
+        return "已生成 \(clickFocuses) 个点击聚焦 · \(pointerFrames) 个光标跟随点"
+    }
+
+    private func canvasPresetButton(
+        _ preset: VideoEditorCanvasBackgroundPreset,
+        selected: Bool,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Circle()
-                .fill(LinearGradient(
-                    colors: colors,
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ))
-                .frame(width: 20, height: 20)
-                .overlay(Circle().stroke(.white.opacity(0.35), lineWidth: 1))
+            ZStack {
+                Circle()
+                    .fill(LinearGradient(
+                        colors: [
+                            VideoEditorCanvasColor.color(
+                                hex: preset.topHex,
+                                fallback: .gray
+                            ),
+                            VideoEditorCanvasColor.color(
+                                hex: preset.bottomHex,
+                                fallback: .black
+                            )
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+                    .frame(width: 24, height: 24)
+                    .overlay(Circle().stroke(.white.opacity(0.34), lineWidth: 0.8))
+                if selected {
+                    Circle()
+                        .stroke(.cyan, lineWidth: 2)
+                        .frame(width: 29, height: 29)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 7, weight: .black))
+                        .foregroundStyle(.white)
+                        .padding(3)
+                        .background(.black.opacity(0.48), in: Circle())
+                }
+            }
+            .frame(width: 30, height: 30)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(accessibilityName)背景预设")
+        .help("\(preset.title)渐变")
+        .accessibilityLabel("\(preset.title)背景预设")
+        .accessibilityValue(selected ? "已选择" : "")
     }
 
     private func timelineButton(
@@ -1476,6 +2254,503 @@ struct VideoEditorPlayerView: NSViewRepresentable {
 
     static func dismantleNSView(_ view: AVPlayerView, coordinator: Void) {
         view.player = nil
+    }
+}
+
+enum VideoEditorCanvasPreviewLayout {
+    struct CameraTransform: Equatable {
+        let scale: CGFloat
+        let offset: CGSize
+    }
+
+    static func contentRect(in size: CGSize, margin: Double) -> CGRect {
+        let clampedMargin = min(max(margin.isFinite ? margin : 0, 0), 0.25)
+        let insetX = size.width * clampedMargin
+        let insetY = size.height * clampedMargin
+        return CGRect(origin: .zero, size: size).insetBy(dx: insetX, dy: insetY)
+    }
+
+    static func cornerRadius(in size: CGSize, amount: Double) -> CGFloat {
+        min(size.width, size.height) * min(max(amount.isFinite ? amount : 0, 0), 0.2)
+    }
+
+    static func cameraTransform(
+        in size: CGSize,
+        camera: AutoEditPlan.Camera?,
+        sourceTimeSeconds: Double
+    ) -> CameraTransform {
+        guard let camera, camera.mode != "off" else {
+            return CameraTransform(scale: 1, offset: .zero)
+        }
+        let state = EffectTimeline.effectiveCameraState(
+            at: max(sourceTimeSeconds.isFinite ? sourceTimeSeconds : 0, 0),
+            camera: camera
+        )
+        let scale = CGFloat(max(state.scale.isFinite ? state.scale : 1, 1))
+        let halfViewport = 0.5 / Double(scale)
+        let centerX = min(max(state.center.x, halfViewport), 1 - halfViewport)
+        let centerY = min(max(state.center.y, halfViewport), 1 - halfViewport)
+        return CameraTransform(
+            scale: scale,
+            offset: CGSize(
+                width: (0.5 - centerX) * size.width * scale,
+                height: (0.5 - centerY) * size.height * scale
+            )
+        )
+    }
+
+    static func playerFrame(
+        in size: CGSize,
+        transform: CameraTransform
+    ) -> CGRect {
+        CGRect(
+            x: (size.width - size.width * transform.scale) / 2
+                + transform.offset.width,
+            y: (size.height - size.height * transform.scale) / 2
+                - transform.offset.height,
+            width: size.width * transform.scale,
+            height: size.height * transform.scale
+        )
+    }
+}
+
+struct VideoEditorCanvasBackgroundPreset: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let topHex: String
+    let bottomHex: String
+
+    static let all: [VideoEditorCanvasBackgroundPreset] = [
+        .init(id: "mist", title: "雾灰", topHex: "#D9D6CF", bottomHex: "#9EA9A7"),
+        .init(id: "glacier", title: "冰川", topHex: "#F8FBFF", bottomHex: "#CAD8E8"),
+        .init(id: "indigo", title: "蓝紫", topHex: "#667EEA", bottomHex: "#764BA2"),
+        .init(id: "sunset", title: "日落", topHex: "#F6D365", bottomHex: "#FDA085"),
+        .init(id: "graphite", title: "石墨", topHex: "#232526", bottomHex: "#414345"),
+        .init(id: "ocean", title: "海洋", topHex: "#00C6FF", bottomHex: "#0072FF"),
+        .init(id: "mint", title: "薄荷", topHex: "#11998E", bottomHex: "#38EF7D"),
+        .init(id: "aurora", title: "极光", topHex: "#7F00FF", bottomHex: "#00D4FF"),
+        .init(id: "cherry", title: "樱粉", topHex: "#F953C6", bottomHex: "#B91D73"),
+        .init(id: "peach", title: "蜜桃", topHex: "#FF9966", bottomHex: "#FF5E62"),
+        .init(id: "forest", title: "森林", topHex: "#134E5E", bottomHex: "#71B280"),
+        .init(id: "midnight", title: "午夜", topHex: "#0F2027", bottomHex: "#2C5364")
+    ]
+
+    func matches(_ canvas: AutoEditPlan.Canvas?) -> Bool {
+        guard let canvas else { return false }
+        return canvas.backgroundTopHex.caseInsensitiveCompare(topHex) == .orderedSame
+            && canvas.backgroundBottomHex.caseInsensitiveCompare(bottomHex) == .orderedSame
+    }
+}
+
+enum VideoEditorCanvasColor {
+    static func color(hex: String, fallback: Color) -> Color {
+        let value = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard value.count == 6,
+              let integer = UInt32(value, radix: 16) else { return fallback }
+        return Color(
+            red: Double((integer >> 16) & 0xFF) / 255,
+            green: Double((integer >> 8) & 0xFF) / 255,
+            blue: Double(integer & 0xFF) / 255
+        )
+    }
+}
+
+private struct VideoEditorPlaybackClockView<Content: View>: View {
+    @ObservedObject var clock: VideoEditorPlaybackClock
+    @ViewBuilder let content: (Double) -> Content
+
+    var body: some View {
+        content(clock.currentTimeSeconds)
+    }
+}
+
+private struct VideoEditorTransportClockControls: View {
+    @ObservedObject var playback: VideoEditorPlaybackController
+    @ObservedObject private var clock: VideoEditorPlaybackClock
+
+    init(playback: VideoEditorPlaybackController) {
+        self.playback = playback
+        _clock = ObservedObject(wrappedValue: playback.clock)
+    }
+
+    var body: some View {
+        Text(timeText(clock.currentTimeSeconds))
+            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .frame(width: 52, alignment: .trailing)
+        Slider(
+            value: Binding(
+                get: { clock.currentTimeSeconds },
+                set: { playback.seek(to: $0) }
+            ),
+            in: 0...max(playback.durationSeconds, 0.01),
+            onEditingChanged: { editing in
+                if !editing { playback.settlePlayhead() }
+            }
+        )
+        .accessibilityLabel("预览播放位置")
+        .accessibilityValue(
+            "\(timeText(clock.currentTimeSeconds)) / \(timeText(playback.durationSeconds))"
+        )
+    }
+
+    private func timeText(_ seconds: Double) -> String {
+        let value = max(Int(seconds.rounded(.down)), 0)
+        return String(format: "%d:%02d", value / 60, value % 60)
+    }
+}
+
+private struct VideoEditorTimelinePlayhead: NSViewRepresentable {
+    let player: AVPlayer
+    let durationSeconds: Double
+
+    func makeNSView(context: Context) -> VideoEditorTimelinePlayheadNSView {
+        VideoEditorTimelinePlayheadNSView(
+            player: player,
+            durationSeconds: durationSeconds
+        )
+    }
+
+    func updateNSView(
+        _ view: VideoEditorTimelinePlayheadNSView,
+        context: Context
+    ) {
+        view.configure(player: player, durationSeconds: durationSeconds)
+    }
+
+    static func dismantleNSView(
+        _ view: VideoEditorTimelinePlayheadNSView,
+        coordinator: Void
+    ) {
+        view.stop()
+    }
+}
+
+private final class VideoEditorTimelinePlayheadNSView: NSView {
+    private weak var player: AVPlayer?
+    private var durationSeconds: Double
+    private var displayTimer: Timer?
+    private let playheadLayer = CALayer()
+    private var lastX = CGFloat.nan
+
+    init(player: AVPlayer, durationSeconds: Double) {
+        self.player = player
+        self.durationSeconds = durationSeconds
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        playheadLayer.backgroundColor = NSColor.white.cgColor
+        playheadLayer.shadowColor = NSColor.black.cgColor
+        playheadLayer.shadowOpacity = 0.45
+        playheadLayer.shadowRadius = 2
+        layer?.addSublayer(playheadLayer)
+        let timer = Timer(
+            timeInterval: 1.0 / 60.0,
+            target: self,
+            selector: #selector(displayTick(_:)),
+            userInfo: nil,
+            repeats: true
+        )
+        RunLoop.main.add(timer, forMode: .common)
+        displayTimer = timer
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        lastX = .nan
+        updatePlayhead()
+    }
+
+    func configure(player: AVPlayer, durationSeconds: Double) {
+        self.player = player
+        self.durationSeconds = durationSeconds
+        updatePlayhead()
+    }
+
+    func stop() {
+        displayTimer?.invalidate()
+        displayTimer = nil
+        player = nil
+    }
+
+    @objc private func displayTick(_ timer: Timer) {
+        updatePlayhead()
+    }
+
+    private func updatePlayhead() {
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        let time = player?.currentTime().seconds ?? 0
+        let progress = min(max(
+            (time.isFinite ? time : 0) / max(durationSeconds, 0.001),
+            0
+        ), 1)
+        let x = bounds.width * progress
+        guard !lastX.isFinite || abs(lastX - x) > 0.02 else { return }
+        lastX = x
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playheadLayer.frame = CGRect(x: x, y: 0, width: 2, height: bounds.height)
+        CATransaction.commit()
+    }
+}
+
+private struct VideoEditorCanvasPreview: View {
+    let player: AVPlayer
+    let canvas: AutoEditPlan.Canvas?
+    let camera: AutoEditPlan.Camera?
+    let cursor: AutoEditPlan.Cursor?
+    let interaction: AutoEditPlan.Interaction?
+    let timeline: VideoEditTimeline?
+
+    var body: some View {
+        GeometryReader { proxy in
+            if let canvas, canvas.isEnabled {
+                let contentRect = VideoEditorCanvasPreviewLayout.contentRect(
+                    in: proxy.size,
+                    margin: canvas.margin
+                )
+                let cornerRadius = VideoEditorCanvasPreviewLayout.cornerRadius(
+                    in: proxy.size,
+                    amount: canvas.cornerRadius
+                )
+                let shortestSide = min(proxy.size.width, proxy.size.height)
+
+                LinearGradient(
+                    colors: [
+                        VideoEditorCanvasColor.color(
+                            hex: canvas.backgroundTopHex,
+                            fallback: Color(
+                            red: 0.85,
+                            green: 0.84,
+                            blue: 0.81
+                        )),
+                        VideoEditorCanvasColor.color(
+                            hex: canvas.backgroundBottomHex,
+                            fallback: Color(
+                            red: 0.62,
+                            green: 0.66,
+                            blue: 0.65
+                        ))
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                liveCameraPlayer(in: contentRect.size)
+                    .frame(width: contentRect.width, height: contentRect.height)
+                    .clipShape(RoundedRectangle(
+                        cornerRadius: cornerRadius,
+                        style: .continuous
+                    ))
+                    .shadow(
+                        color: .black.opacity(min(max(canvas.shadowOpacity, 0), 1)),
+                        radius: shortestSide * 0.018,
+                        y: shortestSide * 0.012
+                    )
+                    .position(x: contentRect.midX, y: contentRect.midY)
+            } else {
+                Color.black
+                liveCameraPlayer(in: proxy.size)
+            }
+        }
+    }
+
+    private func liveCameraPlayer(in size: CGSize) -> some View {
+        ZStack {
+            if let camera {
+                VideoEditorLiveCameraPlayer(
+                    player: player,
+                    camera: camera,
+                    cursor: cursor,
+                    interaction: interaction,
+                    timeline: timeline,
+                    size: size
+                )
+            } else {
+                VideoEditorPlayerView(player: player)
+                    .frame(width: size.width, height: size.height)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .clipped()
+    }
+}
+
+private struct VideoEditorLiveCameraPlayer: View {
+    let player: AVPlayer
+    let camera: AutoEditPlan.Camera
+    let cursor: AutoEditPlan.Cursor?
+    let interaction: AutoEditPlan.Interaction?
+    let timeline: VideoEditTimeline?
+    let size: CGSize
+
+    var body: some View {
+        VideoEditorRealtimeCameraPlayerView(
+            player: player,
+            camera: camera,
+            cursor: cursor,
+            interaction: interaction,
+            timeline: timeline
+        )
+        .frame(width: size.width, height: size.height)
+        .clipped()
+    }
+}
+
+private struct VideoEditorRealtimeCameraPlayerView: NSViewRepresentable {
+    let player: AVPlayer
+    let camera: AutoEditPlan.Camera
+    let cursor: AutoEditPlan.Cursor?
+    let interaction: AutoEditPlan.Interaction?
+    let timeline: VideoEditTimeline?
+
+    func makeNSView(context: Context) -> VideoEditorRealtimeCameraNSView {
+        VideoEditorRealtimeCameraNSView(
+            player: player,
+            camera: camera,
+            cursor: cursor,
+            interaction: interaction,
+            timeline: timeline
+        )
+    }
+
+    func updateNSView(
+        _ view: VideoEditorRealtimeCameraNSView,
+        context: Context
+    ) {
+        view.configure(
+            player: player,
+            camera: camera,
+            cursor: cursor,
+            interaction: interaction,
+            timeline: timeline
+        )
+    }
+
+    static func dismantleNSView(
+        _ view: VideoEditorRealtimeCameraNSView,
+        coordinator: Void
+    ) {
+        view.stop()
+    }
+}
+
+private final class VideoEditorRealtimeCameraNSView: NSView {
+    private let playerView = AVPlayerView()
+    private let cursorOverlayView = VideoEditorCursorOverlayNSView()
+    private var camera: AutoEditPlan.Camera
+    private var timeline: VideoEditTimeline?
+    private var displayTimer: Timer?
+    private var lastFrame = CGRect.null
+
+    init(
+        player: AVPlayer,
+        camera: AutoEditPlan.Camera,
+        cursor: AutoEditPlan.Cursor?,
+        interaction: AutoEditPlan.Interaction?,
+        timeline: VideoEditTimeline?
+    ) {
+        self.camera = camera
+        self.timeline = timeline
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        playerView.player = player
+        playerView.controlsStyle = .none
+        playerView.videoGravity = .resizeAspect
+        playerView.setAccessibilityElement(false)
+        playerView.setAccessibilityHidden(true)
+        addSubview(playerView)
+        cursorOverlayView.configure(cursor: cursor, interaction: interaction)
+        addSubview(cursorOverlayView)
+
+        let timer = Timer(
+            timeInterval: 1.0 / 60.0,
+            target: self,
+            selector: #selector(displayTick(_:)),
+            userInfo: nil,
+            repeats: true
+        )
+        RunLoop.main.add(timer, forMode: .common)
+        displayTimer = timer
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        cursorOverlayView.frame = bounds
+        lastFrame = .null
+        updateCameraFrame()
+    }
+
+    func configure(
+        player: AVPlayer,
+        camera: AutoEditPlan.Camera,
+        cursor: AutoEditPlan.Cursor?,
+        interaction: AutoEditPlan.Interaction?,
+        timeline: VideoEditTimeline?
+    ) {
+        if playerView.player !== player { playerView.player = player }
+        self.camera = camera
+        self.timeline = timeline
+        cursorOverlayView.configure(cursor: cursor, interaction: interaction)
+        lastFrame = .null
+        updateCameraFrame()
+    }
+
+    func stop() {
+        displayTimer?.invalidate()
+        displayTimer = nil
+        playerView.player = nil
+    }
+
+    @objc private func displayTick(_ timer: Timer) {
+        updateCameraFrame()
+    }
+
+    private func updateCameraFrame() {
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        let outputTime = playerView.player?.currentTime().seconds ?? 0
+        let sourceTime = timeline?.position(atOutputTime: outputTime)?.sourceTimeSeconds
+            ?? outputTime
+        let cameraState = EffectTimeline.effectiveCameraState(
+            at: sourceTime,
+            camera: camera
+        )
+        cursorOverlayView.update(
+            sourceTime: sourceTime,
+            cameraState: cameraState,
+            sourcePixelWidth: playerView.player?.currentItem?.presentationSize.width
+        )
+        let transform = VideoEditorCanvasPreviewLayout.cameraTransform(
+            in: bounds.size,
+            camera: camera,
+            sourceTimeSeconds: sourceTime
+        )
+        let frame = VideoEditorCanvasPreviewLayout.playerFrame(
+            in: bounds.size,
+            transform: transform
+        )
+        guard !frame.approximatelyEquals(lastFrame) else { return }
+        lastFrame = frame
+        playerView.frame = frame
+    }
+}
+
+private extension CGRect {
+    func approximatelyEquals(_ other: CGRect, tolerance: CGFloat = 0.02) -> Bool {
+        abs(minX - other.minX) <= tolerance
+            && abs(minY - other.minY) <= tolerance
+            && abs(width - other.width) <= tolerance
+            && abs(height - other.height) <= tolerance
     }
 }
 

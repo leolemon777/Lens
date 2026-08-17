@@ -3,22 +3,39 @@ import SwiftUI
 
 @MainActor
 final class RecordingControlWindowController {
+    // The outer transparent inset is part of the SwiftUI surface. Keeping the
+    // panel at the view's natural 110 pt height prevents the glass rim from
+    // being compressed or clipped while still making the primary strip compact.
+    static let panelSize = NSSize(width: 590, height: 110)
+
     private let model = RecordingControlModel()
     private let panel: RecordingPanel
     private var levelTimer: Timer?
     private var storageTimer: Timer?
     private var levelProvider: (() -> (system: Double, microphone: Double))?
+    private var eventCaptureHealthProvider: (() -> EventCaptureHealth)?
+    private var capturePerformanceProvider: (() -> CapturePerformanceSnapshot?)?
+    private var cachedEventCaptureHealth: EventCaptureHealth = .checking
+    private var cachedCapturePerformance: CapturePerformanceSnapshot?
+    private var lastEventHealthSampleUptime = -Double.infinity
+    private var lastPerformanceSampleUptime = -Double.infinity
     private var storageURL: URL?
     private var didReportCriticalStorage = false
+    private var hasPositionedPanel = false
     var onStop: (() -> Void)?
     var onPauseToggle: (() -> Void)?
     var onDiscardAndRestart: (() -> Void)?
+    var onHide: (() -> Void)?
+    var onVisibilityChange: ((Bool) -> Void)?
     var onCriticalStorage: ((Int64?) -> Void)?
+
+    var isVisible: Bool { panel.isVisible }
+    var panelForTesting: NSPanel { panel }
 
     init() {
         panel = RecordingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 590, height: 98),
-            styleMask: [.borderless, .fullSizeContentView],
+            contentRect: NSRect(origin: .zero, size: Self.panelSize),
+            styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -31,7 +48,9 @@ final class RecordingControlWindowController {
         capturesMicrophone: Bool,
         capturesCamera: Bool,
         storageURL: URL,
-        levelProvider: @escaping () -> (system: Double, microphone: Double)
+        levelProvider: @escaping () -> (system: Double, microphone: Double),
+        eventCaptureHealthProvider: @escaping () -> EventCaptureHealth,
+        capturePerformanceProvider: @escaping () -> CapturePerformanceSnapshot?
     ) {
         model.reset(
             sourceTitle: sourceTitle,
@@ -40,8 +59,15 @@ final class RecordingControlWindowController {
             capturesCamera: capturesCamera
         )
         self.levelProvider = levelProvider
+        self.eventCaptureHealthProvider = eventCaptureHealthProvider
+        self.capturePerformanceProvider = capturePerformanceProvider
+        cachedEventCaptureHealth = .checking
+        cachedCapturePerformance = nil
+        lastEventHealthSampleUptime = -Double.infinity
+        lastPerformanceSampleUptime = -Double.infinity
         self.storageURL = storageURL
         didReportCriticalStorage = false
+        hasPositionedPanel = false
         startLevelUpdates()
         startStorageUpdates()
         showExisting()
@@ -50,9 +76,9 @@ final class RecordingControlWindowController {
     func showExisting() {
         startLevelUpdates()
         startStorageUpdates()
-        positionPanel()
-        NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
+        ensurePanelIsOnScreen()
+        panel.orderFrontRegardless()
+        onVisibilityChange?(true)
     }
 
     func hide() {
@@ -61,6 +87,7 @@ final class RecordingControlWindowController {
         storageTimer?.invalidate()
         storageTimer = nil
         panel.orderOut(nil)
+        onVisibilityChange?(false)
     }
 
     func setPaused(_ paused: Bool) {
@@ -76,16 +103,34 @@ final class RecordingControlWindowController {
         onDiscardAndRestart?()
     }
 
+    func requestHide() {
+        hide()
+        onHide?()
+    }
+
     private func configurePanel() {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.hidesOnDeactivate = false
+        panel.isFloatingPanel = true
+        // `isFloatingPanel` resets the AppKit level to `.floating`, so the
+        // always-on recording affordance must assign its final level after it.
+        panel.level = .statusBar
+        panel.worksWhenModal = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.animationBehavior = .none
+        panel.collectionBehavior = [
+            .canJoinAllSpaces,
+            .fullScreenAuxiliary,
+            .stationary,
+            .ignoresCycle
+        ]
         panel.isMovableByWindowBackground = true
         panel.onEscape = { [weak self] in self?.stop() }
         let root = RecordingControlView(
             model: model,
+            onHide: { [weak self] in self?.requestHide() },
             onPauseToggle: { [weak self] in self?.onPauseToggle?() },
             onDiscardAndRestart: { [weak self] in self?.requestDiscardAndRestart() },
             onStop: { [weak self] in self?.stop() }
@@ -93,7 +138,11 @@ final class RecordingControlWindowController {
         panel.contentView = NSHostingView(rootView: root)
     }
 
-    private func positionPanel() {
+    private func ensurePanelIsOnScreen() {
+        if hasPositionedPanel,
+           NSScreen.screens.contains(where: { $0.visibleFrame.intersects(panel.frame) }) {
+            return
+        }
         let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
             ?? NSScreen.main
             ?? NSScreen.screens.first
@@ -102,16 +151,29 @@ final class RecordingControlWindowController {
             x: screen.visibleFrame.midX - panel.frame.width / 2,
             y: screen.visibleFrame.minY + 26
         ))
+        hasPositionedPanel = true
     }
 
     private func startLevelUpdates() {
         guard levelTimer == nil, levelProvider != nil else { return }
-        let timer = Timer(timeInterval: 0.08, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 0.06, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let levels = self.levelProvider?() else { return }
-                self.model.updateAudioLevels(
+                let now = ProcessInfo.processInfo.systemUptime
+                if now - self.lastEventHealthSampleUptime >= 0.25 {
+                    self.cachedEventCaptureHealth = self.eventCaptureHealthProvider?()
+                        ?? .checking
+                    self.lastEventHealthSampleUptime = now
+                }
+                if now - self.lastPerformanceSampleUptime >= 1 {
+                    self.cachedCapturePerformance = self.capturePerformanceProvider?()
+                    self.lastPerformanceSampleUptime = now
+                }
+                self.model.updateLiveStatus(
                     system: levels.system,
-                    microphone: levels.microphone
+                    microphone: levels.microphone,
+                    eventHealth: self.cachedEventCaptureHealth,
+                    performance: self.cachedCapturePerformance
                 )
             }
         }

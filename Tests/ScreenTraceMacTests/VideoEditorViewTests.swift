@@ -1,5 +1,6 @@
 import AppKit
 import AVKit
+import Combine
 import ScreenTraceCore
 import SwiftUI
 import XCTest
@@ -7,6 +8,202 @@ import XCTest
 
 @MainActor
 final class VideoEditorViewTests: XCTestCase {
+    func testAccessibilityAuditRequiresNamedEditorSliders() throws {
+        let source = try String(
+            contentsOf: videoEditorSourceURL("Sources/ScreenTraceMac/UI/VideoEditorView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".accessibilityLabel(title)"))
+        XCTAssertTrue(source.contains(".accessibilityLabel(\"转场时长\")"))
+        XCTAssertTrue(source.contains(".accessibilityLabel(\"光标平滑窗口\")"))
+        XCTAssertTrue(source.contains(".accessibilityLabel(\"预览播放位置\")"))
+    }
+
+    func testPlaybackClockTicksDoNotInvalidateTheWholeEditor() {
+        let playback = VideoEditorPlaybackController()
+        var editorInvalidations = 0
+        let observation = playback.objectWillChange.sink {
+            editorInvalidations += 1
+        }
+
+        playback.clock.update(0.25)
+        playback.clock.update(0.50)
+        playback.clock.update(0.75)
+
+        XCTAssertEqual(editorInvalidations, 0)
+        playback.settlePlayhead()
+        XCTAssertEqual(editorInvalidations, 1)
+        withExtendedLifetime(observation) {}
+    }
+
+    func testCompletedBackgroundPreviewCanWaitWithoutInterruptingRawPlayback() throws {
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTrace-ready-preview-\(UUID().uuidString).mp4")
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        try Data([0]).write(to: temporaryURL)
+        let playback = VideoEditorPlaybackController()
+        defer { playback.stop() }
+
+        playback.updateRenderedPreview(
+            url: temporaryURL,
+            timeline: VideoEditTimeline(sourceDurationSeconds: 2),
+            switchesImmediately: false
+        )
+
+        XCTAssertTrue(playback.canShowRenderedPreview)
+        XCTAssertFalse(playback.isShowingRenderedPreview)
+        XCTAssertFalse(playback.isLoading)
+    }
+
+    func testCanvasBackgroundPresetsAreVariedUniqueAndKeepCoreChoices() throws {
+        let presets = VideoEditorCanvasBackgroundPreset.all
+
+        XCTAssertEqual(presets.count, 12)
+        XCTAssertEqual(Set(presets.map(\.id)).count, presets.count)
+        XCTAssertEqual(
+            Set(presets.map { "\($0.topHex)-\($0.bottomHex)" }).count,
+            presets.count
+        )
+        XCTAssertTrue(presets.contains { $0.title == "雾灰" })
+        XCTAssertTrue(presets.contains { $0.title == "蓝紫" })
+        XCTAssertTrue(presets.contains { $0.title == "极光" })
+        XCTAssertTrue(presets.contains { $0.title == "午夜" })
+
+        let naturalCanvas = try XCTUnwrap(AutoEditPlan().canvas)
+        XCTAssertEqual(presets.first { $0.matches(naturalCanvas) }?.title, "雾灰")
+    }
+
+    func testCanvasPreviewLayoutMatchesFinalRendererInsetsAndCornerRadius() {
+        let size = CGSize(width: 1_000, height: 500)
+        let rect = VideoEditorCanvasPreviewLayout.contentRect(in: size, margin: 0.07)
+
+        XCTAssertEqual(rect.minX, 70, accuracy: 0.000_001)
+        XCTAssertEqual(rect.minY, 35, accuracy: 0.000_001)
+        XCTAssertEqual(rect.width, 860, accuracy: 0.000_001)
+        XCTAssertEqual(rect.height, 430, accuracy: 0.000_001)
+        XCTAssertEqual(
+            VideoEditorCanvasPreviewLayout.cornerRadius(in: size, amount: 0.03),
+            15,
+            accuracy: 0.000_001
+        )
+    }
+
+    func testCanvasPreviewLayoutClampsInvalidValuesLikeFinalRenderer() {
+        let size = CGSize(width: 800, height: 400)
+
+        XCTAssertEqual(
+            VideoEditorCanvasPreviewLayout.contentRect(in: size, margin: 0.5),
+            CGRect(x: 200, y: 100, width: 400, height: 200)
+        )
+        XCTAssertEqual(
+            VideoEditorCanvasPreviewLayout.cornerRadius(in: size, amount: .infinity),
+            0
+        )
+    }
+
+    func testLivePreviewCameraTransformMatchesRenderedViewportCenter() {
+        var camera = AutoEditPlan.Camera(
+            mode: "event-driven",
+            zoomIntensity: 0.42,
+            followPointer: true
+        )
+        camera.keyframes = [
+            AutoEditPlan.CameraKeyframe(
+                time: 0,
+                scale: 1,
+                center: TracePoint(x: 0.5, y: 0.5),
+                easing: "linear",
+                reason: .baseline
+            ),
+            AutoEditPlan.CameraKeyframe(
+                time: 1,
+                scale: 2,
+                center: TracePoint(x: 0.25, y: 0.75),
+                easing: "linear",
+                reason: .clickFocus
+            )
+        ]
+
+        let transform = VideoEditorCanvasPreviewLayout.cameraTransform(
+            in: CGSize(width: 1_000, height: 500),
+            camera: camera,
+            sourceTimeSeconds: 1
+        )
+
+        XCTAssertEqual(transform.scale, 2, accuracy: 0.000_001)
+        XCTAssertEqual(transform.offset.width, 500, accuracy: 0.000_001)
+        XCTAssertEqual(transform.offset.height, -250, accuracy: 0.000_001)
+    }
+
+    func testLivePreviewCameraTransformBypassesDisabledMotion() {
+        var camera = AutoEditPlan.Camera(
+            mode: "event-driven",
+            zoomIntensity: 0.42,
+            followPointer: true
+        )
+        camera.mode = "off"
+        camera.keyframes = [
+            AutoEditPlan.CameraKeyframe(
+                time: 1,
+                scale: 2.4,
+                center: TracePoint(x: 0.25, y: 0.75),
+                easing: "linear",
+                reason: .clickFocus
+            )
+        ]
+
+        let transform = VideoEditorCanvasPreviewLayout.cameraTransform(
+            in: CGSize(width: 1_000, height: 500),
+            camera: camera,
+            sourceTimeSeconds: 1
+        )
+
+        XCTAssertEqual(transform.scale, 1)
+        XCTAssertEqual(transform.offset, CGSize.zero)
+    }
+
+    func testLivePreviewCameraTransformClampsViewportToSourceEdgesLikeRenderer() {
+        let camera = AutoEditPlan.Camera(
+            mode: "event-driven",
+            zoomIntensity: 0.42,
+            followPointer: true,
+            keyframes: [
+                AutoEditPlan.CameraKeyframe(
+                    time: 0,
+                    scale: 2,
+                    center: TracePoint(x: 0.05, y: 0.95),
+                    easing: "linear",
+                    reason: .clickFocus
+                )
+            ]
+        )
+
+        let transform = VideoEditorCanvasPreviewLayout.cameraTransform(
+            in: CGSize(width: 1_000, height: 500),
+            camera: camera,
+            sourceTimeSeconds: 0
+        )
+
+        XCTAssertEqual(transform.scale, 2, accuracy: 0.000_001)
+        XCTAssertEqual(transform.offset.width, 500, accuracy: 0.000_001)
+        XCTAssertEqual(transform.offset.height, -250, accuracy: 0.000_001)
+    }
+
+    func testRealtimeCameraPlayerFrameMatchesSwiftUIViewportTransform() {
+        let transform = VideoEditorCanvasPreviewLayout.CameraTransform(
+            scale: 2,
+            offset: CGSize(width: 500, height: -250)
+        )
+
+        let frame = VideoEditorCanvasPreviewLayout.playerFrame(
+            in: CGSize(width: 1_000, height: 500),
+            transform: transform
+        )
+
+        XCTAssertEqual(frame, CGRect(x: 0, y: 0, width: 2_000, height: 1_000))
+    }
+
     func testLoadedPlayerUsesNativeAVPlayerViewWithoutSwiftUIVideoPlayerMetadata() throws {
         let model = VideoEditorModel(
             plan: AutoEditPlan(),
@@ -22,6 +219,7 @@ final class VideoEditorViewTests: XCTestCase {
             playback: playback,
             title: "已加载播放器回归",
             onSave: {},
+            onExport: {},
             onClose: {}
         ))
         hostingView.frame = CGRect(x: 0, y: 0, width: 1_260, height: 780)
@@ -120,6 +318,7 @@ final class VideoEditorViewTests: XCTestCase {
             title: "Safari 产品演示",
             initialInspectorSection: inspectorSnapshotPath == nil ? nil : .captions,
             onSave: {},
+            onExport: {},
             onClose: {}
         )
         let hostingView = NSHostingView(rootView: root)
@@ -196,6 +395,7 @@ final class VideoEditorViewTests: XCTestCase {
             playback: playback,
             title: "深色高对比度回归",
             onSave: {},
+            onExport: {},
             onClose: {}
         )
         .environment(\.colorScheme, .dark)
@@ -230,6 +430,7 @@ final class VideoEditorViewTests: XCTestCase {
             playback: playback,
             title: "降低透明度与动态效果回归",
             onSave: {},
+            onExport: {},
             onClose: {}
         )
         .traceAccessibilityOverrides(reduceTransparency: true, reduceMotion: true)
@@ -248,6 +449,74 @@ final class VideoEditorViewTests: XCTestCase {
         XCTAssertGreaterThan(png.count, 35_000)
     }
 
+    func testRealtimeRawOverlayRendersCursorClickAndDragState() throws {
+        func visiblePixelCount(
+            kind: PointerEventKind,
+            interaction: AutoEditPlan.Interaction? = nil
+        ) throws -> Int {
+            let view = VideoEditorCursorOverlayNSView(
+                frame: CGRect(x: 0, y: 0, width: 640, height: 360)
+            )
+            view.configure(
+                cursor: AutoEditPlan.Cursor(
+                    appearance: .highContrast,
+                    motionEffect: .none,
+                    smoothing: 0,
+                    scale: 1.6,
+                    hidesWhenIdle: false,
+                    keyframes: [
+                        AutoEditPlan.CursorKeyframe(
+                            time: 0,
+                            position: TracePoint(x: 0.5, y: 0.5),
+                            kind: kind
+                        )
+                    ]
+                ),
+                interaction: interaction
+            )
+            view.update(
+                sourceTime: 0.2,
+                cameraState: CameraFrameState(
+                    scale: 1,
+                    center: TracePoint(x: 0.5, y: 0.5)
+                )
+            )
+            view.layoutSubtreeIfNeeded()
+            let representation = try XCTUnwrap(
+                view.bitmapImageRepForCachingDisplay(in: view.bounds)
+            )
+            view.cacheDisplay(in: view.bounds, to: representation)
+            var count = 0
+            for y in stride(from: 0, to: representation.pixelsHigh, by: 2) {
+                for x in stride(from: 0, to: representation.pixelsWide, by: 2) {
+                    if (representation.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.01 {
+                        count += 1
+                    }
+                }
+            }
+            return count
+        }
+
+        let pointerOnly = try visiblePixelCount(kind: .moved)
+        let dragging = try visiblePixelCount(kind: .dragged)
+        let clicking = try visiblePixelCount(
+            kind: .moved,
+            interaction: AutoEditPlan.Interaction(
+                clickPulses: [
+                    AutoEditPlan.ClickPulse(
+                        time: 0,
+                        position: TracePoint(x: 0.5, y: 0.5),
+                        button: .left
+                    )
+                ]
+            )
+        )
+
+        XCTAssertGreaterThan(pointerOnly, 20)
+        XCTAssertGreaterThan(dragging, pointerOnly)
+        XCTAssertGreaterThan(clicking, pointerOnly)
+    }
+
     private func firstSubview<View: NSView>(
         of type: View.Type,
         in root: NSView
@@ -262,4 +531,12 @@ final class VideoEditorViewTests: XCTestCase {
         }
         return nil
     }
+}
+
+private func videoEditorSourceURL(_ relativePath: String) -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent(relativePath)
 }

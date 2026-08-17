@@ -24,7 +24,7 @@ private struct TraceToastView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .traceGlassPanel(cornerRadius: 20)
+        .traceGlassSurface(role: .panel, cornerRadius: 20)
         .padding(24)
     }
 }
@@ -43,7 +43,7 @@ final class ToastWindowController {
         panel.orderFrontRegardless()
 
         dismissTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(2.4))
+            try? await Task.sleep(for: .seconds(3.2))
             guard !Task.isCancelled else { return }
             self?.panel?.orderOut(nil)
         }

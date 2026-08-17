@@ -6,6 +6,7 @@ struct PermissionCenterView: View {
     @ObservedObject var appModel: AppModel
     let onShortcutsChanged: () -> Void
     let onClose: () -> Void
+    private let buildIdentity = BuildIdentity.current
 
     var body: some View {
         VStack(spacing: 0) {
@@ -15,6 +16,7 @@ struct PermissionCenterView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     shortcutsSection
                     permissionsSection
+                    buildIdentitySection
                     diagnosticsSection
                     privacyNote
                 }
@@ -23,7 +25,7 @@ struct PermissionCenterView: View {
         }
         .padding(20)
         .frame(width: 610, height: 560)
-        .traceGlassPanel(cornerRadius: 30)
+        .traceGlassSurface(role: .window, cornerRadius: TraceGlassMetrics.windowCornerRadius)
         .padding(34)
     }
 
@@ -105,7 +107,7 @@ struct PermissionCenterView: View {
                 )
             }
             .padding(11)
-            .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .traceGlassSurface(role: .card, cornerRadius: 18)
             Text("无 Fn 备用：Control + Option + 1 快速截图，Control + Option + 2 打开操作中心。")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -123,11 +125,7 @@ struct PermissionCenterView: View {
                     }
                 }
             }
-            .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(.white.opacity(0.10), lineWidth: 1)
-            )
+            .traceGlassSurface(role: .card, cornerRadius: 18)
         }
     }
 
@@ -180,6 +178,40 @@ struct PermissionCenterView: View {
         }
         .padding(12)
         .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var buildIdentitySection: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            sectionTitle("当前版本", symbol: "shippingbox.fill")
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: "app.badge.checkmark.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.cyan)
+                    .frame(width: 30, height: 30)
+                    .background(.cyan.opacity(0.10), in: Circle())
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(buildIdentity.displayVersion)
+                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                    Text(buildIdentity.displayDetail)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    if let executableURL = buildIdentity.executableURL {
+                        Text(executableURL.path)
+                            .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(12)
+            .traceGlassSurface(role: .card, cornerRadius: 18)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "当前版本 \(buildIdentity.displayVersion)，\(buildIdentity.displayDetail)"
+        )
     }
 
     private func sectionTitle(_ title: String, symbol: String) -> some View {

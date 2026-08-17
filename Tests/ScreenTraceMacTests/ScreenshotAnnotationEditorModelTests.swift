@@ -238,6 +238,59 @@ final class ScreenshotAnnotationEditorModelTests: XCTestCase {
         XCTAssertEqual(model.annotations[0].style.color, .blue)
     }
 
+    func testGradientColorAndEffectStrengthApplyToNewAndSelectedAnnotations() {
+        let model = makeModel()
+        model.setGradient(start: .orange, end: .pink)
+        model.activateDrawingTool(.arrow)
+        _ = model.commitDraft(
+            start: TracePoint(x: 0.1, y: 0.1),
+            end: TracePoint(x: 0.7, y: 0.6)
+        )
+        XCTAssertEqual(model.annotations[0].style.color, .orange)
+        XCTAssertEqual(model.annotations[0].style.gradientEndColor, .pink)
+
+        model.activateDrawingTool(.pixelate)
+        model.setEffectIntensity(0.026)
+        _ = model.commitDraft(
+            start: TracePoint(x: 0.2, y: 0.2),
+            end: TracePoint(x: 0.5, y: 0.5)
+        )
+        XCTAssertEqual(model.annotations[1].style.intensity, 0.026, accuracy: 0.000_001)
+
+        model.activateSelectionTool()
+        model.beginSelectionInteraction(
+            at: TracePoint(x: 0.35, y: 0.35),
+            hitTolerance: 0.01,
+            handleTolerance: 0.01
+        )
+        model.endSelectionInteraction()
+        model.setEffectIntensity(0.012)
+        XCTAssertEqual(model.selectedAnnotation?.style.intensity ?? 0, 0.012, accuracy: 0.000_001)
+    }
+
+    func testRenderingStateRejectsOverlappingCopySaveAndExportWork() {
+        let model = makeModel()
+
+        XCTAssertTrue(model.beginRendering())
+        XCTAssertTrue(model.isRendering)
+        XCTAssertFalse(model.beginRendering())
+
+        model.endRendering()
+        XCTAssertFalse(model.isRendering)
+        XCTAssertTrue(model.beginRendering())
+        model.endRendering()
+    }
+
+    func testClipboardFeedbackReportsTheLatestCopyOutcomeImmediately() {
+        let model = makeModel()
+
+        model.showClipboardFeedback(succeeded: true)
+        XCTAssertEqual(model.clipboardFeedback, .copied)
+
+        model.showClipboardFeedback(succeeded: false)
+        XCTAssertEqual(model.clipboardFeedback, .failed)
+    }
+
     private func makeModel() -> ScreenshotAnnotationEditorModel {
         ScreenshotAnnotationEditorModel(
             sourceDimensions: TraceDimensions(width: 1_000, height: 600)

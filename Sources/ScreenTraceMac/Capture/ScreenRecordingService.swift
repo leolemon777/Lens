@@ -1,8 +1,38 @@
 import AppKit
 import AVFoundation
 import CoreMedia
+import CoreVideo
 @preconcurrency import ScreenCaptureKit
 import ScreenTraceCore
+
+enum RecordingOptionalTrack: String, Sendable, CaseIterable, Hashable {
+    case microphone
+    case camera
+}
+
+/// Per-recording availability for optional capture tracks. A disconnected
+/// microphone or camera must never prevent the primary screen recording from
+/// pausing, resuming, or being finalized. This state is deliberately reset for
+/// every new recording so the user's next session probes devices again.
+struct RecordingOptionalTrackAvailability: Equatable, Sendable {
+    private(set) var disabledTracks: Set<RecordingOptionalTrack> = []
+
+    @discardableResult
+    mutating func disable(_ track: RecordingOptionalTrack) -> Bool {
+        disabledTracks.insert(track).inserted
+    }
+
+    func isEnabled(
+        _ track: RecordingOptionalTrack,
+        requestedOptions: ScreenRecordingOptions
+    ) -> Bool {
+        guard !disabledTracks.contains(track) else { return false }
+        switch track {
+        case .microphone: return requestedOptions.capturesMicrophone
+        case .camera: return requestedOptions.capturesCamera
+        }
+    }
+}
 
 enum ScreenRecordingError: LocalizedError {
     case alreadyRecording
@@ -37,11 +67,76 @@ struct ScreenRecordingOptions: Sendable {
     var capturesSystemAudio = true
     var capturesMicrophone = false
     var capturesCamera = false
+    var excludesCurrentProcessAudio = true
+    var excludesCurrentProcessWindows = true
+    var initialEditPlan: AutoEditPlan?
 }
 
 struct DiscardedRecording: Sendable {
     let packageURL: URL
     let source: RecordingCaptureSource
+}
+
+struct WindowSourceLossDetector: Sendable {
+    let requiredConsecutiveMisses: Int
+    private(set) var consecutiveMisses = 0
+
+    init(requiredConsecutiveMisses: Int = 2) {
+        self.requiredConsecutiveMisses = max(requiredConsecutiveMisses, 1)
+    }
+
+    mutating func record(isAvailable: Bool) -> Bool {
+        if isAvailable {
+            consecutiveMisses = 0
+            return false
+        }
+        consecutiveMisses += 1
+        return consecutiveMisses >= requiredConsecutiveMisses
+    }
+}
+
+private final class ScreenCaptureOutputRouter: NSObject, SCStreamOutput,
+    @unchecked Sendable {
+    private let videoWriter: ScreenVideoTrackWriter
+    private let systemAudioWriter: SystemAudioTrackWriter?
+    private let metricsLock = NSLock()
+    private var rawAudioCallbackCount = 0
+
+    var audioCallbackCount: Int {
+        metricsLock.withLock { rawAudioCallbackCount }
+    }
+
+    init(
+        videoWriter: ScreenVideoTrackWriter,
+        systemAudioWriter: SystemAudioTrackWriter?
+    ) {
+        self.videoWriter = videoWriter
+        self.systemAudioWriter = systemAudioWriter
+    }
+
+    func stream(
+        _ stream: SCStream,
+        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+        of type: SCStreamOutputType
+    ) {
+        switch type {
+        case .screen:
+            videoWriter.stream(
+                stream,
+                didOutputSampleBuffer: sampleBuffer,
+                of: type
+            )
+        case .audio:
+            metricsLock.withLock { rawAudioCallbackCount += 1 }
+            systemAudioWriter?.stream(
+                stream,
+                didOutputSampleBuffer: sampleBuffer,
+                of: type
+            )
+        default:
+            break
+        }
+    }
 }
 
 @MainActor
@@ -50,12 +145,26 @@ final class ScreenRecordingService: NSObject {
     private let pointerRecorder: PointerEventRecorder
     private let systemAudioMeter = AudioLevelMeter()
     private let microphoneMeter = AudioLevelMeter()
-    private lazy var systemAudioMonitor = SystemAudioLevelMonitor(meter: systemAudioMeter)
-    private lazy var microphoneRecorder = MicrophoneTrackRecorder(levelMeter: microphoneMeter)
-    private let cameraRecorder = CameraTrackRecorder()
+    private lazy var microphoneRecorder: MicrophoneTrackRecorder = {
+        let recorder = MicrophoneTrackRecorder(levelMeter: microphoneMeter)
+        recorder.onUnexpectedStop = { [weak self] error in
+            self?.recordOptionalTrackInterruption(.microphone, error: error)
+        }
+        return recorder
+    }()
+    private lazy var cameraRecorder: CameraTrackRecorder = {
+        let recorder = CameraTrackRecorder()
+        recorder.onUnexpectedStop = { [weak self] error in
+            self?.recordOptionalTrackInterruption(.camera, error: error)
+        }
+        return recorder
+    }()
     private let segmentAssembler = RecordingSegmentAssembler()
+    private lazy var artifactValidator = RecordingArtifactValidator(store: store)
     private var stream: SCStream?
-    private var recordingOutput: SCRecordingOutput?
+    private var recordingWriter: ScreenVideoTrackWriter?
+    private var systemAudioWriter: SystemAudioTrackWriter?
+    private var captureOutputRouter: ScreenCaptureOutputRouter?
     private var session: RecordingTraceSession?
     private var source: RecordingCaptureSource?
     private var options: ScreenRecordingOptions?
@@ -65,18 +174,22 @@ final class ScreenRecordingService: NSObject {
     private var accumulatedActiveDuration: TimeInterval = 0
     private var nextSegmentIndex = 1
     private var isTransitioning = false
+    private var windowSourceMonitorTask: Task<Void, Never>?
+    private var optionalTrackAvailability = RecordingOptionalTrackAvailability()
+    private var pendingOptionalTrackInterruptions: [RecordingOptionalTrack: Error] = [:]
 
-    private var stopContinuation: CheckedContinuation<Void, Error>?
-    private var stopCaptureCompleted = false
-    private var recordingOutputFinished = false
-    private var stopFailure: Error?
-    private var stopGeneration = 0
     private var unexpectedCaptureFailure: Error?
     private var streamStoppedUnexpectedly = false
-    private var outputFinishedUnexpectedly = false
     private(set) var lastMicrophoneError: Error?
     private(set) var lastCameraError: Error?
+    private(set) var lastCaptureInterruptionError: Error?
+    private(set) var lastCapturePerformanceSnapshot: CapturePerformanceSnapshot?
+    private(set) var lastSystemAudioCaptureSnapshot: SystemAudioCaptureSnapshot?
+    private(set) var lastRawSystemAudioCallbackCount = 0
+    private(set) var lastRecordingHealthReport: RecordingHealthReport?
     private(set) var isPaused = false
+    var onUnexpectedCaptureStop: ((Error) -> Void)?
+    var onOptionalTrackInterruption: ((RecordingOptionalTrack, Error) -> Void)?
 
     init(store: TraceProjectStore, pointerRecorder: PointerEventRecorder) {
         self.store = store
@@ -87,6 +200,58 @@ final class ScreenRecordingService: NSObject {
     var audioLevels: (system: Double, microphone: Double) {
         (systemAudioMeter.level, microphoneMeter.level)
     }
+    var eventCaptureSnapshot: EventCaptureSnapshot {
+        pointerRecorder.eventCaptureSnapshot
+    }
+    var usesEmbeddedCursorFallback: Bool {
+        pointerRecorder.requiresEmbeddedCursorFallback
+    }
+    var capturePerformanceSnapshot: CapturePerformanceSnapshot? {
+        recordingWriter?.performanceSnapshot ?? lastCapturePerformanceSnapshot
+    }
+
+    private var interruptedRawTrackKinds: Set<RecordingRawTrackKind> {
+        Set(optionalTrackAvailability.disabledTracks.map {
+            switch $0 {
+            case .microphone: .microphone
+            case .camera: .camera
+            }
+        })
+    }
+
+    private func recordOptionalTrackInterruption(
+        _ track: RecordingOptionalTrack,
+        error: Error
+    ) {
+        guard session != nil,
+              optionalTrackAvailability.disable(track) else { return }
+        switch track {
+        case .microphone:
+            lastMicrophoneError = lastMicrophoneError ?? error
+        case .camera:
+            lastCameraError = lastCameraError ?? error
+        }
+        if isTransitioning {
+            pendingOptionalTrackInterruptions[track] = error
+        } else {
+            onOptionalTrackInterruption?(track, error)
+        }
+    }
+
+    private func finishTransition() {
+        isTransitioning = false
+        guard session != nil, !pendingOptionalTrackInterruptions.isEmpty else {
+            pendingOptionalTrackInterruptions.removeAll()
+            return
+        }
+        let interruptions = pendingOptionalTrackInterruptions
+        pendingOptionalTrackInterruptions.removeAll()
+        for track in RecordingOptionalTrack.allCases {
+            if let error = interruptions[track] {
+                onOptionalTrackInterruption?(track, error)
+            }
+        }
+    }
 
     func start(
         source: RecordingCaptureSource,
@@ -95,14 +260,25 @@ final class ScreenRecordingService: NSObject {
         guard session == nil else { throw ScreenRecordingError.alreadyRecording }
         guard !isTransitioning else { throw ScreenRecordingError.transitionInProgress }
         isTransitioning = true
-        defer { isTransitioning = false }
+        defer { finishTransition() }
         lastMicrophoneError = nil
         lastCameraError = nil
+        lastCaptureInterruptionError = nil
+        lastCapturePerformanceSnapshot = nil
+        lastSystemAudioCaptureSnapshot = nil
+        lastRawSystemAudioCallbackCount = 0
+        lastRecordingHealthReport = nil
         systemAudioMeter.reset()
         microphoneMeter.reset()
+        optionalTrackAvailability = RecordingOptionalTrackAvailability()
+        pendingOptionalTrackInterruptions.removeAll()
 
         let content = try await shareableContent()
-        let prepared = try prepare(source: source, content: content)
+        let prepared = try prepare(
+            source: source,
+            content: content,
+            excludesCurrentProcessWindows: options.excludesCurrentProcessWindows
+        )
         let session = try store.beginRecording(
             width: prepared.dimensions.width,
             height: prepared.dimensions.height,
@@ -114,7 +290,8 @@ final class ScreenRecordingService: NSObject {
             ),
             includesSystemAudio: options.capturesSystemAudio,
             includesMicrophone: options.capturesMicrophone,
-            includesCamera: options.capturesCamera
+            includesCamera: options.capturesCamera,
+            initialEditPlan: options.initialEditPlan
         )
 
         self.session = session
@@ -152,7 +329,7 @@ final class ScreenRecordingService: NSObject {
         guard !isPaused else { throw ScreenRecordingError.alreadyPaused }
         guard !isTransitioning else { throw ScreenRecordingError.transitionInProgress }
         isTransitioning = true
-        defer { isTransitioning = false }
+        defer { finishTransition() }
 
         do {
             try await finishActiveSegment(session: session)
@@ -170,10 +347,14 @@ final class ScreenRecordingService: NSObject {
         guard isPaused else { throw ScreenRecordingError.notPaused }
         guard !isTransitioning else { throw ScreenRecordingError.transitionInProgress }
         isTransitioning = true
-        defer { isTransitioning = false }
+        defer { finishTransition() }
 
         let content = try await shareableContent()
-        let prepared = try prepare(source: source, content: content)
+        let prepared = try prepare(
+            source: source,
+            content: content,
+            excludesCurrentProcessWindows: options.excludesCurrentProcessWindows
+        )
         let segmentIndex = nextSegmentIndex
         nextSegmentIndex += 1
         let paths = try makeResumedSegmentPaths(
@@ -216,15 +397,19 @@ final class ScreenRecordingService: NSObject {
         guard let session else { throw ScreenRecordingError.notRecording }
         guard !isTransitioning else { throw ScreenRecordingError.transitionInProgress }
         isTransitioning = true
-        defer { isTransitioning = false }
+        defer { finishTransition() }
 
         do {
             if stream != nil {
                 try await finishActiveSegment(session: session)
             }
             let segmentIndex = try store.loadRecordingSegmentIndex(from: session.packageURL)
-            var completedSegments = segmentIndex.segments.filter {
-                ($0.durationSeconds ?? 0) > 0
+            var completedSegments = try await finalizableSegments(
+                from: segmentIndex,
+                session: session
+            )
+            guard !completedSegments.isEmpty else {
+                throw ScreenRecordingError.recordingDidNotFinalize
             }
             completedSegments = try archiveFirstSegmentsIfNeeded(
                 completedSegments,
@@ -232,12 +417,29 @@ final class ScreenRecordingService: NSObject {
             )
             try await assembleScreenSegments(completedSegments, session: session)
             await assembleOptionalTracks(completedSegments, session: session)
-            let duration = segmentIndex.completedDurationSeconds
+            let duration = completedSegments.reduce(0) {
+                $0 + ($1.durationSeconds ?? 0)
+            }
             // 自动处理失败绝不能让已经完成的原始录屏变成失败状态。
             _ = try? store.writeAutoEditPlan(for: session, durationSeconds: duration)
             let saved = try store.finalizeRecording(session, durationSeconds: duration)
+            let report = await artifactValidator.validate(
+                session: session,
+                requestedFramesPerSecond: options?.framesPerSecond
+                    ?? session.manifest.captureSource?.requestedFramesPerSecond
+                    ?? session.manifest.captureSource?.framesPerSecond
+                    ?? 30,
+                eventSnapshot: pointerRecorder.eventCaptureSnapshot,
+                capturePerformance: lastCapturePerformanceSnapshot,
+                interruptedOptionalTracks: interruptedRawTrackKinds
+            )
+            lastRecordingHealthReport = report
+            let validated = (try? store.writeRecordingHealthReport(
+                report,
+                to: session.packageURL
+            )) ?? saved
             clearSession()
-            return saved
+            return validated
         } catch {
             await pointerRecorder.stop()
             await cameraRecorder.cancel()
@@ -254,7 +456,7 @@ final class ScreenRecordingService: NSObject {
         guard let session, let source else { throw ScreenRecordingError.notRecording }
         guard !isTransitioning else { throw ScreenRecordingError.transitionInProgress }
         isTransitioning = true
-        defer { isTransitioning = false }
+        defer { finishTransition() }
 
         do {
             if stream != nil {
@@ -293,9 +495,22 @@ final class ScreenRecordingService: NSObject {
         )
         let index = try store.loadRecordingSegmentIndex(from: candidate.packageURL)
         var completedSegments: [RecordingSegment] = []
+        var hasNonemptyScreenSegment = false
         for var segment in index.segments.sorted(by: { $0.index < $1.index }) {
             let segmentURL = candidate.packageURL.appendingPathComponent(
                 segment.screenRelativePath
+            )
+            hasNonemptyScreenSegment = hasNonemptyScreenSegment
+                || segmentURL.isNonemptyFile
+            // A SIGKILL can leave independently durable Apple HLS video and
+            // system-audio sequences. Recover the ordinary muxed MP4 before
+            // deciding whether this segment is playable.
+            // If durable system-audio fragments exist but cannot be remuxed,
+            // keep the project interrupted so recovery can be retried. A
+            // video-only "success" would silently discard recoverable audio.
+            _ = try await segmentAssembler.mergeRecoverySystemAudioIfPresent(
+                videoURL: segmentURL,
+                trimVideoToRecoveredAudio: true
             )
             guard let duration = try? await playableVideoDuration(at: segmentURL),
                   duration >= VideoEditTimeline.minimumSegmentDurationSeconds else {
@@ -310,6 +525,15 @@ final class ScreenRecordingService: NSObject {
             completedSegments.append(segment)
         }
         guard !completedSegments.isEmpty else {
+            if !hasNonemptyScreenSegment {
+                // Missing/zero-byte screen media cannot become recoverable on a
+                // later launch. Preserve the package but quarantine it from the
+                // retry queue; nonempty yet currently unreadable media remains
+                // interrupted so a future app update can try again.
+                try? store.markRecordingRecoveryFailed(
+                    packageURL: candidate.packageURL
+                )
+            }
             throw ScreenRecordingError.recordingDidNotFinalize
         }
 
@@ -323,7 +547,26 @@ final class ScreenRecordingService: NSObject {
             $0 + ($1.durationSeconds ?? 0)
         }
         _ = try? store.writeAutoEditPlan(for: session, durationSeconds: duration)
-        return try store.finalizeRecording(session, durationSeconds: duration)
+        let saved = try store.finalizeRecording(session, durationSeconds: duration)
+        let report = await artifactValidator.validate(
+            session: session,
+            requestedFramesPerSecond: manifest.captureSource?.requestedFramesPerSecond
+                ?? manifest.captureSource?.framesPerSecond
+                ?? 30,
+            eventSnapshot: EventCaptureSnapshot(
+                health: .checking,
+                pointerCount: 0,
+                clickCount: 0,
+                keyboardCount: 0,
+                windowCount: 0,
+                lastEventUptime: nil
+            ),
+            capturePerformance: nil
+        )
+        return (try? store.writeRecordingHealthReport(
+            report,
+            to: session.packageURL
+        )) ?? saved
     }
 
     private func startActiveSegment(
@@ -335,32 +578,63 @@ final class ScreenRecordingService: NSObject {
         dimensions: TraceDimensions? = nil
     ) async throws {
         let dimensions = dimensions ?? prepared.dimensions
-        let pipeline = try makeCapturePipeline(
-            source: source,
-            options: options,
-            prepared: prepared,
-            dimensions: dimensions,
-            outputURL: paths.screenURL
-        )
+        var pendingWriter: ScreenVideoTrackWriter?
+        var pendingSystemAudioWriter: SystemAudioTrackWriter?
         do {
-            if let microphoneURL = paths.microphoneURL {
-                try microphoneRecorder.start(outputURL: microphoneURL)
-            }
-            if let cameraURL = paths.cameraURL {
-                try await cameraRecorder.start(outputURL: cameraURL)
-            }
             try pointerRecorder.start(
                 session: session,
                 captureBounds: prepared.captureBounds,
                 trackedWindowID: prepared.trackedWindowID,
                 timelineOffset: accumulatedActiveDuration
             )
+            let pipeline = try makeCapturePipeline(
+                source: source,
+                options: options,
+                prepared: prepared,
+                dimensions: dimensions,
+                outputURL: paths.screenURL,
+                embedsCursorFallback: pointerRecorder.requiresEmbeddedCursorFallback
+            )
+            pendingWriter = pipeline.writer
+            pendingSystemAudioWriter = pipeline.systemAudioWriter
+            if let microphoneURL = paths.microphoneURL {
+                do {
+                    try microphoneRecorder.start(outputURL: microphoneURL)
+                } catch {
+                    recordOptionalTrackInterruption(.microphone, error: error)
+                    removeFailedOptionalTrackStart(
+                        role: .microphone,
+                        paths: paths,
+                        session: session
+                    )
+                }
+            }
+            if let cameraURL = paths.cameraURL {
+                do {
+                    try await cameraRecorder.start(outputURL: cameraURL)
+                } catch {
+                    recordOptionalTrackInterruption(.camera, error: error)
+                    removeFailedOptionalTrackStart(
+                        role: .camera,
+                        paths: paths,
+                        session: session
+                    )
+                }
+            }
             try await startCapture(pipeline.stream)
             stream = pipeline.stream
-            recordingOutput = pipeline.output
+            recordingWriter = pipeline.writer
+            systemAudioWriter = pipeline.systemAudioWriter
+            captureOutputRouter = pipeline.outputRouter
             currentSegmentPaths = paths
             activeSegmentStartedAtUptime = ProcessInfo.processInfo.systemUptime
+            startWindowSourceMonitoring(
+                windowID: prepared.trackedWindowID,
+                stream: pipeline.stream
+            )
         } catch {
+            pendingWriter?.cancel()
+            pendingSystemAudioWriter?.cancel()
             await cameraRecorder.cancel()
             microphoneRecorder.cancel()
             await pointerRecorder.stop()
@@ -416,10 +690,41 @@ final class ScreenRecordingService: NSObject {
         return seconds
     }
 
+    /// Recovers playable media that reached disk before a capture callback or
+    /// pause transition failed to persist the segment duration. Such a segment
+    /// must not be silently omitted from an otherwise successful finalization.
+    func finalizableSegments(
+        from index: RecordingSegmentIndex,
+        session: RecordingTraceSession
+    ) async throws -> [RecordingSegment] {
+        var result: [RecordingSegment] = []
+        for var segment in index.segments.sorted(by: { $0.index < $1.index }) {
+            let mediaURL = session.packageURL.appendingPathComponent(
+                segment.screenRelativePath
+            )
+            guard let duration = try? await playableVideoDuration(at: mediaURL),
+                  duration >= VideoEditTimeline.minimumSegmentDurationSeconds else {
+                continue
+            }
+            if segment.durationSeconds == nil
+                || abs((segment.durationSeconds ?? 0) - duration) > 0.01 {
+                _ = try store.completeRecordingSegment(
+                    index: segment.index,
+                    durationSeconds: duration,
+                    in: session
+                )
+            }
+            segment.durationSeconds = duration
+            result.append(segment)
+        }
+        return result
+    }
+
     private func finishActiveSegment(session: RecordingTraceSession) async throws {
         guard let stream, let paths = currentSegmentPaths else {
             throw ScreenRecordingError.notRecording
         }
+        stopWindowSourceMonitoring()
         let measuredDuration = max(
             0,
             ProcessInfo.processInfo.systemUptime - (activeSegmentStartedAtUptime ?? 0)
@@ -427,7 +732,7 @@ final class ScreenRecordingService: NSObject {
         do {
             try microphoneRecorder.stop()
         } catch {
-            lastMicrophoneError = lastMicrophoneError ?? error
+            recordOptionalTrackInterruption(.microphone, error: error)
             removeEmptyOptionalTrack(role: .microphone, paths: paths, session: session)
         }
         let cameraRecorder = cameraRecorder
@@ -444,7 +749,7 @@ final class ScreenRecordingService: NSObject {
             try await stopCapture(stream)
             await pointerRecorder.stop()
             if let cameraError = await cameraStopTask.value {
-                lastCameraError = lastCameraError ?? cameraError
+                recordOptionalTrackInterruption(.camera, error: cameraError)
                 removeEmptyOptionalTrack(role: .camera, paths: paths, session: session)
             }
             try validateNonemptyFile(at: paths.screenURL)
@@ -464,7 +769,7 @@ final class ScreenRecordingService: NSObject {
         } catch {
             await pointerRecorder.stop()
             if let cameraError = await cameraStopTask.value {
-                lastCameraError = lastCameraError ?? cameraError
+                recordOptionalTrackInterruption(.camera, error: cameraError)
                 removeEmptyOptionalTrack(role: .camera, paths: paths, session: session)
             }
             clearActiveSegment()
@@ -473,35 +778,48 @@ final class ScreenRecordingService: NSObject {
     }
 
     private func stopCapture(_ stream: SCStream) async throws {
-        stopGeneration += 1
-        let generation = stopGeneration
-        stopCaptureCompleted = streamStoppedUnexpectedly
-        recordingOutputFinished = outputFinishedUnexpectedly
-        stopFailure = unexpectedCaptureFailure
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            stopContinuation = continuation
-            if stopCaptureCompleted {
-                finishStopIfPossible()
-            } else {
-                stream.stopCapture { [weak self] error in
-                    Task { @MainActor in
-                        guard let self else { return }
-                        self.stopCaptureCompleted = true
-                        if let error { self.stopFailure = error }
-                        self.finishStopIfPossible()
+        var captureInterruption = unexpectedCaptureFailure
+        recordingWriter?.prepareToFinish()
+        systemAudioWriter?.prepareToFinish()
+        if !streamStoppedUnexpectedly {
+            do {
+                try await withCheckedThrowingContinuation {
+                    (continuation: CheckedContinuation<Void, Error>) in
+                    stream.stopCapture { error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume()
+                        }
                     }
                 }
+            } catch {
+                captureInterruption = captureInterruption ?? error
             }
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(12))
-                guard let self,
-                      self.stopGeneration == generation,
-                      self.stopContinuation != nil else { return }
-                self.stopFailure = ScreenRecordingError.recordingDidNotFinalize
-                self.stopCaptureCompleted = true
-                self.recordingOutputFinished = true
-                self.finishStopIfPossible()
+        }
+        if let recordingWriter {
+            do {
+                try await recordingWriter.finish()
+                lastCapturePerformanceSnapshot = recordingWriter.performanceSnapshot
+            } catch {
+                // A writer failure means there is no trustworthy playable
+                // screen segment. A ScreenCaptureKit stop error is different:
+                // if the writer finalized, preserve and finalize those bytes
+                // instead of forcing the user to relaunch for recovery.
+                throw error
             }
+        }
+        if let systemAudioWriter {
+            try await systemAudioWriter.finish()
+            lastSystemAudioCaptureSnapshot = systemAudioWriter.captureSnapshot
+        }
+        lastRawSystemAudioCallbackCount = captureOutputRouter?.audioCallbackCount ?? 0
+        if let screenURL = currentSegmentPaths?.screenURL {
+            _ = try await segmentAssembler
+                .mergeRecoverySystemAudioIfPresent(videoURL: screenURL)
+        }
+        if let captureInterruption {
+            lastCaptureInterruptionError = captureInterruption
         }
     }
 
@@ -510,8 +828,14 @@ final class ScreenRecordingService: NSObject {
         options: ScreenRecordingOptions,
         prepared: PreparedRecordingSource,
         dimensions: TraceDimensions,
-        outputURL: URL
-    ) throws -> (stream: SCStream, output: SCRecordingOutput) {
+        outputURL: URL,
+        embedsCursorFallback: Bool
+    ) throws -> (
+        stream: SCStream,
+        writer: ScreenVideoTrackWriter,
+        systemAudioWriter: SystemAudioTrackWriter?,
+        outputRouter: ScreenCaptureOutputRouter
+    ) {
         let configuration = SCStreamConfiguration()
         configuration.width = dimensions.width
         configuration.height = dimensions.height
@@ -520,10 +844,11 @@ final class ScreenRecordingService: NSObject {
             timescale: CMTimeScale(max(options.framesPerSecond, 1))
         )
         configuration.queueDepth = 8
-        configuration.showsCursor = false
-        configuration.showMouseClicks = false
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA
+        configuration.showsCursor = embedsCursorFallback
+        configuration.showMouseClicks = embedsCursorFallback
         configuration.capturesAudio = options.capturesSystemAudio
-        configuration.excludesCurrentProcessAudio = true
+        configuration.excludesCurrentProcessAudio = options.excludesCurrentProcessAudio
         configuration.sampleRate = 48_000
         configuration.channelCount = 2
         configuration.captureMicrophone = false
@@ -542,20 +867,51 @@ final class ScreenRecordingService: NSObject {
             configuration: configuration,
             delegate: self
         )
-        if options.capturesSystemAudio {
-            try stream.addStreamOutput(
-                systemAudioMonitor,
-                type: .audio,
-                sampleHandlerQueue: SystemAudioLevelMonitor.queue
+        let writer = try ScreenVideoTrackWriter(
+            outputURL: outputURL,
+            dimensions: dimensions,
+            framesPerSecond: options.framesPerSecond,
+            capturesSystemAudio: false
+        )
+        let systemAudioWriter = try options.capturesSystemAudio
+            ? SystemAudioTrackWriter(
+                outputURL: ScreenVideoTrackWriter.recoverySystemAudioURL(
+                    for: outputURL
+                ),
+                levelMeter: systemAudioMeter
             )
+            : nil
+        let outputRouter = ScreenCaptureOutputRouter(
+            videoWriter: writer,
+            systemAudioWriter: systemAudioWriter
+        )
+        do {
+            try stream.addStreamOutput(
+                outputRouter,
+                type: .screen,
+                sampleHandlerQueue: writer.outputQueue
+            )
+            if options.capturesSystemAudio {
+                guard systemAudioWriter != nil else {
+                    throw ScreenRecordingError.unableToAddRecordingOutput
+                }
+                try stream.addStreamOutput(
+                    outputRouter,
+                    type: .audio,
+                    // ScreenCaptureKit's screen and audio callbacks share one
+                    // serial delivery boundary. The audio writer immediately
+                    // forwards onto its own encoder queue; using two delivery
+                    // queues caused audio callbacks to stop after ~1.25 s on
+                    // real macOS while screen frames continued normally.
+                    sampleHandlerQueue: writer.outputQueue
+                )
+            }
+        } catch {
+            writer.cancel()
+            systemAudioWriter?.cancel()
+            throw error
         }
-        let outputConfiguration = SCRecordingOutputConfiguration()
-        outputConfiguration.outputURL = outputURL
-        outputConfiguration.videoCodecType = .h264
-        outputConfiguration.outputFileType = .mp4
-        let output = SCRecordingOutput(configuration: outputConfiguration, delegate: self)
-        try stream.addRecordingOutput(output)
-        return (stream, output)
+        return (stream, writer, systemAudioWriter, outputRouter)
     }
 
     private func makeResumedSegmentPaths(
@@ -569,10 +925,16 @@ final class ScreenRecordingService: NSObject {
         return RecordingSegmentPaths(
             index: index,
             screenURL: directory.appendingPathComponent("screen-\(suffix).mp4"),
-            microphoneURL: options.capturesMicrophone
+            microphoneURL: optionalTrackAvailability.isEnabled(
+                .microphone,
+                requestedOptions: options
+            )
                 ? directory.appendingPathComponent("microphone-\(suffix).caf")
                 : nil,
-            cameraURL: options.capturesCamera
+            cameraURL: optionalTrackAvailability.isEnabled(
+                .camera,
+                requestedOptions: options
+            )
                 ? directory.appendingPathComponent("camera-\(suffix).mov")
                 : nil
         )
@@ -636,12 +998,20 @@ final class ScreenRecordingService: NSObject {
         session: RecordingTraceSession
     ) async {
         if let microphoneURL = session.microphoneURL {
-            let urls = segments.compactMap(\.microphoneRelativePath).map {
-                session.packageURL.appendingPathComponent($0)
-            }.filter(\.isNonemptyFile)
+            let sources = segments.compactMap { segment -> (URL, Double)? in
+                guard let relativePath = segment.microphoneRelativePath,
+                      let duration = segment.durationSeconds else { return nil }
+                let url = session.packageURL.appendingPathComponent(relativePath)
+                return url.isNonemptyFile ? (url, duration) : nil
+            }
+            let urls = sources.map(\.0)
             if !urls.isEmpty {
                 do {
-                    _ = try segmentAssembler.assembleAudioSegments(urls, outputURL: microphoneURL)
+                    _ = try segmentAssembler.assembleAudioSegments(
+                        urls,
+                        outputURL: microphoneURL,
+                        maximumDurations: sources.map(\.1)
+                    )
                     try store.upsertAsset(
                         TraceAsset(role: .microphone, relativePath: "raw/microphone.caf"),
                         in: session.packageURL
@@ -652,15 +1022,20 @@ final class ScreenRecordingService: NSObject {
             }
         }
         if let cameraURL = session.cameraURL {
-            let urls = segments.compactMap(\.cameraRelativePath).map {
-                session.packageURL.appendingPathComponent($0)
-            }.filter(\.isNonemptyFile)
+            let sources = segments.compactMap { segment -> (URL, Double)? in
+                guard let relativePath = segment.cameraRelativePath,
+                      let duration = segment.durationSeconds else { return nil }
+                let url = session.packageURL.appendingPathComponent(relativePath)
+                return url.isNonemptyFile ? (url, duration) : nil
+            }
+            let urls = sources.map(\.0)
             if !urls.isEmpty {
                 do {
                     _ = try await segmentAssembler.assembleVideoSegments(
                         urls,
                         outputURL: cameraURL,
-                        fileType: .mov
+                        fileType: .mov,
+                        maximumDurations: sources.map(\.1)
                     )
                     try store.upsertAsset(
                         TraceAsset(role: .camera, relativePath: "raw/camera.mov"),
@@ -673,30 +1048,16 @@ final class ScreenRecordingService: NSObject {
         }
     }
 
-    private func finishStopIfPossible() {
-        guard stopCaptureCompleted, recordingOutputFinished, let continuation = stopContinuation else {
-            return
-        }
-        stopContinuation = nil
-        if let stopFailure {
-            continuation.resume(throwing: stopFailure)
-        } else {
-            continuation.resume()
-        }
-    }
-
     private func clearActiveSegment() {
+        stopWindowSourceMonitoring()
         stream = nil
-        recordingOutput = nil
+        recordingWriter = nil
+        systemAudioWriter = nil
+        captureOutputRouter = nil
         currentSegmentPaths = nil
         activeSegmentStartedAtUptime = nil
-        stopCaptureCompleted = false
-        recordingOutputFinished = false
-        stopFailure = nil
-        stopContinuation = nil
         unexpectedCaptureFailure = nil
         streamStoppedUnexpectedly = false
-        outputFinishedUnexpectedly = false
     }
 
     private func clearSession() {
@@ -708,6 +1069,8 @@ final class ScreenRecordingService: NSObject {
         accumulatedActiveDuration = 0
         nextSegmentIndex = 1
         isPaused = false
+        optionalTrackAvailability = RecordingOptionalTrackAvailability()
+        pendingOptionalTrackInterruptions.removeAll()
         systemAudioMeter.reset()
         microphoneMeter.reset()
     }
@@ -727,6 +1090,22 @@ final class ScreenRecordingService: NSObject {
     ) {
         let url = role == .microphone ? paths.microphoneURL : paths.cameraURL
         guard let url, !url.isNonemptyFile else { return }
+        try? store.removeRecordingSegmentMedia(
+            role: role,
+            segmentIndex: paths.index,
+            from: session
+        )
+    }
+
+    /// A recorder can create a nonempty but unusable container before its
+    /// startup throws. Never advertise that file as a valid segment. The exact
+    /// generated file is left in place for diagnostics/recovery, but it is
+    /// removed from the segment index and manifest used for final assembly.
+    private func removeFailedOptionalTrackStart(
+        role: TraceAsset.Role,
+        paths: RecordingSegmentPaths,
+        session: RecordingTraceSession
+    ) {
         try? store.removeRecordingSegmentMedia(
             role: role,
             segmentIndex: paths.index,
@@ -768,9 +1147,60 @@ final class ScreenRecordingService: NSObject {
         }
     }
 
+    private func startWindowSourceMonitoring(
+        windowID: CGWindowID?,
+        stream: SCStream
+    ) {
+        stopWindowSourceMonitoring()
+        guard let windowID else { return }
+        windowSourceMonitorTask = Task { @MainActor [weak self, weak stream] in
+            var detector = WindowSourceLossDetector()
+            while !Task.isCancelled {
+                // A 1.5-second cadence keeps this one-window server lookup
+                // negligible while still detecting a close in roughly three
+                // seconds after two independent misses.
+                try? await Task.sleep(for: .milliseconds(1_500))
+                guard !Task.isCancelled,
+                      let self,
+                      let stream,
+                      self.stream === stream else { return }
+                let content: SCShareableContent
+                do {
+                    content = try await SCShareableContent.excludingDesktopWindows(
+                        false,
+                        onScreenWindowsOnly: false
+                    )
+                } catch {
+                    // A source-enumeration failure is not evidence that the
+                    // user's window disappeared. Stream errors remain covered
+                    // independently by SCStreamDelegate.
+                    continue
+                }
+                let isAvailable = content.windows.contains {
+                    $0.windowID == windowID
+                }
+                guard detector.record(isAvailable: isAvailable) else { continue }
+                let error = ScreenRecordingError.windowUnavailable
+                self.windowSourceMonitorTask = nil
+                self.unexpectedCaptureFailure = self.unexpectedCaptureFailure ?? error
+                await self.pointerRecorder.stop()
+                if !self.isTransitioning {
+                    self.onUnexpectedCaptureStop?(error)
+                }
+                return
+            }
+        }
+    }
+
+    private func stopWindowSourceMonitoring() {
+        windowSourceMonitorTask?.cancel()
+        windowSourceMonitorTask = nil
+    }
+
     private func prepare(
         source: RecordingCaptureSource,
-        content: SCShareableContent
+        content: SCShareableContent,
+        excludesCurrentProcessWindows: Bool
     ) throws -> PreparedRecordingSource {
         switch source.mode {
         case .display, .region:
@@ -778,13 +1208,15 @@ final class ScreenRecordingService: NSObject {
                   let display = content.displays.first(where: { $0.displayID == displayID }) else {
                 throw ScreenRecordingError.displayUnavailable
             }
-            let ownApplications = content.applications.filter {
-                $0.bundleIdentifier == Bundle.main.bundleIdentifier
-            }
+            let ownWindows = excludesCurrentProcessWindows
+                ? content.windows.filter {
+                    $0.owningApplication?.bundleIdentifier
+                        == Bundle.main.bundleIdentifier
+                }
+                : []
             let filter = SCContentFilter(
                 display: display,
-                excludingApplications: ownApplications,
-                exceptingWindows: []
+                excludingWindows: ownWindows
             )
             let pointSize: CGSize
             let sourceRect: CGRect?
@@ -889,51 +1321,18 @@ private struct PreparedRecordingSource {
     let trackedWindowID: CGWindowID?
 }
 
-extension ScreenRecordingService: SCRecordingOutputDelegate {
-    nonisolated func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) {
-        Task { @MainActor in
-            guard self.recordingOutput === recordingOutput else { return }
-            if stopContinuation == nil {
-                outputFinishedUnexpectedly = true
-                unexpectedCaptureFailure = ScreenRecordingError.recordingDidNotFinalize
-                return
-            }
-            recordingOutputFinished = true
-            finishStopIfPossible()
-        }
-    }
-
-    nonisolated func recordingOutput(
-        _ recordingOutput: SCRecordingOutput,
-        didFailWithError error: any Error
-    ) {
-        Task { @MainActor in
-            guard self.recordingOutput === recordingOutput else { return }
-            if stopContinuation == nil {
-                outputFinishedUnexpectedly = true
-                unexpectedCaptureFailure = error
-                return
-            }
-            stopFailure = error
-            recordingOutputFinished = true
-            finishStopIfPossible()
-        }
-    }
-}
-
 extension ScreenRecordingService: SCStreamDelegate {
     nonisolated func stream(_ stream: SCStream, didStopWithError error: any Error) {
         Task { @MainActor in
             guard self.stream === stream else { return }
-            if stopContinuation == nil {
-                streamStoppedUnexpectedly = true
-                unexpectedCaptureFailure = error
-                return
+            stopWindowSourceMonitoring()
+            let shouldNotify = !isTransitioning
+            streamStoppedUnexpectedly = true
+            unexpectedCaptureFailure = error
+            await pointerRecorder.stop()
+            if shouldNotify {
+                onUnexpectedCaptureStop?(error)
             }
-            stopFailure = error
-            stopCaptureCompleted = true
-            recordingOutputFinished = true
-            finishStopIfPossible()
         }
     }
 }

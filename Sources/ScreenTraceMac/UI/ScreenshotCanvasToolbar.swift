@@ -43,7 +43,7 @@ struct ScreenshotCanvasToolbar: View {
         .font(.system(size: 10.5, weight: .medium))
         .padding(.horizontal, 16)
         .padding(.vertical, 7)
-        .background(.ultraThinMaterial)
+        .traceGlassSurface(role: .chrome, cornerRadius: 0)
     }
 
     private var enabledToggle: some View {
@@ -124,6 +124,8 @@ struct ScreenshotCanvasToolbar: View {
                 }
             }
             .frame(width: 76)
+            .accessibilityLabel("画布\(title)")
+            .accessibilityValue(String(format: "%.2f", value.wrappedValue))
         }
     }
 

@@ -5,6 +5,25 @@ import XCTest
 
 @MainActor
 final class ScreenCaptureServiceTests: XCTestCase {
+    func testThumbnailPixelSizeFitsRetinaWindowWithoutChangingAspectRatio() {
+        XCTAssertEqual(
+            ScreenCaptureService.thumbnailPixelSize(
+                pointSize: CGSize(width: 1_440, height: 900),
+                pointPixelScale: 2,
+                maximumPixelSize: CGSize(width: 360, height: 220)
+            ),
+            CGSize(width: 352, height: 220)
+        )
+        XCTAssertEqual(
+            ScreenCaptureService.thumbnailPixelSize(
+                pointSize: CGSize(width: 100, height: 50),
+                pointPixelScale: 1,
+                maximumPixelSize: CGSize(width: 360, height: 220)
+            ),
+            CGSize(width: 100, height: 50)
+        )
+    }
+
     func testRegionSnapRectsKeepOnlyEligibleForeignWindows() {
         func item(pid: pid_t, layer: Int, rect: CGRect) -> [String: Any] {
             [

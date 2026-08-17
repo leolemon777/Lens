@@ -191,7 +191,20 @@ final class VideoEditorModelTests: XCTestCase {
         )
 
         model.setCameraMotionEnabled(false)
+        model.setCameraMotionBlurStrength(0.7)
         model.setCursorEnabled(false)
+        model.setCursorAppearance(.minimalDot)
+        model.setCursorAccentColorHex("a3e635")
+        model.setCursorMotionEffect(.trail)
+        model.setCursorMotionEffectStrength(0.66)
+        model.setCursorSmoothingWindowMilliseconds(36)
+        model.setCursorHidesWhenIdle(false)
+        model.setClickEffect(.spotlight)
+        model.setClickEffectStrength(0.74)
+        model.setClickPulseScale(1.4)
+        model.setClickPulseDuration(0.72)
+        model.setClickPulseColorHex("#FF684D")
+        model.setCanvasShadowOpacity(0.44)
         model.setCanvasPreset(topHex: "#111111", bottomHex: "#222222")
         model.setPresenterEnabled(true)
         model.setMicrophoneNoiseReductionEnabled(false)
@@ -201,7 +214,20 @@ final class VideoEditorModelTests: XCTestCase {
         model.setDuckingEnabled(false)
 
         XCTAssertEqual(model.plan.camera.mode, "off")
+        XCTAssertEqual(model.plan.camera.motionBlurStrength, 0.7)
         XCTAssertEqual(model.plan.cursor.isEnabled, false)
+        XCTAssertEqual(model.plan.cursor.appearance, .minimalDot)
+        XCTAssertEqual(model.plan.cursor.accentColorHex, "#A3E635")
+        XCTAssertEqual(model.plan.cursor.motionEffect, .trail)
+        XCTAssertEqual(model.plan.cursor.motionEffectStrength, 0.66)
+        XCTAssertEqual(model.plan.cursor.smoothingWindowMilliseconds, 36)
+        XCTAssertFalse(model.plan.cursor.hidesWhenIdle)
+        XCTAssertEqual(model.plan.interaction?.clickEffect, .spotlight)
+        XCTAssertEqual(model.plan.interaction?.clickEffectStrength, 0.74)
+        XCTAssertEqual(model.plan.interaction?.clickPulseScale, 1.4)
+        XCTAssertEqual(model.plan.interaction?.clickPulseDuration, 0.72)
+        XCTAssertEqual(model.plan.interaction?.clickPulseColorHex, "#FF684D")
+        XCTAssertEqual(model.plan.canvas?.shadowOpacity, 0.44)
         XCTAssertEqual(model.plan.canvas?.backgroundTopHex, "#111111")
         XCTAssertFalse(model.presenterEnabled)
         XCTAssertFalse(model.microphoneNoiseReductionEnabled)
@@ -224,6 +250,196 @@ final class VideoEditorModelTests: XCTestCase {
             model.isDirty,
             "Restoring the originally opened plan must not masquerade as the newer saved plan"
         )
+    }
+
+    func testManualCameraFocusUsesSourceTimeAndIsUndoable() throws {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 8,
+            hasCameraTrack: false
+        )
+        model.manualCameraScale = 2.2
+        model.manualCameraHoldSeconds = 0.8
+        model.activateManualCameraFocusEditing()
+
+        XCTAssertTrue(model.addManualCameraFocus(
+            center: TracePoint(x: 0.8, y: 0.2),
+            atOutputTime: 2
+        ))
+
+        XCTAssertFalse(model.isManualCameraFocusEditing)
+        XCTAssertEqual(model.manualCameraFocusCount, 1)
+        XCTAssertEqual(model.manualCameraFocusOutputTimes, [2])
+        let focus = try XCTUnwrap(model.plan.camera.keyframes.first {
+            $0.reason == .manualFocus
+        })
+        XCTAssertEqual(focus.scale, 2.2, accuracy: 0.000_1)
+        XCTAssertLessThan(focus.center.x, 0.8)
+        XCTAssertGreaterThan(focus.center.y, 0.2)
+
+        model.undo()
+        XCTAssertEqual(model.manualCameraFocusCount, 0)
+        model.redo()
+        XCTAssertEqual(model.manualCameraFocusCount, 1)
+        model.clearManualCameraFocuses()
+        XCTAssertEqual(model.manualCameraFocusCount, 0)
+        model.undo()
+        XCTAssertEqual(model.manualCameraFocusCount, 1)
+    }
+
+    func testCompletedOlderPreviewDoesNotMarkNewerInspectorChangesAsSaved() {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 8,
+            hasCameraTrack: false
+        )
+        model.setAutomaticZoomScale(1.8)
+        let planBeingRendered = model.plan
+        model.setCameraMotionBlurStrength(0.42)
+
+        model.markSaved(planBeingRendered)
+
+        XCTAssertTrue(model.isDirty)
+        XCTAssertEqual(model.plan.camera.resolvedZoomScale, 1.8, accuracy: 0.000_1)
+        XCTAssertEqual(model.plan.camera.motionBlurStrength, 0.42, accuracy: 0.000_1)
+        model.resetToAutomaticPlan()
+        XCTAssertTrue(
+            model.isDirty,
+            "The completed older render must remain the saved baseline"
+        )
+    }
+
+    func testBackgroundPreviewAdoptionRequiresUntouchedMatchingPlan() {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 8,
+            hasCameraTrack: false
+        )
+        let renderedPlan = model.plan
+
+        XCTAssertTrue(model.canAdoptBackgroundPreview(renderedPlan: renderedPlan))
+
+        var stalePlan = renderedPlan
+        stalePlan.camera.motionBlurStrength = 0.8
+        XCTAssertFalse(model.canAdoptBackgroundPreview(renderedPlan: stalePlan))
+
+        model.beginProcessing()
+        XCTAssertFalse(model.canAdoptBackgroundPreview(renderedPlan: renderedPlan))
+        model.endProcessing()
+
+        model.beginRegeneratingCamera()
+        XCTAssertFalse(model.canAdoptBackgroundPreview(renderedPlan: renderedPlan))
+        model.endRegeneratingCamera()
+
+        model.setCameraMotionBlurStrength(0.4)
+        XCTAssertTrue(model.isDirty)
+        XCTAssertFalse(model.canAdoptBackgroundPreview(renderedPlan: renderedPlan))
+    }
+
+    func testAutomaticCameraRegenerationPreservesManualFramesAndUndoesAsOneChange() {
+        var plan = AutoEditPlan()
+        plan.camera.zoomScale = nil
+        plan.camera.zoomIntensity = 0.84
+        let oldAutomatic = AutoEditPlan.CameraKeyframe(
+            time: 1,
+            scale: 1.4,
+            center: TracePoint(x: 0.3, y: 0.4),
+            easing: "cinematic",
+            reason: .clickFocus
+        )
+        let manual = AutoEditPlan.CameraKeyframe(
+            time: 3,
+            scale: 2.2,
+            center: TracePoint(x: 0.7, y: 0.5),
+            easing: "cinematic",
+            reason: .manualFocus
+        )
+        plan.camera.keyframes = [oldAutomatic, manual]
+        let model = VideoEditorModel(
+            plan: plan,
+            sourceDurationSeconds: 8,
+            hasCameraTrack: false
+        )
+        let regenerated = AutoEditPlan.CameraKeyframe(
+            time: 2,
+            scale: 1.7,
+            center: TracePoint(x: 0.5, y: 0.5),
+            easing: "cinematic",
+            reason: .pointerFollow
+        )
+
+        model.replaceAutomaticCameraKeyframes(with: [regenerated])
+
+        XCTAssertFalse(model.plan.camera.keyframes.contains(oldAutomatic))
+        XCTAssertTrue(model.plan.camera.keyframes.contains(regenerated))
+        XCTAssertTrue(model.plan.camera.keyframes.contains(manual))
+        XCTAssertEqual(try! XCTUnwrap(model.plan.camera.zoomScale), 2.16, accuracy: 0.000_1)
+        XCTAssertEqual(model.plan.camera.zoomIntensity, 0.42, accuracy: 0.000_1)
+        XCTAssertEqual(
+            EffectTimeline.effectiveCameraState(at: 2, camera: model.plan.camera).scale,
+            1.7,
+            accuracy: 0.000_1
+        )
+        XCTAssertTrue(model.isDirty)
+        model.undo()
+        XCTAssertEqual(model.plan.camera.keyframes, [oldAutomatic, manual])
+        XCTAssertNil(model.plan.camera.zoomScale)
+        XCTAssertEqual(model.plan.camera.zoomIntensity, 0.84, accuracy: 0.000_1)
+    }
+
+    func testChangingAutomaticZoomImmediatelyRescalesAutomaticKeyframes() throws {
+        var plan = AutoEditPlan()
+        plan.camera.zoomScale = nil
+        plan.camera.zoomIntensity = 0.84
+        plan.camera.keyframes = [
+            AutoEditPlan.CameraKeyframe(
+                time: 0,
+                scale: 1,
+                center: TracePoint(x: 0.5, y: 0.5),
+                easing: "linear",
+                reason: .baseline
+            ),
+            AutoEditPlan.CameraKeyframe(
+                time: 1,
+                scale: 1.58,
+                center: TracePoint(x: 0.3, y: 0.5),
+                easing: "cinematic",
+                reason: .clickFocus
+            ),
+            AutoEditPlan.CameraKeyframe(
+                time: 3,
+                scale: 2.2,
+                center: TracePoint(x: 0.7, y: 0.5),
+                easing: "cinematic",
+                reason: .manualFocus
+            )
+        ]
+        let model = VideoEditorModel(
+            plan: plan,
+            sourceDurationSeconds: 8,
+            hasCameraTrack: false
+        )
+
+        model.setAutomaticZoomScale(1.60)
+
+        XCTAssertEqual(model.plan.camera.zoomScale, 1.60)
+        XCTAssertEqual(model.plan.camera.zoomIntensity, 0.42, accuracy: 0.000_1)
+        XCTAssertEqual(
+            model.plan.camera.keyframes.first { $0.reason == .clickFocus }?.scale,
+            1.60
+        )
+        XCTAssertEqual(
+            model.plan.camera.keyframes.first { $0.reason == .manualFocus }?.scale,
+            2.2
+        )
+        XCTAssertEqual(
+            EffectTimeline.effectiveCameraState(at: 1, camera: model.plan.camera).scale,
+            1.60,
+            accuracy: 0.000_1
+        )
+        model.undo()
+        XCTAssertNil(model.plan.camera.zoomScale)
+        XCTAssertEqual(model.plan.camera.zoomIntensity, 0.84, accuracy: 0.000_1)
     }
 
     func testCaptionControlsMaterializeEditableCopyWithoutChangingTranscript() throws {

@@ -16,6 +16,7 @@ final class VideoEditorModel: ObservableObject {
     @Published private(set) var selectedSegmentID: UUID?
     @Published private(set) var isDirty = false
     @Published private(set) var isProcessing = false
+    @Published private(set) var isRegeneratingCamera = false
     @Published private(set) var presenterThumbnail: NSImage?
     @Published private(set) var isVideoAnnotationEditing = false
     @Published private(set) var isVideoAnnotationSelectionMode = false
@@ -26,6 +27,9 @@ final class VideoEditorModel: ObservableObject {
     @Published var videoAnnotationTextDraft = "重点"
     @Published var defaultVideoAnnotationDurationSeconds = 2.0
     @Published private(set) var selectedCaptionCueIndex: Int?
+    @Published private(set) var isManualCameraFocusEditing = false
+    @Published var manualCameraScale = 1.80
+    @Published var manualCameraHoldSeconds = 1.20
 
     let sourceDurationSeconds: Double
     let hasCameraTrack: Bool
@@ -139,6 +143,15 @@ final class VideoEditorModel: ObservableObject {
         }?.durationSeconds
     }
     var cameraMotionEnabled: Bool { plan.camera.mode != "off" }
+    var manualCameraFocusCount: Int {
+        plan.camera.keyframes.count { $0.reason == .manualFocus }
+    }
+    var manualCameraFocusOutputTimes: [Double] {
+        plan.camera.keyframes
+            .filter { $0.reason == .manualFocus }
+            .flatMap { timeline.outputTimes(forSourceTime: $0.time) }
+            .sorted()
+    }
     var cursorEnabled: Bool { plan.cursor.isEnabled != false }
     var clickPulseEnabled: Bool { plan.interaction?.showsClickPulse != false }
     var canvasEnabled: Bool { plan.canvas?.isEnabled != false }
@@ -306,22 +319,238 @@ final class VideoEditorModel: ObservableObject {
         mutate { $0.camera.mode = enabled ? "event-driven" : "off" }
     }
 
-    func setZoomIntensity(_ value: Double) {
-        mutate { $0.camera.zoomIntensity = min(max(value, 0), 1) }
+    func setAutomaticZoomScale(_ value: Double) {
+        let requestedScale = min(max(value.isFinite ? value : 1.60, 1), 3)
+        mutate { plan in
+            let effective = EffectTimeline.effectiveCameraKeyframes(for: plan.camera)
+            let automaticPeak = effective.enumerated().reduce(1.0) { peak, item in
+                let (index, keyframe) = item
+                guard !Self.isManualCameraReason(keyframe.reason),
+                      plan.camera.keyframes.indices.contains(index) else { return peak }
+                return max(peak, keyframe.scale)
+            }
+            plan.camera.keyframes = plan.camera.keyframes.enumerated().map { index, keyframe in
+                guard !Self.isManualCameraReason(keyframe.reason),
+                      effective.indices.contains(index),
+                      automaticPeak > 1.000_1 else { return keyframe }
+                let renderedScale = effective[index].scale
+                let relativeAmount = min(max(
+                    (renderedScale - 1) / (automaticPeak - 1),
+                    0
+                ), 1)
+                let scale = 1 + (requestedScale - 1) * relativeAmount
+                let visibleHalf = 0.5 / scale
+                return AutoEditPlan.CameraKeyframe(
+                    time: keyframe.time,
+                    scale: scale,
+                    center: TracePoint(
+                        x: min(max(keyframe.center.x, visibleHalf), 1 - visibleHalf),
+                        y: min(max(keyframe.center.y, visibleHalf), 1 - visibleHalf)
+                    ),
+                    easing: keyframe.easing,
+                    reason: keyframe.reason
+                )
+            }
+            plan.camera.zoomScale = requestedScale
+            plan.camera.zoomIntensity = 0.42
+        }
+    }
+
+    func setAutomaticCameraGenerationStrength(
+        _ strength: AutoEditPlan.Camera.GenerationStrength
+    ) {
+        mutate { $0.camera.generationStrength = strength }
+    }
+
+    func setCameraMotionBlurStrength(_ value: Double) {
+        mutate {
+            $0.camera.motionBlurStrength = min(max(value.isFinite ? value : 0, 0), 1)
+        }
+    }
+
+    func setClickToZoomEnabled(_ enabled: Bool) {
+        mutate { $0.camera.clickToZoom = enabled }
+    }
+
+    func setCameraFollowPointerEnabled(_ enabled: Bool) {
+        mutate { $0.camera.followPointer = enabled }
+    }
+
+    func replaceAutomaticCameraKeyframes(
+        with keyframes: [AutoEditPlan.CameraKeyframe]
+    ) {
+        let manual = plan.camera.keyframes.filter { keyframe in
+            switch keyframe.reason {
+            case .manualAnchor, .manualFocus, .manualHold, .manualReturn:
+                true
+            default:
+                false
+            }
+        }
+        mutate { plan in
+            if plan.camera.zoomScale == nil {
+                plan.camera.zoomScale = plan.camera.resolvedZoomScale
+                plan.camera.zoomIntensity = 0.42
+            }
+            plan.camera.keyframes = (keyframes + manual).sorted { lhs, rhs in
+                if lhs.time != rhs.time { return lhs.time < rhs.time }
+                return Self.cameraReasonPriority(lhs.reason)
+                    < Self.cameraReasonPriority(rhs.reason)
+            }
+        }
+    }
+
+    func beginRegeneratingCamera() {
+        isRegeneratingCamera = true
+    }
+
+    func endRegeneratingCamera() {
+        isRegeneratingCamera = false
+    }
+
+    func activateManualCameraFocusEditing() {
+        finishVideoAnnotationEditing()
+        isManualCameraFocusEditing = true
+    }
+
+    func cancelManualCameraFocusEditing() {
+        isManualCameraFocusEditing = false
+    }
+
+    @discardableResult
+    func addManualCameraFocus(
+        center: TracePoint,
+        atOutputTime outputTime: Double
+    ) -> Bool {
+        guard isManualCameraFocusEditing else { return false }
+        let sourceTime = sourceTime(atOutputTime: outputTime)
+        let previousPlan = plan
+        let editor = ManualCameraEditor(configuration: .init(
+            holdDuration: min(max(manualCameraHoldSeconds, 0.20), 8)
+        ))
+        mutate { plan in
+            plan.camera = editor.insertingFocus(
+                at: sourceTime,
+                center: center,
+                scale: min(max(manualCameraScale, 1), 3),
+                duration: sourceDurationSeconds,
+                into: plan.camera
+            )
+        }
+        isManualCameraFocusEditing = false
+        return plan != previousPlan
+    }
+
+    func clearManualCameraFocuses() {
+        guard manualCameraFocusCount > 0 else { return }
+        mutate { plan in
+            plan.camera = ManualCameraEditor().removingManualKeyframes(from: plan.camera)
+        }
+        isManualCameraFocusEditing = false
     }
 
     func setCursorEnabled(_ enabled: Bool) {
         mutate { $0.cursor.isEnabled = enabled }
     }
 
+    func setCursorAppearance(_ appearance: AutoEditPlan.Cursor.Appearance) {
+        mutate { $0.cursor.appearance = appearance }
+    }
+
+    func setCursorAccentColorHex(_ value: String) {
+        mutate { plan in
+            let trimmed = value.trimmingCharacters(
+                in: CharacterSet(charactersIn: "# ")
+            ).uppercased()
+            plan.cursor.accentColorHex = if trimmed.count == 6,
+                                            UInt32(trimmed, radix: 16) != nil {
+                "#\(trimmed)"
+            } else {
+                "#5BD6FF"
+            }
+        }
+    }
+
+    func setCursorMotionEffect(_ effect: AutoEditPlan.Cursor.MotionEffect) {
+        mutate { $0.cursor.motionEffect = effect }
+    }
+
+    func setCursorMotionEffectStrength(_ value: Double) {
+        mutate { plan in
+            plan.cursor.motionEffectStrength = min(max(
+                value.isFinite ? value : 0.42,
+                0.1
+            ), 1)
+        }
+    }
+
     func setCursorScale(_ value: Double) {
         mutate { $0.cursor.scale = min(max(value, 0.5), 3) }
+    }
+
+    func setCursorSmoothingWindowMilliseconds(_ value: Double) {
+        mutate { plan in
+            let milliseconds = min(max(value.isFinite ? value : 0, 0), 160)
+            plan.cursor.smoothingWindowMilliseconds = milliseconds
+            plan.cursor.smoothing = min(milliseconds / 80, 1)
+        }
+    }
+
+    func setCursorHidesWhenIdle(_ enabled: Bool) {
+        mutate { $0.cursor.hidesWhenIdle = enabled }
     }
 
     func setClickPulseEnabled(_ enabled: Bool) {
         mutate { plan in
             if plan.interaction == nil { plan.interaction = .init() }
             plan.interaction?.showsClickPulse = enabled
+        }
+    }
+
+    func setClickEffect(_ effect: AutoEditPlan.Interaction.ClickEffect) {
+        mutate { plan in
+            if plan.interaction == nil { plan.interaction = .init() }
+            plan.interaction?.clickEffect = effect
+        }
+    }
+
+    func setClickEffectStrength(_ value: Double) {
+        mutate { plan in
+            if plan.interaction == nil { plan.interaction = .init() }
+            plan.interaction?.clickEffectStrength = min(max(
+                value.isFinite ? value : 1,
+                0.1
+            ), 1)
+        }
+    }
+
+    func setClickPulseScale(_ value: Double) {
+        mutate { plan in
+            if plan.interaction == nil { plan.interaction = .init() }
+            plan.interaction?.clickPulseScale = min(max(
+                value.isFinite ? value : 1.25,
+                0.5
+            ), 3)
+        }
+    }
+
+    func setClickPulseDuration(_ value: Double) {
+        mutate { plan in
+            if plan.interaction == nil { plan.interaction = .init() }
+            plan.interaction?.clickPulseDuration = min(max(
+                value.isFinite ? value : 0.62,
+                0.15
+            ), 1.5)
+        }
+    }
+
+    func setClickPulseColorHex(_ value: String) {
+        mutate { plan in
+            if plan.interaction == nil { plan.interaction = .init() }
+            let normalized = AutoEditPlan.Interaction(
+                clickPulseColorHex: value
+            ).clickPulseColorHex
+            plan.interaction?.clickPulseColorHex = normalized
         }
     }
 
@@ -343,6 +572,16 @@ final class VideoEditorModel: ObservableObject {
         mutate { plan in
             if plan.canvas == nil { plan.canvas = .init() }
             plan.canvas?.cornerRadius = min(max(value, 0), 0.2)
+        }
+    }
+
+    func setCanvasShadowOpacity(_ value: Double) {
+        mutate { plan in
+            if plan.canvas == nil { plan.canvas = .init() }
+            plan.canvas?.shadowOpacity = min(max(
+                value.isFinite ? value : 0.24,
+                0
+            ), 1)
         }
     }
 
@@ -577,6 +816,7 @@ final class VideoEditorModel: ObservableObject {
     }
 
     func activateVideoAnnotationSelection() {
+        cancelManualCameraFocusEditing()
         cancelVideoAnnotationDraft()
         cancelVideoAnnotationInteraction()
         isVideoAnnotationEditing = true
@@ -597,6 +837,7 @@ final class VideoEditorModel: ObservableObject {
     }
 
     func activateVideoAnnotationTool(_ tool: ScreenshotAnnotationKind) {
+        cancelManualCameraFocusEditing()
         cancelVideoAnnotationDraft()
         cancelVideoAnnotationInteraction()
         selectedVideoAnnotationTool = tool
@@ -1107,6 +1348,7 @@ final class VideoEditorModel: ObservableObject {
     }
 
     func undo() {
+        cancelManualCameraFocusEditing()
         endPresenterInteraction()
         endVideoAnnotationInteraction()
         guard let previous = undoHistory.popLast() else { return }
@@ -1118,6 +1360,7 @@ final class VideoEditorModel: ObservableObject {
     }
 
     func redo() {
+        cancelManualCameraFocusEditing()
         endPresenterInteraction()
         endVideoAnnotationInteraction()
         guard let next = redoHistory.popLast() else { return }
@@ -1129,6 +1372,7 @@ final class VideoEditorModel: ObservableObject {
     }
 
     func resetToAutomaticPlan() {
+        cancelManualCameraFocusEditing()
         endPresenterInteraction()
         endVideoAnnotationInteraction()
         cancelVideoAnnotationDraft()
@@ -1141,11 +1385,17 @@ final class VideoEditorModel: ObservableObject {
         onTimelineChanged?(timeline)
     }
 
-    func markSaved() {
+    /// Records the exact plan that reached disk and a completed preview. The
+    /// editor may continue accepting changes while that preview is rendering;
+    /// those newer changes must remain dirty instead of being falsely marked
+    /// as saved when an older render finishes.
+    func markSaved(_ persistedPlan: AutoEditPlan? = nil) {
+        cancelManualCameraFocusEditing()
         endPresenterInteraction()
         endVideoAnnotationInteraction()
-        savedPlan = plan
-        isDirty = false
+        let persistedPlan = persistedPlan ?? plan
+        savedPlan = persistedPlan
+        isDirty = plan != persistedPlan
     }
 
     func beginProcessing() {
@@ -1154,6 +1404,16 @@ final class VideoEditorModel: ObservableObject {
 
     func endProcessing() {
         isProcessing = false
+    }
+
+    /// A preview rendered in the background may arrive after the editor has
+    /// already accepted newer input. Only the exact, untouched plan is safe to
+    /// adopt without flashing stale effects over the user's work.
+    func canAdoptBackgroundPreview(renderedPlan: AutoEditPlan) -> Bool {
+        !isDirty
+            && !isProcessing
+            && !isRegeneratingCamera
+            && plan == renderedPlan
     }
 
     private func mutate(
@@ -1172,6 +1432,33 @@ final class VideoEditorModel: ObservableObject {
         normalizeSelection()
         isDirty = plan != savedPlan
         if timelineChanged { onTimelineChanged?(timeline) }
+    }
+
+    private static func cameraReasonPriority(
+        _ reason: AutoEditPlan.CameraKeyframe.Reason
+    ) -> Int {
+        switch reason {
+        case .baseline: 0
+        case .clickFocus: 1
+        case .pointerFollow: 2
+        case .clickHold: 3
+        case .returnToOverview: 4
+        case .manualAnchor: 5
+        case .manualFocus: 6
+        case .manualHold: 7
+        case .manualReturn: 8
+        }
+    }
+
+    private static func isManualCameraReason(
+        _ reason: AutoEditPlan.CameraKeyframe.Reason
+    ) -> Bool {
+        switch reason {
+        case .manualAnchor, .manualFocus, .manualHold, .manualReturn:
+            true
+        default:
+            false
+        }
     }
 
     private func normalizeSelection() {

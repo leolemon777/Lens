@@ -2,22 +2,26 @@ import CoreGraphics
 import Foundation
 import ScreenTraceCore
 
-struct ScreenshotEditingResult {
+struct ScreenshotEditingResult: @unchecked Sendable {
     let trace: SavedTrace
     let renderedImage: CGImage
     let renderedImageURL: URL
 }
 
-struct ScreenshotEditingService {
+struct ScreenshotEditingService: Sendable {
     let store: TraceProjectStore
     private let renderer = ScreenshotAnnotationRenderer()
+
+    func render(source: CGImage, plan: ScreenshotEditPlan) throws -> CGImage {
+        try renderer.render(source: source, plan: plan)
+    }
 
     func renderAndSave(
         source: CGImage,
         plan: ScreenshotEditPlan,
         trace: SavedTrace
     ) throws -> ScreenshotEditingResult {
-        let rendered = try renderer.render(source: source, plan: plan)
+        let rendered = try render(source: source, plan: plan)
         let pngData = try ImageEncoding.pngData(from: rendered)
         let outputURL = trace.packageURL.appendingPathComponent("previews/annotated.png")
         try FileManager.default.createDirectory(

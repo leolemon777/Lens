@@ -35,12 +35,19 @@ final class CameraTrackRecorder: NSObject {
     private var recordingFailure: Error?
     private var startGeneration = 0
     private var stopGeneration = 0
+    private var disconnectedDeviceObserver: NSObjectProtocol?
+    private var sessionObservers: [NSObjectProtocol] = []
+    private var capturedDeviceUniqueID: String?
+    private var didReportUnexpectedStop = false
+
+    var onUnexpectedStop: ((Error) -> Void)?
 
     var isRecording: Bool { movieOutput?.isRecording == true }
 
     func start(outputURL: URL) async throws {
         await cancel()
         recordingFailure = nil
+        didReportUnexpectedStop = false
         guard let device = AVCaptureDevice.default(for: .video) else {
             throw CameraTrackRecordingError.cameraUnavailable
         }
@@ -74,6 +81,9 @@ final class CameraTrackRecorder: NSObject {
         self.session = session
         movieOutput = output
         self.outputURL = outputURL
+        capturedDeviceUniqueID = device.uniqueID
+        observeDisconnection(of: device)
+        observeSessionFailures(session)
         await setSession(session, running: true)
         guard session.isRunning else {
             clearState()
@@ -183,9 +193,89 @@ final class CameraTrackRecorder: NSObject {
     }
 
     private func clearState() {
+        removeDisconnectedDeviceObserver()
+        removeSessionObservers()
         session = nil
         movieOutput = nil
         outputURL = nil
+        capturedDeviceUniqueID = nil
+    }
+
+    private func observeDisconnection(of device: AVCaptureDevice) {
+        removeDisconnectedDeviceObserver()
+        disconnectedDeviceObserver = NotificationCenter.default.addObserver(
+            forName: AVCaptureDevice.wasDisconnectedNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let disconnectedUniqueID = (notification.object as? AVCaptureDevice)?.uniqueID
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.session != nil,
+                      Self.matchesDisconnectedDevice(
+                          capturedUniqueID: self.capturedDeviceUniqueID,
+                          disconnectedUniqueID: disconnectedUniqueID
+                      ),
+                      !self.didReportUnexpectedStop else { return }
+                self.reportUnexpectedStop(CameraTrackRecordingError.stoppedUnexpectedly)
+            }
+        }
+    }
+
+    private func observeSessionFailures(_ session: AVCaptureSession) {
+        removeSessionObservers()
+        let center = NotificationCenter.default
+        sessionObservers = [
+            center.addObserver(
+                forName: AVCaptureSession.runtimeErrorNotification,
+                object: session,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.reportUnexpectedStop(
+                        CameraTrackRecordingError.stoppedUnexpectedly
+                    )
+                }
+            },
+            center.addObserver(
+                forName: AVCaptureSession.wasInterruptedNotification,
+                object: session,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.reportUnexpectedStop(
+                        CameraTrackRecordingError.stoppedUnexpectedly
+                    )
+                }
+            }
+        ]
+    }
+
+    private func reportUnexpectedStop(_ error: Error) {
+        guard session != nil, !didReportUnexpectedStop else { return }
+        didReportUnexpectedStop = true
+        recordingFailure = recordingFailure ?? error
+        onUnexpectedStop?(error)
+    }
+
+    private func removeDisconnectedDeviceObserver() {
+        guard let disconnectedDeviceObserver else { return }
+        NotificationCenter.default.removeObserver(disconnectedDeviceObserver)
+        self.disconnectedDeviceObserver = nil
+    }
+
+    private func removeSessionObservers() {
+        let center = NotificationCenter.default
+        sessionObservers.forEach { center.removeObserver($0) }
+        sessionObservers.removeAll()
+    }
+
+    nonisolated static func matchesDisconnectedDevice(
+        capturedUniqueID: String?,
+        disconnectedUniqueID: String?
+    ) -> Bool {
+        guard let capturedUniqueID, let disconnectedUniqueID else { return false }
+        return disconnectedUniqueID == capturedUniqueID
     }
 }
 
@@ -239,7 +329,8 @@ extension CameraTrackRecorder: AVCaptureFileOutputRecordingDelegate {
                     continuation.resume()
                 }
             } else if startContinuation == nil {
-                recordingFailure = effectiveError
+                recordingFailure = recordingFailure
+                    ?? effectiveError
                     ?? CameraTrackRecordingError.stoppedUnexpectedly
             }
         }

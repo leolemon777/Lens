@@ -13,6 +13,7 @@ final class TraceLibraryWindowController {
     var onTranscriptionRequested: ((TraceLibraryEntry) -> Void)?
     var onOrganizationRequested: ((TraceLibraryEntry) -> Void)?
     var onInsightsCustomizationRequested: ((TraceLibraryEntry, TraceInsightsCustomization?) -> Void)?
+    var onCopyResult: ((Bool) -> Void)?
 
     init(store: TraceProjectStore) {
         self.store = store
@@ -73,6 +74,8 @@ final class TraceLibraryWindowController {
             onSaveInsights: { [weak self] entry, customization in
                 self?.saveInsights(entry, customization: customization)
             },
+            onDelete: { [weak self] in self?.confirmDelete($0) },
+            onDeleteAll: { [weak self] in self?.confirmDeleteAll() },
             onOpenFolder: { [weak self] in self?.openFolder() },
             onClose: { [weak self] in self?.hide() }
         )
@@ -103,9 +106,7 @@ final class TraceLibraryWindowController {
     private func copy(_ entry: TraceLibraryEntry) {
         guard entry.manifest.kind == .screenshot,
               let image = NSImage(contentsOf: entry.displayAssetURL) else { return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([image])
+        onCopyResult?(ImageClipboardWriter.write(image))
     }
 
     private func annotate(_ entry: TraceLibraryEntry) {
@@ -138,6 +139,93 @@ final class TraceLibraryWindowController {
     private func openFolder() {
         try? FileManager.default.createDirectory(at: store.rootDirectory, withIntermediateDirectories: true)
         NSWorkspace.shared.open(store.rootDirectory)
+    }
+
+    private func confirmDelete(_ entry: TraceLibraryEntry) {
+        guard model.canDelete(entry) else {
+            showMessage(
+                title: "暂时不能删除",
+                message: "这条记录仍在录制或处理。完成后即可移到废纸篓。"
+            )
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "删除“\(entry.manifest.title)”？"
+        alert.informativeText = "项目会移到废纸篓，原始媒体、标注和转写会一起移动，之后仍可恢复。"
+        alert.addButton(withTitle: "移到废纸篓")
+        alert.addButton(withTitle: "取消")
+        alert.buttons.first?.hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.trash([entry])
+        }
+    }
+
+    private func confirmDeleteAll() {
+        let deletable = model.entries.filter(model.canDelete)
+        guard !deletable.isEmpty else {
+            showMessage(
+                title: "没有可删除的记录",
+                message: "正在录制或处理的项目会受到保护。"
+            )
+            return
+        }
+        let protectedCount = model.entries.count - deletable.count
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "删除全部 \(deletable.count) 条记录？"
+        var detail = "全部项目会移到废纸篓，之后仍可恢复。"
+        if protectedCount > 0 {
+            detail += " 另有 \(protectedCount) 条正在录制或处理，将自动保留。"
+        }
+        alert.informativeText = detail
+        alert.addButton(withTitle: "全部移到废纸篓")
+        alert.addButton(withTitle: "取消")
+        alert.buttons.first?.hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.trash(deletable)
+        }
+    }
+
+    private func trash(_ entries: [TraceLibraryEntry]) {
+        let targets = entries.map { ($0.id, $0.packageURL) }
+        Task { @MainActor [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                var deleted = Set<UUID>()
+                var failures: [String] = []
+                for (id, url) in targets {
+                    do {
+                        var resultingURL: NSURL?
+                        try FileManager.default.trashItem(
+                            at: url,
+                            resultingItemURL: &resultingURL
+                        )
+                        deleted.insert(id)
+                    } catch {
+                        failures.append("\(url.lastPathComponent)：\(error.localizedDescription)")
+                    }
+                }
+                return (deleted, failures)
+            }.value
+            guard let self else { return }
+            model.removeEntries(withIDs: result.0)
+            if !result.1.isEmpty {
+                showMessage(
+                    title: "部分项目未能删除",
+                    message: result.1.joined(separator: "\n")
+                )
+            }
+        }
+    }
+
+    private func showMessage(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "知道了")
+        alert.beginSheetModal(for: window)
     }
 }
 

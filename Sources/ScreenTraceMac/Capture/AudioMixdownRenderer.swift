@@ -38,7 +38,7 @@ final class AudioMixdownRenderer: @unchecked Sendable {
 
     func render(
         inputURL: URL,
-        microphoneURL: URL,
+        microphoneURL: URL?,
         outputURL: URL,
         plan: AutoEditPlan.Audio,
         timeline: VideoEditTimeline? = nil,
@@ -56,7 +56,7 @@ final class AudioMixdownRenderer: @unchecked Sendable {
 
     func renderWithReport(
         inputURL: URL,
-        microphoneURL: URL,
+        microphoneURL: URL?,
         outputURL: URL,
         plan: AutoEditPlan.Audio,
         timeline: VideoEditTimeline? = nil,
@@ -69,35 +69,40 @@ final class AudioMixdownRenderer: @unchecked Sendable {
             .appendingPathComponent(
                 ".conditioned-microphone-\(UUID().uuidString).caf"
             )
-        let microphoneProcessingIsEnabled = plan.reducesMicrophoneNoise
-            || plan.normalizesLoudness
-        let mixMicrophoneURL: URL
-        if microphoneProcessingIsEnabled {
-            do {
-                let result = try await voiceProcessor.process(
-                    inputURL: microphoneURL,
-                    outputURL: conditionedMicrophoneURL,
-                    plan: plan
-                )
-                voiceProcessingResult = result
-                mixMicrophoneURL = result.outputURL
-            } catch {
-                voiceProcessingErrorDescription = error.localizedDescription
+        let mixMicrophoneURL: URL?
+        if let microphoneURL {
+            let microphoneProcessingIsEnabled = plan.reducesMicrophoneNoise
+                || plan.normalizesLoudness
+            if microphoneProcessingIsEnabled {
+                do {
+                    let result = try await voiceProcessor.process(
+                        inputURL: microphoneURL,
+                        outputURL: conditionedMicrophoneURL,
+                        plan: plan
+                    )
+                    voiceProcessingResult = result
+                    mixMicrophoneURL = result.outputURL
+                } catch {
+                    voiceProcessingErrorDescription = error.localizedDescription
+                    mixMicrophoneURL = microphoneURL
+                }
+            } else {
                 mixMicrophoneURL = microphoneURL
             }
         } else {
-            mixMicrophoneURL = microphoneURL
+            mixMicrophoneURL = nil
         }
         defer { try? FileManager.default.removeItem(at: conditionedMicrophoneURL) }
-        let transitionedMicrophoneURL: URL? = if timeline?.hasActiveTransitions == true {
+        let transitionedMicrophoneURL: URL? = if mixMicrophoneURL != nil,
+                                                   timeline?.hasActiveTransitions == true {
             outputURL.deletingLastPathComponent().appendingPathComponent(
                 ".microphone-transitions-\(UUID().uuidString).m4a"
             )
         } else {
             nil
         }
-        let microphoneAsset: AVAsset
-        if let timeline, let transitionedMicrophoneURL {
+        let microphoneAsset: AVAsset?
+        if let mixMicrophoneURL, let timeline, let transitionedMicrophoneURL {
             _ = try await VideoTimelineCompositionBuilder().export(
                 inputURL: mixMicrophoneURL,
                 timeline: timeline,
@@ -107,7 +112,7 @@ final class AudioMixdownRenderer: @unchecked Sendable {
                 requiresAudio: true
             )
             microphoneAsset = AVURLAsset(url: transitionedMicrophoneURL)
-        } else if let timeline {
+        } else if let mixMicrophoneURL, let timeline {
             microphoneAsset = try await VideoTimelineCompositionBuilder().build(
                 inputURL: mixMicrophoneURL,
                 timeline: timeline,
@@ -115,8 +120,10 @@ final class AudioMixdownRenderer: @unchecked Sendable {
                 includesAudio: true,
                 requiresAudio: true
             )
-        } else {
+        } else if let mixMicrophoneURL {
             microphoneAsset = AVURLAsset(url: mixMicrophoneURL)
+        } else {
+            microphoneAsset = nil
         }
         defer {
             if let transitionedMicrophoneURL {
@@ -126,16 +133,19 @@ final class AudioMixdownRenderer: @unchecked Sendable {
         guard let sourceVideo = try await inputAsset.loadTracks(withMediaType: .video).first else {
             throw AudioMixdownRendererError.missingVideoTrack
         }
-        guard let sourceMicrophone = try await microphoneAsset
-            .loadTracks(withMediaType: .audio).first else {
-            throw AudioMixdownRendererError.missingMicrophoneTrack
+        let sourceMicrophone: AVAssetTrack?
+        if let microphoneAsset {
+            guard let track = try await microphoneAsset
+                .loadTracks(withMediaType: .audio).first else {
+                throw AudioMixdownRendererError.missingMicrophoneTrack
+            }
+            sourceMicrophone = track
+        } else {
+            sourceMicrophone = nil
         }
         let composition = AVMutableComposition()
         guard let outputVideo = composition.addMutableTrack(
             withMediaType: .video,
-            preferredTrackID: kCMPersistentTrackID_Invalid
-        ), let outputMicrophone = composition.addMutableTrack(
-            withMediaType: .audio,
             preferredTrackID: kCMPersistentTrackID_Invalid
         ) else {
             throw AudioMixdownRendererError.compositionTrackUnavailable
@@ -145,18 +155,27 @@ final class AudioMixdownRenderer: @unchecked Sendable {
         outputVideo.preferredTransform = try await sourceVideo.load(.preferredTransform)
         let outputDuration = videoRange.duration
 
-        let microphoneRange = try await sourceMicrophone.load(.timeRange)
-        let microphoneDuration = CMTimeMinimum(microphoneRange.duration, outputDuration)
-        if microphoneDuration > .zero {
-            try outputMicrophone.insertTimeRange(
-                CMTimeRange(start: microphoneRange.start, duration: microphoneDuration),
-                of: sourceMicrophone,
-                at: .zero
-            )
+        var parameters: [AVAudioMixInputParameters] = []
+        if let sourceMicrophone {
+            guard let outputMicrophone = composition.addMutableTrack(
+                withMediaType: .audio,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            ) else {
+                throw AudioMixdownRendererError.compositionTrackUnavailable
+            }
+            let microphoneRange = try await sourceMicrophone.load(.timeRange)
+            let microphoneDuration = CMTimeMinimum(microphoneRange.duration, outputDuration)
+            if microphoneDuration > .zero {
+                try outputMicrophone.insertTimeRange(
+                    CMTimeRange(start: microphoneRange.start, duration: microphoneDuration),
+                    of: sourceMicrophone,
+                    at: .zero
+                )
+            }
+            let microphoneParameters = AVMutableAudioMixInputParameters(track: outputMicrophone)
+            microphoneParameters.setVolume(Float(plan.microphoneVolume), at: .zero)
+            parameters.append(microphoneParameters)
         }
-        let microphoneParameters = AVMutableAudioMixInputParameters(track: outputMicrophone)
-        microphoneParameters.setVolume(Float(plan.microphoneVolume), at: .zero)
-        var parameters = [microphoneParameters]
 
         if let sourceSystemAudio = try await inputAsset.loadTracks(withMediaType: .audio).first,
            let outputSystemAudio = composition.addMutableTrack(
@@ -174,7 +193,8 @@ final class AudioMixdownRenderer: @unchecked Sendable {
             }
             let systemParameters = AVMutableAudioMixInputParameters(track: outputSystemAudio)
             let systemNormalizationGain: Double
-            if plan.normalizesLoudness,
+            if sourceMicrophone != nil,
+               plan.normalizesLoudness,
                let metrics = try? await voiceProcessor.analyze(url: inputURL) {
                 let gainDecibels = VoiceAudioProcessor.recommendedGainDecibels(
                     measuredLoudnessLUFS: metrics.integratedLoudnessLUFS,
@@ -198,7 +218,8 @@ final class AudioMixdownRenderer: @unchecked Sendable {
                 normalizedSystemVolume * plan.duckedSystemVolume
             )
             systemParameters.setVolume(baseVolume, at: .zero)
-            if plan.ducksSystemUnderNarration {
+            if plan.ducksSystemUnderNarration,
+               let mixMicrophoneURL {
                 let sourceActivity = try analyzer.analyze(
                     url: mixMicrophoneURL,
                     thresholdDecibels: plan.narrationThresholdDecibels
@@ -240,6 +261,12 @@ final class AudioMixdownRenderer: @unchecked Sendable {
         let audioMix = AVMutableAudioMix()
         audioMix.inputParameters = parameters
         let exportProfile = VideoExportProfile(export)
+        let videoComposition = try await timingPreservingVideoComposition(
+            asset: composition,
+            sourceTrack: sourceVideo,
+            outputTrack: outputVideo,
+            exportProfile: exportProfile
+        )
         guard let exporter = AVAssetExportSession(
             asset: composition,
             presetName: exportProfile.assetExportPresetName
@@ -247,6 +274,7 @@ final class AudioMixdownRenderer: @unchecked Sendable {
             throw AudioMixdownRendererError.exportSessionUnavailable
         }
         exporter.audioMix = audioMix
+        exporter.videoComposition = videoComposition
         exporter.shouldOptimizeForNetworkUse = true
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try FileManager.default.removeItem(at: outputURL)
@@ -261,6 +289,70 @@ final class AudioMixdownRenderer: @unchecked Sendable {
             voiceProcessingResult: voiceProcessingResult,
             voiceProcessingErrorDescription: voiceProcessingErrorDescription
         )
+    }
+
+    /// `AVAssetExportSession` silently chooses a 30 FPS video composition for a
+    /// large mutable composition when an audio mix is attached. That makes the
+    /// source-quality preset lose half of a real 60 FPS screen recording even
+    /// though the preceding effects render is still 60 FPS. Author an explicit
+    /// passthrough composition and inherit timing from the actual effects track.
+    private func timingPreservingVideoComposition(
+        asset: AVAsset,
+        sourceTrack: AVAssetTrack,
+        outputTrack: AVCompositionTrack,
+        exportProfile: VideoExportProfile
+    ) async throws -> AVMutableVideoComposition {
+        let composition = try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<AVMutableVideoComposition, Error>) in
+            AVMutableVideoComposition.videoComposition(
+                withPropertiesOf: asset,
+                completionHandler: { composition, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let composition {
+                        continuation.resume(returning: composition)
+                    } else {
+                        continuation.resume(
+                            throwing: AudioMixdownRendererError.exportSessionUnavailable
+                        )
+                    }
+                }
+            )
+        }
+        let sourceFrameDuration: CMTime = if let frameDuration = try? await sourceTrack.load(
+            .minFrameDuration
+        ), frameDuration.isNumeric,
+           frameDuration.seconds.isFinite,
+           frameDuration.seconds > 0 {
+            frameDuration
+        } else if let nominalFrameRate = try? await sourceTrack.load(.nominalFrameRate),
+                  nominalFrameRate.isFinite,
+                  nominalFrameRate > 0 {
+            CMTime(
+                seconds: 1 / Double(min(max(nominalFrameRate, 1), 120)),
+                preferredTimescale: 60_000
+            )
+        } else {
+            CMTime(value: 1, timescale: 30)
+        }
+        let limitedFrameDuration = exportProfile.limitedFrameDuration(sourceFrameDuration)
+        composition.frameDuration = limitedFrameDuration
+        composition.sourceTrackIDForFrameTiming = exportProfile.maximumFramesPerSecond == nil
+            ? outputTrack.trackID
+            : kCMPersistentTrackID_Invalid
+        return composition
+    }
+
+    /// A microphone always needs a mix pass. A system-only recording only needs
+    /// one when the user has authored a non-unity system-volume adjustment.
+    /// This keeps the default fast path lossless while ensuring the visible
+    /// system-volume control is never a no-op without a microphone track.
+    static func requiresMixdown(
+        microphoneURL: URL?,
+        plan: AutoEditPlan.Audio
+    ) -> Bool {
+        plan.isEnabled
+            && (microphoneURL != nil || abs(plan.systemVolume - 1) > 0.000_1)
     }
 
     static func duckingEnvelopes(

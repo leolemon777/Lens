@@ -30,6 +30,7 @@ final class CaptureOverlayWindow: NSWindow {
         isOpaque = false
         hasShadow = false
         ignoresMouseEvents = false
+        acceptsMouseMovedEvents = true
         level = .screenSaver
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
     }

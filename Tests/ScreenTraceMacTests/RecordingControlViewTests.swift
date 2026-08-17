@@ -27,6 +27,20 @@ final class RecordingControlViewTests: XCTestCase {
         model.updateAudioLevels(system: 0.72, microphone: 0.94)
         XCTAssertEqual(model.systemAudioLevel, 0.72, accuracy: 0.001)
         XCTAssertEqual(model.microphoneAudioLevel, 0.94, accuracy: 0.001)
+        model.updateEventCaptureHealth(.healthy(pointerCount: 12, clickCount: 2))
+        XCTAssertTrue(model.eventCaptureHelp.contains("12 个光标点"))
+        model.updateCapturePerformance(CapturePerformanceSnapshot(
+            requestedFramesPerSecond: 60,
+            receivedCompleteFrameCount: 120,
+            writtenFrameCount: 118,
+            droppedFrameCount: 2,
+            measuredReceivedFramesPerSecond: 59.8,
+            measuredWrittenFramesPerSecond: 58.9,
+            p95FrameIntervalMilliseconds: 17
+        ))
+        XCTAssertEqual(model.frameRateLabel, "59 FPS")
+        XCTAssertTrue(model.frameRateHelp.contains("写入 58.9 FPS"))
+        XCTAssertTrue(model.frameRateHelp.contains("采集 59.8 FPS"))
         XCTAssertEqual(
             model.updateAvailableStorageBytes(4 * 1_024 * 1_024 * 1_024),
             .warning
@@ -37,6 +51,7 @@ final class RecordingControlViewTests: XCTestCase {
             Color(red: 0.55, green: 0.55, blue: 0.55)
             RecordingControlView(
                 model: model,
+                onHide: {},
                 onPauseToggle: {},
                 onDiscardAndRestart: {},
                 onStop: {}
@@ -44,7 +59,7 @@ final class RecordingControlViewTests: XCTestCase {
         }
         .environment(\.colorScheme, .light)
         let hostingView = NSHostingView(rootView: root)
-        hostingView.frame = CGRect(x: 0, y: 0, width: 590, height: 98)
+        hostingView.frame = CGRect(origin: .zero, size: RecordingControlWindowController.panelSize)
         let snapshotWindow = NSWindow(
             contentRect: hostingView.frame,
             styleMask: [.borderless],
@@ -68,8 +83,9 @@ final class RecordingControlViewTests: XCTestCase {
             try png.write(to: URL(fileURLWithPath: snapshotPath), options: .atomic)
         }
 
-        XCTAssertGreaterThanOrEqual(representation.pixelsWide, 590)
-        XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 98)
+        XCTAssertLessThanOrEqual(RecordingControlWindowController.panelSize.width, 600)
+        XCTAssertGreaterThanOrEqual(representation.pixelsWide, 520)
+        XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 110)
         XCTAssertGreaterThan(png?.count ?? 0, 4_000)
     }
 
@@ -85,6 +101,8 @@ final class RecordingControlViewTests: XCTestCase {
         XCTAssertEqual(model.recordingStateTitle, "正在录制")
         XCTAssertEqual(model.systemAudioAccessibilityValue, "录制中，电平 72%")
         XCTAssertEqual(model.microphoneAccessibilityValue, "单独分轨录制中，电平 95%")
+        model.updateEventCaptureHealth(.degraded(.eventsNotDelivered))
+        XCTAssertTrue(model.eventCaptureHelp.contains("没有交付事件"))
         XCTAssertEqual(
             model.elapsedAccessibilityValue(at: startedAt.addingTimeInterval(65)),
             "01:05"
@@ -140,5 +158,35 @@ final class RecordingControlViewTests: XCTestCase {
         controller.setTransitioning(false)
         controller.requestDiscardAndRestart()
         XCTAssertEqual(requestCount, 1)
+    }
+
+    func testControlPanelStaysAvailableAcrossAppsSpacesAndFullScreen() {
+        let controller = RecordingControlWindowController()
+        let panel = controller.panelForTesting
+
+        XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+        XCTAssertEqual(panel.level, .statusBar)
+        XCTAssertFalse(panel.hidesOnDeactivate)
+        XCTAssertTrue(panel.isFloatingPanel)
+        XCTAssertTrue(panel.worksWhenModal)
+        XCTAssertTrue(panel.becomesKeyOnlyIfNeeded)
+        XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+        XCTAssertTrue(panel.collectionBehavior.contains(.fullScreenAuxiliary))
+        XCTAssertTrue(panel.collectionBehavior.contains(.stationary))
+        XCTAssertTrue(panel.collectionBehavior.contains(.ignoresCycle))
+    }
+
+    func testManualHideKeepsTheRecordingActionSeparate() {
+        let controller = RecordingControlWindowController()
+        var hideCount = 0
+        var stopCount = 0
+        controller.onHide = { hideCount += 1 }
+        controller.onStop = { stopCount += 1 }
+
+        controller.requestHide()
+
+        XCTAssertEqual(hideCount, 1)
+        XCTAssertEqual(stopCount, 0)
+        XCTAssertFalse(controller.isVisible)
     }
 }

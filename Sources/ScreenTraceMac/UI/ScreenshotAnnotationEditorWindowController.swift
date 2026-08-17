@@ -3,6 +3,12 @@ import ScreenTraceCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+enum ScreenshotEditorClipboardStatus {
+    case copied
+    case copyFailed
+    case notRequested
+}
+
 @MainActor
 final class ScreenshotAnnotationEditorWindowController {
     private let store: TraceProjectStore
@@ -10,8 +16,11 @@ final class ScreenshotAnnotationEditorWindowController {
     private var window: AnnotationEditorWindow?
     private var activeTrace: SavedTrace?
     private var sourceImage: NSImage?
+    private var activeModel: ScreenshotAnnotationEditorModel?
+    private var operationTask: Task<Void, Never>?
 
-    var onSaved: ((SavedTrace, NSImage) -> Void)?
+    var onSaved: ((SavedTrace, NSImage, ScreenshotEditorClipboardStatus) -> Void)?
+    var onCopyResult: ((Bool) -> Void)?
     var onFailure: ((Error) -> Void)?
 
     init(store: TraceProjectStore) {
@@ -21,7 +30,11 @@ final class ScreenshotAnnotationEditorWindowController {
 
     func show(trace: SavedTrace, fallbackImage: NSImage) {
         guard let dimensions = trace.manifest.dimensions else { return }
-        let originalImage = NSImage(contentsOf: trace.rawAssetURL) ?? fallbackImage
+        operationTask?.cancel()
+        activeModel?.endRendering()
+        // Capture quick access and the library already provide the full-size raw
+        // image. Reusing it avoids decoding the same large PNG twice on the UI thread.
+        let originalImage = fallbackImage
         let existingPlan = try? store.loadScreenshotEditPlan(from: trace.packageURL)
         let model = ScreenshotAnnotationEditorModel(
             sourceDimensions: dimensions,
@@ -30,12 +43,14 @@ final class ScreenshotAnnotationEditorWindowController {
 
         activeTrace = trace
         sourceImage = originalImage
+        activeModel = model
         let window = window ?? makeWindow()
         self.window = window
         let root = ScreenshotAnnotationEditorView(
             model: model,
             image: originalImage,
             onSave: { [weak self] plan in self?.save(plan) },
+            onCopy: { [weak self] plan in self?.copy(plan) },
             onExport: { [weak self] plan, format in self?.export(plan, format: format) },
             onCancel: { [weak self] in self?.hide() }
         )
@@ -44,46 +59,124 @@ final class ScreenshotAnnotationEditorWindowController {
         hostingView.autoresizingMask = [.width, .height]
         window.contentView = hostingView
         window.onEscape = { [weak self] in self?.hide() }
+        window.onCopy = { [weak self, weak model] in
+            guard let model else { return }
+            self?.copy(model.plan)
+        }
         window.center()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
     }
 
     func hide() {
+        operationTask?.cancel()
+        operationTask = nil
+        activeModel?.endRendering()
         window?.orderOut(nil)
         activeTrace = nil
         sourceImage = nil
+        activeModel = nil
     }
 
     private func save(_ plan: ScreenshotEditPlan) {
-        guard let activeTrace, let sourceImage else { return }
+        guard let activeTrace,
+              let sourceImage,
+              let model = activeModel,
+              model.beginRendering() else { return }
+        let source: CGImage
         do {
-            let source = try ImageEncoding.cgImage(from: sourceImage)
-            let result = try editingService.renderAndSave(
-                source: source,
-                plan: plan,
-                trace: activeTrace
-            )
-            let renderedImage = ImageEncoding.nsImage(from: result.renderedImage)
-            copyToClipboard(renderedImage)
-            onSaved?(result.trace, renderedImage)
-            hide()
+            source = try ImageEncoding.cgImage(from: sourceImage)
         } catch {
+            model.endRendering()
             onFailure?(error)
+            return
+        }
+        let service = editingService
+        operationTask = Task { @MainActor [weak self, weak model] in
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try service.renderAndSave(
+                        source: source,
+                        plan: plan,
+                        trace: activeTrace
+                    )
+                }.value
+                guard !Task.isCancelled,
+                      let self,
+                      let model,
+                      self.activeModel === model else { return }
+                model.endRendering()
+                operationTask = nil
+                let renderedImage = ImageEncoding.nsImage(from: result.renderedImage)
+                let copied = copyToClipboard(renderedImage)
+                onSaved?(
+                    result.trace,
+                    renderedImage,
+                    copied ? .copied : .copyFailed
+                )
+                hide()
+            } catch {
+                guard let self,
+                      let model,
+                      self.activeModel === model else { return }
+                model.endRendering()
+                operationTask = nil
+                onFailure?(error)
+            }
         }
     }
 
-    private func copyToClipboard(_ image: NSImage) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([image])
+    @discardableResult
+    private func copyToClipboard(_ image: NSImage) -> Bool {
+        ImageClipboardWriter.write(image)
+    }
+
+    private func copy(_ plan: ScreenshotEditPlan) {
+        guard let sourceImage,
+              let model = activeModel,
+              model.beginRendering() else { return }
+        let source: CGImage
+        do {
+            source = try ImageEncoding.cgImage(from: sourceImage)
+        } catch {
+            model.endRendering()
+            onFailure?(error)
+            return
+        }
+        let service = editingService
+        operationTask = Task { @MainActor [weak self, weak model] in
+            do {
+                let rendered = try await Task.detached(priority: .userInitiated) {
+                    try service.render(source: source, plan: plan)
+                }.value
+                guard !Task.isCancelled,
+                      let self,
+                      let model,
+                      self.activeModel === model else { return }
+                model.endRendering()
+                operationTask = nil
+                let copied = copyToClipboard(ImageEncoding.nsImage(from: rendered))
+                model.showClipboardFeedback(succeeded: copied)
+                onCopyResult?(copied)
+            } catch {
+                guard let self,
+                      let model,
+                      self.activeModel === model else { return }
+                model.endRendering()
+                operationTask = nil
+                onFailure?(error)
+            }
+        }
     }
 
     private func export(
         _ plan: ScreenshotEditPlan,
         format: ScreenshotExportFormat
     ) {
-        guard let activeTrace, let sourceImage else { return }
+        guard let activeTrace,
+              let sourceImage,
+              let model = activeModel,
+              !model.isRendering else { return }
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
@@ -94,22 +187,51 @@ final class ScreenshotAnnotationEditorWindowController {
         panel.nameFieldStringValue = "\(safeTitle).\(format.fileExtension)"
         guard panel.runModal() == .OK, let outputURL = panel.url else { return }
 
+        guard model.beginRendering() else { return }
+        let source: CGImage
         do {
-            let source = try ImageEncoding.cgImage(from: sourceImage)
-            let result = try editingService.renderAndSave(
-                source: source,
-                plan: plan,
-                trace: activeTrace
-            )
-            try editingService.export(
-                image: result.renderedImage,
-                to: outputURL,
-                format: format
-            )
-            onSaved?(result.trace, ImageEncoding.nsImage(from: result.renderedImage))
-            hide()
+            source = try ImageEncoding.cgImage(from: sourceImage)
         } catch {
+            model.endRendering()
             onFailure?(error)
+            return
+        }
+        let service = editingService
+        operationTask = Task { @MainActor [weak self, weak model] in
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    let result = try service.renderAndSave(
+                        source: source,
+                        plan: plan,
+                        trace: activeTrace
+                    )
+                    try service.export(
+                        image: result.renderedImage,
+                        to: outputURL,
+                        format: format
+                    )
+                    return result
+                }.value
+                guard !Task.isCancelled,
+                      let self,
+                      let model,
+                      self.activeModel === model else { return }
+                model.endRendering()
+                operationTask = nil
+                onSaved?(
+                    result.trace,
+                    ImageEncoding.nsImage(from: result.renderedImage),
+                    .notRequested
+                )
+                hide()
+            } catch {
+                guard let self,
+                      let model,
+                      self.activeModel === model else { return }
+                model.endRendering()
+                operationTask = nil
+                onFailure?(error)
+            }
         }
     }
 
@@ -134,8 +256,19 @@ final class ScreenshotAnnotationEditorWindowController {
 
 private final class AnnotationEditorWindow: NSWindow {
     var onEscape: (() -> Void)?
+    var onCopy: (() -> Void)?
 
     override func cancelOperation(_ sender: Any?) {
         onEscape?()
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if modifiers == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "c" {
+            onCopy?()
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 }

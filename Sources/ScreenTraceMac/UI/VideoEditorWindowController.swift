@@ -2,16 +2,55 @@ import AppKit
 @preconcurrency import AVFoundation
 import ScreenTraceCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum VideoEditorWindowError: LocalizedError {
     case sourceUnavailable
     case durationUnavailable
+    case previewVerificationFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .sourceUnavailable: "录屏原始文件不存在，无法打开编辑器。"
         case .durationUnavailable: "录屏时长尚不可用，请先完成或恢复原始录制。"
+        case let .previewVerificationFailed(detail):
+            "最终成片尚未通过媒体验证：\(detail)"
         }
+    }
+}
+
+enum RenderedPreviewExportGate {
+    static func failureDescription(
+        for report: RecordingHealthReport?,
+        expectedPlanDigest: String?
+    ) -> String? {
+        guard let expectedPlanDigest, !expectedPlanDigest.isEmpty else {
+            return "无法生成当前编辑方案摘要"
+        }
+        guard let verification = report?.renderedEffectVerification else {
+            return "缺少编码结果验证，请先重新生成预览"
+        }
+        guard let renderedPlanDigest = report?.renderedPlanDigest else {
+            return "预览尚未绑定当前编辑方案，请重新生成"
+        }
+        guard renderedPlanDigest == expectedPlanDigest else {
+            return "预览对应旧编辑方案，请重新生成"
+        }
+        guard verification.previewPlayable else {
+            return "预览视频不可解码"
+        }
+        var failures = verification.effects.compactMap { check in
+            check.state == .failed || check.state == .inconclusive
+                ? check.effect.title
+                : nil
+        }
+        if !verification.isFrameRateVerified {
+            failures.append("帧率")
+        }
+        guard failures.isEmpty else {
+            return "\(failures.joined(separator: "、"))未通过开启/关闭对照"
+        }
+        return nil
     }
 }
 
@@ -22,6 +61,16 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
     private var model: VideoEditorModel?
     private var playback: VideoEditorPlaybackController?
     private var packageURL: URL?
+    private var exportTitle = "屏迹视频"
+    private var previewRefreshRevision: UInt64 = 0
+    private var previewRefreshTask: Task<Void, Never>?
+    private var cameraRegenerationRevision: UInt64 = 0
+    private var cameraRegenerationTask: Task<Void, Never>?
+    private let presenterThumbnailCache: NSCache<NSURL, NSImage> = {
+        let cache = NSCache<NSURL, NSImage>()
+        cache.countLimit = 12
+        return cache
+    }()
 
     var onSaved: (@MainActor (SavedTrace) async -> Void)?
     var onFailure: ((Error) -> Void)?
@@ -62,6 +111,8 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
             ?? AutoEditPlan(
                 timeline: VideoEditTimeline(sourceDurationSeconds: duration)
             )
+        let requiresPlanMigration = plan.schemaVersion
+            != AutoEditPlan.currentSchemaVersion
         let cameraURL = entry.manifest.assets
             .lazy
             .filter { $0.role == .camera }
@@ -87,24 +138,78 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
             playback?.reload(timeline: timeline)
         }
         self.playback?.stop()
+        previewRefreshTask?.cancel()
+        previewRefreshTask = nil
+        cameraRegenerationTask?.cancel()
+        cameraRegenerationTask = nil
+        previewRefreshRevision &+= 1
+        cameraRegenerationRevision &+= 1
         self.model = model
         self.playback = playback
         packageURL = entry.packageURL
+        exportTitle = entry.manifest.title
 
         window.contentView = NSHostingView(rootView: VideoEditorView(
             model: model,
             playback: playback,
             title: entry.manifest.title,
+            onRegenerateCamera: { [weak self] in self?.regenerateAutomaticCamera() },
+            onRefreshPreview: { [weak self] in self?.requestPreviewRefresh() },
             onSave: { [weak self] in self?.save() },
+            onExport: { [weak self] in self?.exportMP4() },
             onClose: { [weak self] in self?.requestClose() }
         ))
-        playback.load(sourceURL: entry.primaryAssetURL, timeline: model.timeline)
+        let renderedPreviewURL = requiresPlanMigration ? nil : entry.manifest.assets
+            .first(where: { $0.role == .renderedVideo })
+            .map { entry.packageURL.appendingPathComponent($0.relativePath) }
+            .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        playback.load(
+            sourceURL: entry.primaryAssetURL,
+            timeline: model.timeline,
+            renderedPreviewURL: renderedPreviewURL
+        )
+        if requiresPlanMigration {
+            requestPreviewRefresh()
+        }
         if let cameraURL {
-            loadPresenterThumbnail(from: cameraURL, into: model)
+            let cacheKey = cameraURL.standardizedFileURL as NSURL
+            if let cached = presenterThumbnailCache.object(forKey: cacheKey) {
+                model.setPresenterThumbnail(cached)
+            } else {
+                loadPresenterThumbnail(from: cameraURL, into: model)
+            }
         }
         window.center()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Makes a newly generated smart preview available without rebuilding the
+    /// editor window. Background completion only makes the generated result
+    /// selectable; it never changes the active source behind the viewer's back.
+    @discardableResult
+    func adoptBackgroundPreview(
+        entry: TraceLibraryEntry,
+        renderedPlan: AutoEditPlan
+    ) -> Bool {
+        guard packageURL?.standardizedFileURL == entry.packageURL.standardizedFileURL,
+              let model,
+              let playback,
+              model.canAdoptBackgroundPreview(renderedPlan: renderedPlan),
+              entry.manifest.state == .ready,
+              let previewURL = entry.manifest.assets
+                .first(where: { $0.role == .renderedVideo })
+                .map({ entry.packageURL.appendingPathComponent($0.relativePath) }),
+              FileManager.default.fileExists(atPath: previewURL.path) else {
+            return false
+        }
+        playback.updateRenderedPreview(
+            url: previewURL,
+            timeline: renderedPlan.timeline
+                ?? VideoEditTimeline(sourceDurationSeconds: model.sourceDurationSeconds),
+            switchesImmediately: false
+        )
+        return true
     }
 
     func hide() {
@@ -132,19 +237,234 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
 
     private func save() {
         guard let model, let packageURL, !model.isProcessing else { return }
-        do {
-            let saved = try store.writeAutoEditPlan(model.plan, to: packageURL)
-            model.markSaved()
-            model.beginProcessing()
-            Task { @MainActor [weak self, weak model] in
-                guard let self else { return }
-                await onSaved?(saved)
-                guard self.model === model else { return }
-                model?.endProcessing()
-            }
-        } catch {
-            onFailure?(error)
+        let requestedPlan = model.plan
+        Task { @MainActor [weak self, weak model] in
+            guard let self, let model else { return }
+            _ = await persistAndProcess(
+                model: model,
+                packageURL: packageURL,
+                requestedPlan: requestedPlan
+            )
         }
+    }
+
+    private func regenerateAutomaticCamera() {
+        guard let model,
+              let packageURL else { return }
+        cameraRegenerationRevision &+= 1
+        let requestedRevision = cameraRegenerationRevision
+        cameraRegenerationTask?.cancel()
+        model.endRegeneratingCamera()
+        let store = store
+        cameraRegenerationTask = Task { @MainActor [weak self, weak model] in
+            guard let self, let model else { return }
+            defer {
+                if self.model === model,
+                   self.cameraRegenerationRevision == requestedRevision {
+                    model.endRegeneratingCamera()
+                    self.cameraRegenerationTask = nil
+                }
+            }
+            do {
+                try await Task.sleep(for: .milliseconds(180))
+            } catch {
+                return
+            }
+            while model.isProcessing, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(80))
+            }
+            guard !Task.isCancelled,
+                  self.model === model,
+                  requestedRevision == self.cameraRegenerationRevision else { return }
+
+            model.beginRegeneratingCamera()
+            let camera = model.plan.camera
+            let duration = model.sourceDurationSeconds
+            do {
+                let analysisTask = Task.detached(priority: .userInitiated) {
+                    try store.regeneratedAutomaticCameraKeyframes(
+                        from: packageURL,
+                        durationSeconds: duration,
+                        camera: camera
+                    )
+                }
+                let keyframes = try await withTaskCancellationHandler {
+                    try await analysisTask.value
+                } onCancel: {
+                    analysisTask.cancel()
+                }
+                guard !Task.isCancelled,
+                      self.model === model,
+                      requestedRevision == self.cameraRegenerationRevision else { return }
+
+                model.replaceAutomaticCameraKeyframes(with: keyframes)
+                // Event analysis is complete at this point. Rendering can take
+                // longer and is deliberately shown as a separate phase.
+                model.endRegeneratingCamera()
+                let requestedPlan = model.plan
+                _ = await persistAndProcess(
+                    model: model,
+                    packageURL: packageURL,
+                    requestedPlan: requestedPlan
+                )
+            } catch is CancellationError {
+                return
+            } catch {
+                guard requestedRevision == self.cameraRegenerationRevision else { return }
+                onFailure?(error)
+            }
+        }
+    }
+
+    /// Renderer-backed controls are committed automatically after a short quiet
+    /// period. A newer edit supersedes a pending one, while an in-flight render
+    /// is allowed to finish before the latest plan is rendered.
+    private func requestPreviewRefresh() {
+        guard let model, let packageURL else { return }
+        previewRefreshRevision &+= 1
+        let requestedRevision = previewRefreshRevision
+        previewRefreshTask?.cancel()
+        previewRefreshTask = Task { @MainActor [weak self, weak model] in
+            guard let self, let model else { return }
+            defer {
+                if self.model === model,
+                   self.previewRefreshRevision == requestedRevision {
+                    self.previewRefreshTask = nil
+                }
+            }
+            do {
+                try await Task.sleep(for: .milliseconds(360))
+            } catch {
+                return
+            }
+            while (model.isProcessing || model.isRegeneratingCamera),
+                  !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(80))
+            }
+            guard !Task.isCancelled,
+                  self.model === model,
+                  requestedRevision == self.previewRefreshRevision else { return }
+            let requestedPlan = model.plan
+            _ = await persistAndProcess(
+                model: model,
+                packageURL: packageURL,
+                requestedPlan: requestedPlan
+            )
+        }
+    }
+
+    private func persistAndProcess(
+        model: VideoEditorModel,
+        packageURL: URL,
+        requestedPlan: AutoEditPlan
+    ) async -> URL? {
+        guard !model.isProcessing else { return nil }
+        do {
+            let saved = try store.writeAutoEditPlan(requestedPlan, to: packageURL)
+            model.beginProcessing()
+            await onSaved?(saved)
+            guard self.model === model else { return nil }
+            let refreshedManifest = try store.loadManifest(from: packageURL)
+            guard refreshedManifest.state == .ready else {
+                throw VideoEditorWindowError.sourceUnavailable
+            }
+            let previewURL = packageURL.appendingPathComponent("previews/auto.mp4")
+            guard FileManager.default.fileExists(atPath: previewURL.path) else {
+                throw VideoEditorWindowError.sourceUnavailable
+            }
+            model.markSaved(requestedPlan)
+            model.endProcessing()
+            // Do not flash an older completed preview over newer inspector
+            // edits. The coalescing loop will render the latest revision next.
+            if model.plan == requestedPlan {
+                playback?.updateRenderedPreview(
+                    url: previewURL,
+                    timeline: requestedPlan.timeline
+                        ?? VideoEditTimeline(
+                            sourceDurationSeconds: model.sourceDurationSeconds
+                        ),
+                    switchesImmediately: false
+                )
+            }
+            return previewURL
+        } catch {
+            model.endProcessing()
+            onFailure?(error)
+            return nil
+        }
+    }
+
+    private func exportMP4() {
+        guard let model, let packageURL, !model.isProcessing else { return }
+        Task { @MainActor [weak self, weak model] in
+            guard let self, let model else { return }
+            let previewURL = packageURL.appendingPathComponent("previews/auto.mp4")
+            let previousHealthReport = try? store.loadRecordingHealthReport(
+                from: packageURL
+            )
+            let currentTranscript = model.plan.captions?.isEnabled == true
+                ? try? store.loadTranscript(from: packageURL)
+                : nil
+            let expectedPlanDigest = try? RenderedPlanIdentity.digest(
+                for: model.plan,
+                transcript: currentTranscript
+            )
+            let mustRegenerate = model.isDirty
+                || !FileManager.default.fileExists(atPath: previewURL.path)
+                || previousHealthReport?.renderedEffectVerification == nil
+                || previousHealthReport?.renderedPlanDigest != expectedPlanDigest
+            let readyURL: URL?
+            if mustRegenerate {
+                readyURL = await persistAndProcess(
+                    model: model,
+                    packageURL: packageURL,
+                    requestedPlan: model.plan
+                )
+            } else {
+                readyURL = previewURL
+            }
+            guard let readyURL else { return }
+            let verifiedHealthReport = try? store.loadRecordingHealthReport(
+                from: packageURL
+            )
+            if let failure = RenderedPreviewExportGate.failureDescription(
+                for: verifiedHealthReport,
+                expectedPlanDigest: expectedPlanDigest
+            ) {
+                onFailure?(VideoEditorWindowError.previewVerificationFailed(failure))
+                return
+            }
+            presentExportPanel(sourceURL: readyURL)
+        }
+    }
+
+    private func presentExportPanel(sourceURL: URL) {
+        let panel = NSSavePanel()
+        panel.title = "导出屏迹视频"
+        panel.prompt = "导出 MP4"
+        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.canCreateDirectories = true
+        let safeTitle = exportTitle
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        panel.nameFieldStringValue = "\(safeTitle.isEmpty ? "屏迹视频" : safeTitle).mp4"
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let destinationURL = panel.url else { return }
+            do {
+                if FileManager.default.fileExists(atPath: destinationURL.path) {
+                    try FileManager.default.removeItem(at: destinationURL)
+                }
+                try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+                NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
+            } catch {
+                self?.onFailure?(error)
+            }
+        }
+    }
+
+    private func savedPlanTimeline(_ saved: SavedTrace) -> VideoEditTimeline {
+        (try? store.loadAutoEditPlan(from: saved.packageURL).timeline)
+            ?? VideoEditTimeline(sourceDurationSeconds: saved.manifest.durationSeconds ?? 0)
     }
 
     private func requestClose() {
@@ -168,10 +488,15 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
                     preferredTimescale: 600
                 )).image
                 guard self.model === model else { return }
-                model.setPresenterThumbnail(NSImage(
+                let image = NSImage(
                     cgImage: frame,
                     size: NSSize(width: frame.width, height: frame.height)
-                ))
+                )
+                presenterThumbnailCache.setObject(
+                    image,
+                    forKey: cameraURL.standardizedFileURL as NSURL
+                )
+                model.setPresenterThumbnail(image)
             } catch {
                 // The live editor remains usable with its native placeholder.
             }

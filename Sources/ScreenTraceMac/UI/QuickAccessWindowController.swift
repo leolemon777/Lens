@@ -10,17 +10,28 @@ final class QuickAccessWindowController {
     private var activeImage: NSImage?
     var onPinRequested: ((SavedTrace, NSImage) -> Void)?
     var onAnnotateRequested: ((SavedTrace, NSImage) -> Void)?
+    var onCopyResult: ((Bool) -> Void)?
 
-    func show(trace: SavedTrace, image: NSImage) {
+    func show(
+        trace: SavedTrace,
+        image: NSImage,
+        confirmationTitle: String = "截图已复制"
+    ) {
         dismissTask?.cancel()
         activeTrace = trace
         activeImage = image
 
         let panel = panel ?? makePanel()
         self.panel = panel
+        let dragFileURL = QuickAccessFileTransfer.bestFileURL(for: trace)
         let view = QuickAccessView(
             trace: trace,
             image: image,
+            dragFileURL: dragFileURL,
+            dragSuggestedName: dragFileURL.map {
+                QuickAccessFileTransfer.suggestedFileName(for: trace, fileURL: $0)
+            },
+            confirmationTitle: confirmationTitle,
             onCopy: { [weak self] in self?.copyActiveImage() },
             onAnnotate: { [weak self] in self?.requestAnnotation() },
             onReveal: { [weak self] in
@@ -49,7 +60,7 @@ final class QuickAccessWindowController {
 
     private func makePanel() -> QuickAccessPanel {
         let panel = QuickAccessPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 486, height: 128),
+            contentRect: NSRect(x: 0, y: 0, width: 486, height: 152),
             styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -76,9 +87,7 @@ final class QuickAccessWindowController {
 
     private func copyActiveImage() {
         guard let activeImage else { return }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([activeImage])
+        onCopyResult?(ImageClipboardWriter.write(activeImage))
     }
 
     private func requestPin() {

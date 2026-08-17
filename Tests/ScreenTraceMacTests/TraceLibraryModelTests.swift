@@ -39,6 +39,42 @@ final class TraceLibraryModelTests: XCTestCase {
         XCTAssertTrue(model.isTranscribing(recording.id))
         model.setTranscribing(false, id: recording.id)
         XCTAssertFalse(model.isTranscribing(recording.id))
+
+        XCTAssertTrue(model.canDelete(screenshot))
+        model.removeEntries(withIDs: [screenshot.id])
+        XCTAssertEqual(model.entries.map(\.id), [recording.id])
+        XCTAssertEqual(model.screenshotCount, 0)
+    }
+
+    func testActiveAndProcessingEntriesAreProtectedFromDeletion() {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceLibraryDeletePolicy", isDirectory: true)
+        var processing = makeEntry(root: root, kind: .recording, title: "处理中", ocrText: nil)
+        processing = TraceLibraryEntry(
+            packageURL: processing.packageURL,
+            manifest: TraceManifest(
+                id: processing.id,
+                kind: .recording,
+                title: "处理中",
+                state: .processing,
+                dimensions: TraceDimensions(width: 1_280, height: 720),
+                assets: processing.manifest.assets
+            ),
+            primaryAssetURL: processing.primaryAssetURL,
+            displayAssetURL: processing.displayAssetURL,
+            ocrText: nil
+        )
+        let ready = makeEntry(root: root, kind: .screenshot, title: "可删除", ocrText: nil)
+        let model = TraceLibraryModel(
+            store: TraceProjectStore(rootDirectory: root),
+            initialEntries: [processing, ready]
+        )
+
+        XCTAssertFalse(model.canDelete(processing))
+        model.setOrganizing(true, id: ready.id)
+        XCTAssertFalse(model.canDelete(ready))
+        model.setOrganizing(false, id: ready.id)
+        XCTAssertTrue(model.canDelete(ready))
     }
 
     private func makeEntry(

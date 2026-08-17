@@ -8,6 +8,239 @@ import XCTest
 @testable import ScreenTraceMac
 
 final class AutoPreviewRendererTests: XCTestCase {
+    func testCameraMotionBlurIsVelocityDrivenAndZeroIsExactBypass() throws {
+        let extent = CGRect(x: 0, y: 0, width: 320, height: 180)
+        let checker = try XCTUnwrap(CIFilter(
+            name: "CICheckerboardGenerator",
+            parameters: [
+                "inputColor0": CIColor.white,
+                "inputColor1": CIColor.black,
+                "inputWidth": 3.0,
+                "inputSharpness": 1.0
+            ]
+        )?.outputImage).cropped(to: extent)
+        let keyframes = [
+            AutoEditPlan.CameraKeyframe(
+                time: 0,
+                scale: 1,
+                center: TracePoint(x: 0.3, y: 0.5),
+                easing: "linear",
+                reason: .baseline
+            ),
+            AutoEditPlan.CameraKeyframe(
+                time: 1,
+                scale: 1.5,
+                center: TracePoint(x: 0.7, y: 0.5),
+                easing: "linear",
+                reason: .clickFocus
+            )
+        ]
+        var moving = AutoEditPlan.Camera(
+            mode: "event-driven",
+            zoomIntensity: 0.42,
+            followPointer: true,
+            zoomScale: 1.5,
+            motionBlurStrength: 1,
+            keyframes: keyframes
+        )
+        let context = CIContext(options: [.cacheIntermediates: false])
+        let base = try XCTUnwrap(context.createCGImage(checker, from: extent))
+        let blurred = try XCTUnwrap(context.createCGImage(
+            AutoPreviewRenderer.applyCameraMotionBlur(
+                to: checker,
+                at: 0.5,
+                camera: moving,
+                extent: extent
+            ),
+            from: extent
+        ))
+
+        let movingPixelCount = changedPixelCount(between: base, and: blurred)
+        XCTAssertGreaterThan(movingPixelCount, 5_000)
+        XCTAssertLessThan(movingPixelCount, 12_000)
+
+        let endpoint = try XCTUnwrap(context.createCGImage(
+            AutoPreviewRenderer.applyCameraMotionBlur(
+                to: checker,
+                at: 0,
+                camera: moving,
+                extent: extent
+            ),
+            from: extent
+        ))
+        XCTAssertEqual(changedPixelCount(between: base, and: endpoint), 0)
+
+        let outsideTemporalBudget = try XCTUnwrap(context.createCGImage(
+            AutoPreviewRenderer.applyCameraMotionBlur(
+                to: checker,
+                at: 0.15,
+                camera: moving,
+                extent: extent
+            ),
+            from: extent
+        ))
+        XCTAssertEqual(
+            changedPixelCount(between: base, and: outsideTemporalBudget),
+            0,
+            "Long transitions should stay sharp outside the short center blur window"
+        )
+
+        var pointerCorrection = moving
+        pointerCorrection.keyframes = keyframes.map { keyframe in
+            AutoEditPlan.CameraKeyframe(
+                time: keyframe.time,
+                scale: keyframe.scale,
+                center: keyframe.center,
+                easing: keyframe.easing,
+                reason: keyframe.time == 0 ? .baseline : .pointerFollow
+            )
+        }
+        let pointerBlur = try XCTUnwrap(context.createCGImage(
+            AutoPreviewRenderer.applyCameraMotionBlur(
+                to: checker,
+                at: 0.5,
+                camera: pointerCorrection,
+                extent: extent
+            ),
+            from: extent
+        ))
+        let pointerChangedPixelCount = changedPixelCount(between: base, and: pointerBlur)
+        XCTAssertLessThan(pointerChangedPixelCount, movingPixelCount)
+
+        moving.motionBlurStrength = 0
+        let disabled = try XCTUnwrap(context.createCGImage(
+            AutoPreviewRenderer.applyCameraMotionBlur(
+                to: checker,
+                at: 0.5,
+                camera: moving,
+                extent: extent
+            ),
+            from: extent
+        ))
+        XCTAssertEqual(changedPixelCount(between: base, and: disabled), 0)
+
+        moving.motionBlurStrength = 1
+        moving.keyframes = keyframes.map {
+            AutoEditPlan.CameraKeyframe(
+                time: $0.time,
+                scale: 1,
+                center: TracePoint(x: 0.5, y: 0.5),
+                easing: "linear",
+                reason: $0.reason
+            )
+        }
+        let staticFrame = try XCTUnwrap(context.createCGImage(
+            AutoPreviewRenderer.applyCameraMotionBlur(
+                to: checker,
+                at: 0.5,
+                camera: moving,
+                extent: extent
+            ),
+            from: extent
+        ))
+        XCTAssertEqual(changedPixelCount(between: base, and: staticFrame), 0)
+    }
+
+    func testClickFeedbackIsVisibleDuringPulseAndStrictlyBypassesWhenDisabled() throws {
+        let extent = CGRect(x: 0, y: 0, width: 640, height: 360)
+        let background = CIImage(color: CIColor(red: 0.08, green: 0.09, blue: 0.10))
+            .cropped(to: extent)
+        let ring = CIImage(color: CIColor.white).cropped(to: CGRect(
+            x: 0,
+            y: 0,
+            width: 72,
+            height: 72
+        ))
+        let pulse = AutoEditPlan.ClickPulse(
+            time: 0,
+            position: TracePoint(x: 0.5, y: 0.5),
+            button: .left,
+            duration: 0.64
+        )
+        let enabled = AutoEditPlan.Interaction(
+            showsClickPulse: true,
+            clickPulseScale: 1.25,
+            clickPulseColorHex: "#FF684D",
+            clickPulseDuration: 0.64,
+            clickPulses: [pulse]
+        )
+        let disabled = AutoEditPlan.Interaction(
+            showsClickPulse: false,
+            clickPulses: [pulse]
+        )
+        let active = AutoPreviewRenderer.applyClickFeedback(
+            to: background,
+            at: 0.24,
+            interaction: enabled,
+            viewport: extent,
+            cameraScale: 1,
+            extent: extent,
+            clickRingImage: ring
+        )
+        let ended = AutoPreviewRenderer.applyClickFeedback(
+            to: background,
+            at: 1,
+            interaction: enabled,
+            viewport: extent,
+            cameraScale: 1,
+            extent: extent,
+            clickRingImage: ring
+        )
+        let bypassed = AutoPreviewRenderer.applyClickFeedback(
+            to: background,
+            at: 0.24,
+            interaction: disabled,
+            viewport: extent,
+            cameraScale: 1,
+            extent: extent,
+            clickRingImage: ring
+        )
+        let context = CIContext(options: [.cacheIntermediates: false])
+        let base = try XCTUnwrap(context.createCGImage(background, from: extent))
+        let activeFrame = try XCTUnwrap(context.createCGImage(active, from: extent))
+        let endedFrame = try XCTUnwrap(context.createCGImage(ended, from: extent))
+        let bypassedFrame = try XCTUnwrap(context.createCGImage(bypassed, from: extent))
+
+        XCTAssertGreaterThan(changedPixelCount(between: base, and: activeFrame), 120)
+        XCTAssertEqual(changedPixelCount(between: base, and: endedFrame), 0)
+        XCTAssertEqual(changedPixelCount(between: base, and: bypassedFrame), 0)
+
+        var styledFrames: [AutoEditPlan.Interaction.ClickEffect: CGImage] = [:]
+        for effect in AutoEditPlan.Interaction.ClickEffect.allCases {
+            let styled = AutoEditPlan.Interaction(
+                showsClickPulse: true,
+                clickEffect: effect,
+                clickEffectStrength: 0.9,
+                clickPulseScale: 1.25,
+                clickPulseColorHex: "#FF684D",
+                clickPulseDuration: 0.64,
+                clickPulses: [pulse]
+            )
+            let image = try XCTUnwrap(context.createCGImage(
+                AutoPreviewRenderer.applyClickFeedback(
+                    to: background,
+                    at: 0.24,
+                    interaction: styled,
+                    viewport: extent,
+                    cameraScale: 1,
+                    extent: extent,
+                    clickRingImage: ring
+                ),
+                from: extent
+            ))
+            XCTAssertGreaterThan(changedPixelCount(between: base, and: image), 80)
+            styledFrames[effect] = image
+        }
+        XCTAssertGreaterThan(changedPixelCount(
+            between: try XCTUnwrap(styledFrames[.ripple]),
+            and: try XCTUnwrap(styledFrames[.pulse])
+        ), 20)
+        XCTAssertGreaterThan(changedPixelCount(
+            between: try XCTUnwrap(styledFrames[.pulse]),
+            and: try XCTUnwrap(styledFrames[.spotlight])
+        ), 20)
+    }
+
     func testVideoAnnotationRendererScopesBlurAndPixelateToActiveRegions() throws {
         let extent = CGRect(x: 0, y: 0, width: 320, height: 180)
         let checker = try XCTUnwrap(CIFilter(
@@ -169,6 +402,84 @@ final class AutoPreviewRendererTests: XCTestCase {
         XCTAssertTrue((0.72...0.92).contains(cornerColor.redComponent), "\(cornerColor)")
         XCTAssertTrue((0.72...0.91).contains(cornerColor.greenComponent), "\(cornerColor)")
         XCTAssertTrue((0.68...0.90).contains(cornerColor.blueComponent), "\(cornerColor)")
+    }
+
+    @MainActor
+    func testRecordedCursorShapeAndMotionEffectChangeRenderedMedia() async throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ScreenTraceCursorStyleTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inputURL = directory.appendingPathComponent("input.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: inputURL,
+            frameCount: 20,
+            framesPerSecond: 24
+        )
+
+        var arrowPlan = AutoEditPlan()
+        arrowPlan.camera.mode = "off"
+        arrowPlan.canvas?.isEnabled = false
+        arrowPlan.presenterCamera?.isEnabled = false
+        arrowPlan.interaction?.showsClickPulse = false
+        arrowPlan.cursor.appearance = .macOS
+        arrowPlan.cursor.motionEffect = .none
+        arrowPlan.cursor.hidesWhenIdle = false
+        arrowPlan.cursor.smoothingWindowMilliseconds = 0
+        arrowPlan.cursor.keyframes = [
+            AutoEditPlan.CursorKeyframe(
+                time: 0,
+                position: TracePoint(x: 0.5, y: 0.5)
+            )
+        ]
+
+        var recordedPlan = arrowPlan
+        recordedPlan.cursor.appearance = .recorded
+        recordedPlan.cursor.shapeKeyframes = [
+            AutoEditPlan.CursorShapeKeyframe(time: 0, shape: .pointingHand)
+        ]
+
+        var spotlightPlan = recordedPlan
+        spotlightPlan.cursor.motionEffect = .spotlight
+        spotlightPlan.cursor.motionEffectStrength = 1
+        spotlightPlan.cursor.accentColorHex = "#A3E635"
+
+        let arrowURL = directory.appendingPathComponent("arrow.mp4")
+        let recordedURL = directory.appendingPathComponent("recorded.mp4")
+        let spotlightURL = directory.appendingPathComponent("spotlight.mp4")
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: inputURL,
+            outputURL: arrowURL,
+            plan: arrowPlan
+        )
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: inputURL,
+            outputURL: recordedURL,
+            plan: recordedPlan
+        )
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: inputURL,
+            outputURL: spotlightURL,
+            plan: spotlightPlan
+        )
+
+        let time = CMTime(seconds: 0.3, preferredTimescale: 600)
+        let arrow = try await AVAssetImageGenerator(
+            asset: AVURLAsset(url: arrowURL)
+        ).image(at: time).image
+        let recorded = try await AVAssetImageGenerator(
+            asset: AVURLAsset(url: recordedURL)
+        ).image(at: time).image
+        let spotlight = try await AVAssetImageGenerator(
+            asset: AVURLAsset(url: spotlightURL)
+        ).image(at: time).image
+
+        XCTAssertGreaterThan(changedPixelCount(between: arrow, and: recorded), 20)
+        XCTAssertGreaterThan(changedPixelCount(between: recorded, and: spotlight), 100)
     }
 
     @MainActor
@@ -643,7 +954,60 @@ final class AutoPreviewRendererTests: XCTestCase {
     }
 
     @MainActor
-    func testCompactExportCreatesPlayableH264AndCapsSixtyFPSInput() async throws {
+    func testSourceExportPreservesSixtyFPSInputThroughSmartEffects() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "ScreenTraceSourceFrameRateTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inputURL = directory.appendingPathComponent("input-60fps.mp4")
+        let outputURL = directory.appendingPathComponent("source-effects.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: inputURL,
+            frameCount: 60,
+            framesPerSecond: 60
+        )
+        var plan = AutoEditPlan(export: .init(preset: .source))
+        plan.camera.mode = "off"
+        plan.cursor.isEnabled = false
+        plan.interaction?.showsClickPulse = false
+        plan.canvas?.isEnabled = false
+        plan.presenterCamera?.isEnabled = false
+
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: inputURL,
+            outputURL: outputURL,
+            plan: plan
+        )
+
+        let asset = AVURLAsset(url: outputURL)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let nominalFrameRate = try await track.load(.nominalFrameRate)
+        XCTAssertGreaterThanOrEqual(nominalFrameRate, 58)
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
+        XCTAssertTrue(reader.canAdd(output))
+        reader.add(output)
+        XCTAssertTrue(reader.startReading())
+        var timestamps: [Double] = []
+        while let sample = output.copyNextSampleBuffer() {
+            timestamps.append(sample.presentationTimeStamp.seconds)
+        }
+        XCTAssertEqual(reader.status, .completed)
+        XCTAssertGreaterThanOrEqual(timestamps.count, 58)
+        let first = try XCTUnwrap(timestamps.first)
+        let last = try XCTUnwrap(timestamps.last)
+        XCTAssertGreaterThanOrEqual(
+            Double(timestamps.count - 1) / max(last - first, 0.000_001),
+            58
+        )
+    }
+
+    @MainActor
+    func testCompactExportCreatesPlayableHEVCAndCapsSixtyFPSInput() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "ScreenTraceCompactExportTests-\(UUID().uuidString)",
@@ -676,7 +1040,7 @@ final class AutoPreviewRendererTests: XCTestCase {
         let track = try XCTUnwrap(tracks.first)
         let formatDescriptions = try await track.load(.formatDescriptions)
         let format = try XCTUnwrap(formatDescriptions.first)
-        XCTAssertEqual(CMFormatDescriptionGetMediaSubType(format), kCMVideoCodecType_H264)
+        XCTAssertEqual(CMFormatDescriptionGetMediaSubType(format), kCMVideoCodecType_HEVC)
         let nominalFrameRate = try await track.load(.nominalFrameRate)
         XCTAssertLessThanOrEqual(nominalFrameRate, 24.5)
         let reader = try AVAssetReader(asset: asset)
@@ -856,18 +1220,28 @@ enum SyntheticVideoFactory {
         at url: URL,
         frameCount: Int,
         framesPerSecond: Int,
-        style: SyntheticVideoStyle = .quadrants
+        width: Int = 640,
+        height: Int = 360,
+        style: SyntheticVideoStyle = .quadrants,
+        allowsFrameReordering: Bool? = nil
     ) async throws {
-        let width = 640
-        let height = 360
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+        var outputSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height
+        ]
+        if let allowsFrameReordering {
+            outputSettings[AVVideoCompressionPropertiesKey] = [
+                AVVideoAllowFrameReorderingKey: allowsFrameReordering,
+                AVVideoExpectedSourceFrameRateKey: framesPerSecond,
+                AVVideoMaxKeyFrameIntervalKey: framesPerSecond * 2,
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
+            ]
+        }
         let input = AVAssetWriterInput(
             mediaType: .video,
-            outputSettings: [
-                AVVideoCodecKey: AVVideoCodecType.h264,
-                AVVideoWidthKey: width,
-                AVVideoHeightKey: height
-            ]
+            outputSettings: outputSettings
         )
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: input,

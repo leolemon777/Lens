@@ -44,14 +44,14 @@ struct ScrollingCaptureTarget {
 
 @MainActor
 struct ScreenCaptureService {
-    func regionSnapRects(excludingProcessID: pid_t) -> [CGRect] {
+    nonisolated static func loadRegionSnapRects(excludingProcessID: pid_t) -> [CGRect] {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID)
             as? [[String: Any]] else { return [] }
-        return regionSnapRects(from: info, excludingProcessID: excludingProcessID)
+        return filteredRegionSnapRects(from: info, excludingProcessID: excludingProcessID)
     }
 
-    func regionSnapRects(
+    nonisolated static func filteredRegionSnapRects(
         from windowInfo: [[String: Any]],
         excludingProcessID: pid_t
     ) -> [CGRect] {
@@ -67,6 +67,17 @@ struct ScreenCaptureService {
                   rect.height >= 32 else { return nil }
             return rect.standardized
         }
+    }
+
+    nonisolated func regionSnapRects(excludingProcessID: pid_t) -> [CGRect] {
+        Self.loadRegionSnapRects(excludingProcessID: excludingProcessID)
+    }
+
+    nonisolated func regionSnapRects(
+        from windowInfo: [[String: Any]],
+        excludingProcessID: pid_t
+    ) -> [CGRect] {
+        Self.filteredRegionSnapRects(from: windowInfo, excludingProcessID: excludingProcessID)
     }
 
     func capture(globalDisplayRect: CGRect) async throws -> CGImage {
@@ -91,7 +102,18 @@ struct ScreenCaptureService {
     }
 
     func capture(window: SCWindow) async throws -> CGImage {
-        try await capture(window: window, includesShadow: true)
+        try await capture(window: window, includesShadow: true, maximumPixelSize: nil)
+    }
+
+    func captureThumbnail(
+        window: SCWindow,
+        maximumPixelSize: CGSize = CGSize(width: 360, height: 220)
+    ) async throws -> CGImage {
+        try await capture(
+            window: window,
+            includesShadow: false,
+            maximumPixelSize: maximumPixelSize
+        )
     }
 
     func capture(windows targets: [WindowCaptureTarget]) async throws -> CGImage {
@@ -110,24 +132,62 @@ struct ScreenCaptureService {
             }
             imagesByID[placement.windowID] = try await capture(
                 window: target.window,
-                includesShadow: false
+                includesShadow: false,
+                maximumPixelSize: nil
             )
         }
         return try composeWindowImages(imagesByID, using: layout)
     }
 
-    private func capture(window: SCWindow, includesShadow: Bool) async throws -> CGImage {
+    static func thumbnailPixelSize(
+        pointSize: CGSize,
+        pointPixelScale: CGFloat,
+        maximumPixelSize: CGSize
+    ) -> CGSize {
+        let scale = max(pointPixelScale, 1)
+        let sourceWidth = max(ceil(pointSize.width * scale), 1)
+        let sourceHeight = max(ceil(pointSize.height * scale), 1)
+        let maximumWidth = max(maximumPixelSize.width, 1)
+        let maximumHeight = max(maximumPixelSize.height, 1)
+        let fitScale = min(1, maximumWidth / sourceWidth, maximumHeight / sourceHeight)
+        return CGSize(
+            width: max(floor(sourceWidth * fitScale), 1),
+            height: max(floor(sourceHeight * fitScale), 1)
+        )
+    }
+
+    private func capture(
+        window: SCWindow,
+        includesShadow: Bool,
+        maximumPixelSize: CGSize?
+    ) async throws -> CGImage {
         guard #available(macOS 15.2, *) else {
             throw ScreenCaptureServiceError.unsupportedSystem
         }
 
         let filter = SCContentFilter(desktopIndependentWindow: window)
+        let pointSize = filter.contentRect.size
+        guard pointSize.width >= 1, pointSize.height >= 1 else {
+            throw ScreenCaptureServiceError.emptySelection
+        }
+        let scale = max(CGFloat(filter.pointPixelScale), 1)
+        let thumbnailSize = maximumPixelSize.map {
+            Self.thumbnailPixelSize(
+                pointSize: pointSize,
+                pointPixelScale: scale,
+                maximumPixelSize: $0
+            )
+        }
         if #available(macOS 26.0, *) {
             let configuration = SCScreenshotConfiguration()
             configuration.showsCursor = false
             configuration.ignoreShadows = !includesShadow
             configuration.includeChildWindows = includesShadow
             configuration.dynamicRange = .sdr
+            if let thumbnailSize {
+                configuration.width = Int(thumbnailSize.width)
+                configuration.height = Int(thumbnailSize.height)
+            }
 
             return try await withCheckedThrowingContinuation { continuation in
                 SCScreenshotManager.captureScreenshot(
@@ -145,22 +205,21 @@ struct ScreenCaptureService {
             }
         }
 
-        let scale = max(CGFloat(filter.pointPixelScale), 1)
-        let pointSize = filter.contentRect.size
-        guard pointSize.width >= 1, pointSize.height >= 1 else {
-            throw ScreenCaptureServiceError.emptySelection
-        }
-
         let configuration = SCStreamConfiguration()
-        configuration.width = max(Int(ceil(pointSize.width * scale)), 1)
-        configuration.height = max(Int(ceil(pointSize.height * scale)), 1)
+        configuration.width = Int(
+            thumbnailSize?.width ?? max(ceil(pointSize.width * scale), 1)
+        )
+        configuration.height = Int(
+            thumbnailSize?.height ?? max(ceil(pointSize.height * scale), 1)
+        )
         configuration.captureResolution = .best
         configuration.showsCursor = false
         configuration.showMouseClicks = false
         configuration.ignoreShadowsSingleWindow = !includesShadow
         configuration.ignoreGlobalClipSingleWindow = true
         configuration.shouldBeOpaque = false
-        configuration.scalesToFit = false
+        configuration.scalesToFit = thumbnailSize != nil
+        configuration.preservesAspectRatio = true
 
         return try await withCheckedThrowingContinuation { continuation in
             SCScreenshotManager.captureImage(
@@ -292,15 +351,22 @@ struct ScreenCaptureService {
         }
     }
 
-    func availableWindowTargets(excludingProcessID: pid_t) async throws -> [WindowCaptureTarget] {
+    func availableWindowTargets(
+        excludingProcessID: pid_t,
+        excludingBundleIdentifier: String? = nil
+    ) async throws -> [WindowCaptureTarget] {
         let content = try await shareableContent()
         let order = frontToBackWindowOrder()
         let candidates = content.windows.enumerated().compactMap { fallbackIndex, window -> WindowCaptureTarget? in
-            guard window.isOnScreen,
-                  window.windowLayer == 0,
-                  window.frame.width >= 48,
-                  window.frame.height >= 32,
-                  window.owningApplication?.processID != excludingProcessID else {
+            guard Self.isEligibleWindow(
+                isOnScreen: window.isOnScreen,
+                windowLayer: window.windowLayer,
+                frame: window.frame,
+                processID: window.owningApplication?.processID,
+                bundleIdentifier: window.owningApplication?.bundleIdentifier,
+                excludingProcessID: excludingProcessID,
+                excludingBundleIdentifier: excludingBundleIdentifier
+            ) else {
                 return nil
             }
 
@@ -324,6 +390,28 @@ struct ScreenCaptureService {
             throw ScreenCaptureServiceError.noEligibleWindows
         }
         return candidates
+    }
+
+    nonisolated static func isEligibleWindow(
+        isOnScreen: Bool,
+        windowLayer: Int,
+        frame: CGRect,
+        processID: pid_t?,
+        bundleIdentifier: String?,
+        excludingProcessID: pid_t,
+        excludingBundleIdentifier: String?
+    ) -> Bool {
+        guard isOnScreen,
+              windowLayer == 0,
+              frame.width >= 48,
+              frame.height >= 32,
+              processID != excludingProcessID else { return false }
+        if let excludingBundleIdentifier,
+           !excludingBundleIdentifier.isEmpty,
+           bundleIdentifier == excludingBundleIdentifier {
+            return false
+        }
+        return true
     }
 
     private func shareableContent() async throws -> SCShareableContent {

@@ -16,9 +16,37 @@ enum AutoPreviewRendererError: LocalizedError {
     }
 }
 
+private struct CursorRenderAsset: @unchecked Sendable {
+    let image: CIImage
+    /// Normalized in AppKit's top-left coordinate system.
+    let hotSpot: CGPoint
+    let relativeWidth: CGFloat
+}
+
+private struct CursorRenderAssets: @unchecked Sendable {
+    let system: [PointerCursorShape: CursorRenderAsset]
+    let highContrast: CursorRenderAsset
+    let minimalDot: CursorRenderAsset
+
+    var arrow: CursorRenderAsset {
+        system[.arrow] ?? highContrast
+    }
+}
+
 @MainActor
 final class AutoPreviewRenderer {
     private(set) var lastPresenterCameraError: Error?
+    private var cachedCursorAssets: CursorRenderAssets?
+    private var cachedClickRingImage: CIImage?
+
+    /// Source-pixel cursor size shared by final rendering and the live editor.
+    /// Retina captures are commonly 2560–3840 px wide; the previous 1.2% rule
+    /// collapsed to a barely visible 8–16 px pointer after normal playback
+    /// downscaling. This baseline remains user-scalable while preserving a
+    /// clearly readable default at 1080p delivery sizes.
+    nonisolated static func baseCursorWidth(sourcePixelWidth: CGFloat) -> CGFloat {
+        min(max(sourcePixelWidth * 0.021, 36), 104)
+    }
 
     func render(
         inputURL: URL,
@@ -134,6 +162,64 @@ final class AutoPreviewRenderer {
         }
     }
 
+    /// Renders one decoded source frame through the same effect compositor used
+    /// by the encoded preview. This is intentionally an internal diagnostic
+    /// entry point: the post-render verifier toggles one effect at a time and
+    /// checks whether `auto.mp4` resembles the enabled or disabled result.
+    func renderDiagnosticFrame(
+        sourceImage: CGImage,
+        outputTime: Double,
+        plan: AutoEditPlan,
+        transcript: TranscriptDocument? = nil,
+        hasPresenterCamera: Bool = false,
+        cameraSampleInterval: Double = 1.0 / 60.0
+    ) throws -> CGImage {
+        let source = CIImage(cgImage: sourceImage)
+        let annotationRenderer = plan.videoAnnotations.flatMap {
+            $0.isEmpty ? nil : VideoAnnotationRenderer(annotations: $0)
+        }
+        let activePresenter = plan.presenterCamera.flatMap {
+            $0.isEnabled && hasPresenterCamera ? $0 : nil
+        }
+        let captionRenderer: CaptionOverlayRenderer? = {
+            guard let configuration = plan.captions,
+                  configuration.isEnabled,
+                  let transcript else { return nil }
+            let cues = CaptionCuePlanner.cues(
+                transcript: transcript,
+                configuration: configuration,
+                timeline: plan.timeline
+            )
+            guard !cues.isEmpty else { return nil }
+            return CaptionOverlayRenderer(
+                cues: cues,
+                configuration: configuration,
+                presenter: activePresenter,
+                cameraKeyframes: EffectTimeline.effectiveCameraKeyframes(
+                    for: plan.camera
+                ),
+                timeline: plan.timeline
+            )
+        }()
+        let rendered = Self.renderFrame(
+            source,
+            time: outputTime,
+            plan: plan,
+            cursorAssets: try reusableCursorAssets(),
+            clickRingImage: try reusableClickRingImage(),
+            captionRenderer: captionRenderer,
+            videoAnnotationRenderer: annotationRenderer,
+            cameraSampleInterval: cameraSampleInterval
+        ).cropped(to: CGRect(origin: .zero, size: source.extent.size))
+        guard let image = CIContext(options: [.cacheIntermediates: false]).createCGImage(
+            rendered,
+            from: rendered.extent
+        ) else {
+            throw AutoPreviewRendererError.exportSessionUnavailable
+        }
+        return image
+    }
+
     private func renderScreenEffects(
         inputURL: URL,
         outputURL: URL,
@@ -154,9 +240,30 @@ final class AutoPreviewRenderer {
         } else {
             asset = AVURLAsset(url: inputURL)
         }
-        let cursorImage = try systemCursorImage()
-        let clickRingImage = try clickRingImage()
+        let cursorAssets = try reusableCursorAssets()
+        let clickRingImage = try reusableClickRingImage()
         let exportProfile = VideoExportProfile(plan.export)
+        let sourceVideoTracks = try await asset.loadTracks(withMediaType: .video)
+        let sourceFrameDuration: CMTime = if let sourceTrack = sourceVideoTracks.first,
+                                            let frameDuration = try? await sourceTrack.load(
+                                                .minFrameDuration
+                                            ),
+                                            frameDuration.isNumeric,
+                                            frameDuration.seconds.isFinite,
+                                            frameDuration.seconds > 0 {
+            frameDuration
+        } else if let sourceTrack = sourceVideoTracks.first,
+                  let nominalFrameRate = try? await sourceTrack.load(.nominalFrameRate),
+                  nominalFrameRate.isFinite,
+                  nominalFrameRate > 0 {
+            CMTime(
+                seconds: 1 / Double(min(max(nominalFrameRate, 1), 120)),
+                preferredTimescale: 60_000
+            )
+        } else {
+            CMTime(value: 1, timescale: 30)
+        }
+        let cameraSampleInterval = sourceFrameDuration.seconds
         let composition = try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<AVMutableVideoComposition, Error>) in
             AVMutableVideoComposition.videoComposition(
@@ -167,10 +274,11 @@ final class AutoPreviewRenderer {
                     request.sourceImage,
                     time: time,
                     plan: plan,
-                    cursorImage: cursorImage,
+                    cursorAssets: cursorAssets,
                     clickRingImage: clickRingImage,
                     captionRenderer: captionRenderer,
-                    videoAnnotationRenderer: videoAnnotationRenderer
+                    videoAnnotationRenderer: videoAnnotationRenderer,
+                    cameraSampleInterval: cameraSampleInterval
                 )
                 request.finish(with: result, context: nil)
                 },
@@ -185,10 +293,22 @@ final class AutoPreviewRenderer {
                 }
             )
         }
-        let limitedFrameDuration = exportProfile.limitedFrameDuration(
-            composition.frameDuration
-        )
-        if limitedFrameDuration != composition.frameDuration {
+        // AVFoundation's filter convenience composition defaults to 30 FPS,
+        // even when its source is a real 60 FPS capture. Derive timing from the
+        // source track first, then apply only an explicitly selected delivery
+        // cap. Otherwise every smart effect silently halves temporal fidelity.
+        let limitedFrameDuration = exportProfile.limitedFrameDuration(sourceFrameDuration)
+        if exportProfile.maximumFramesPerSecond == nil,
+           let sourceVideoTrack = sourceVideoTracks.first {
+            // H.264 High Profile capture can contain B-frame decode reordering.
+            // Driving the filter compositor from a synthetic fixed duration
+            // makes AVFoundation fall back to 30 FPS for those otherwise-valid
+            // 60 FPS tracks. Source quality must follow the source track's
+            // presentation timeline directly so every real 60 Hz sample reaches
+            // time-dependent camera, cursor and click effects.
+            composition.sourceTrackIDForFrameTiming = sourceVideoTrack.trackID
+            composition.frameDuration = sourceFrameDuration
+        } else if limitedFrameDuration != composition.frameDuration {
             composition.sourceTrackIDForFrameTiming = kCMPersistentTrackID_Invalid
             composition.frameDuration = limitedFrameDuration
         }
@@ -212,13 +332,79 @@ final class AutoPreviewRenderer {
         return outputURL
     }
 
-    private func systemCursorImage() throws -> CIImage {
-        let image = NSCursor.arrow.image
+    private func cursorAsset(
+        for cursor: NSCursor,
+        relativeWidth: CGFloat = 1
+    ) throws -> CursorRenderAsset {
+        let image = cursor.image
         var rect = CGRect(origin: .zero, size: image.size)
         if let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) {
-            return CIImage(cgImage: cgImage)
+            let width = max(image.size.width, 1)
+            let height = max(image.size.height, 1)
+            return CursorRenderAsset(
+                image: CIImage(cgImage: cgImage),
+                hotSpot: CGPoint(
+                    x: min(max(cursor.hotSpot.x / width, 0), 1),
+                    y: min(max(cursor.hotSpot.y / height, 0), 1)
+                ),
+                relativeWidth: relativeWidth
+            )
         }
-        return try fallbackCursorImage()
+        return CursorRenderAsset(
+            image: try fallbackCursorImage(),
+            hotSpot: CGPoint(x: 0.1, y: 4.0 / 48.0),
+            relativeWidth: relativeWidth
+        )
+    }
+
+    private func reusableCursorAssets() throws -> CursorRenderAssets {
+        if let cachedCursorAssets { return cachedCursorAssets }
+        let cursorMap: [(PointerCursorShape, NSCursor)] = [
+            (.arrow, .arrow),
+            (.pointingHand, .pointingHand),
+            (.iBeam, .iBeam),
+            (.verticalIBeam, .iBeamCursorForVerticalLayout),
+            (.crosshair, .crosshair),
+            (.openHand, .openHand),
+            (.closedHand, .closedHand),
+            (.horizontalResize, .columnResize),
+            (.verticalResize, .rowResize),
+            (.operationNotAllowed, .operationNotAllowed),
+            (.dragCopy, .dragCopy),
+            (.dragLink, .dragLink),
+            (.contextualMenu, .contextualMenu),
+            (.disappearingItem, .disappearingItem)
+        ]
+        let arrowWidth = max(NSCursor.arrow.image.size.width, 1)
+        var system: [PointerCursorShape: CursorRenderAsset] = [:]
+        for (shape, cursor) in cursorMap {
+            system[shape] = try cursorAsset(
+                for: cursor,
+                relativeWidth: max(cursor.image.size.width, 1) / arrowWidth
+            )
+        }
+        let assets = CursorRenderAssets(
+            system: system,
+            highContrast: CursorRenderAsset(
+                image: try fallbackCursorImage(),
+                hotSpot: CGPoint(x: 0.1, y: 4.0 / 48.0),
+                relativeWidth: 1
+            ),
+            minimalDot: CursorRenderAsset(
+                image: try dotCursorImage(),
+                hotSpot: CGPoint(x: 0.5, y: 0.5),
+                relativeWidth: 0.72
+            )
+        )
+        cachedCursorAssets = assets
+        return assets
+    }
+
+    private func reusableClickRingImage() throws -> CIImage {
+        if let cachedClickRingImage { return cachedClickRingImage }
+        let image = try clickRingImage()
+        cachedClickRingImage = image
+        return image
     }
 
     private func fallbackCursorImage() throws -> CIImage {
@@ -257,6 +443,31 @@ final class AutoPreviewRenderer {
         return CIImage(cgImage: cgImage)
     }
 
+    private func dotCursorImage() throws -> CIImage {
+        let size = 48
+        guard let context = CGContext(
+            data: nil,
+            width: size,
+            height: size,
+            bitsPerComponent: 8,
+            bytesPerRow: size * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw AutoPreviewRendererError.cursorImageUnavailable
+        }
+        let outer = CGRect(x: 4, y: 4, width: 40, height: 40)
+        context.setFillColor(NSColor.white.cgColor)
+        context.fillEllipse(in: outer)
+        context.setStrokeColor(NSColor.black.withAlphaComponent(0.72).cgColor)
+        context.setLineWidth(3)
+        context.strokeEllipse(in: outer.insetBy(dx: 1.5, dy: 1.5))
+        guard let cgImage = context.makeImage() else {
+            throw AutoPreviewRendererError.cursorImageUnavailable
+        }
+        return CIImage(cgImage: cgImage)
+    }
+
     private func clickRingImage() throws -> CIImage {
         let size = 72
         guard let context = CGContext(
@@ -287,10 +498,11 @@ final class AutoPreviewRenderer {
         _ source: CIImage,
         time: Double,
         plan: AutoEditPlan,
-        cursorImage: CIImage,
+        cursorAssets: CursorRenderAssets,
         clickRingImage: CIImage,
         captionRenderer: CaptionOverlayRenderer?,
-        videoAnnotationRenderer: VideoAnnotationRenderer?
+        videoAnnotationRenderer: VideoAnnotationRenderer?,
+        cameraSampleInterval: Double
     ) -> CIImage {
         let extent = source.extent
         let sourceTime = plan.timeline?.position(atOutputTime: time)?.sourceTimeSeconds
@@ -335,55 +547,45 @@ final class AutoPreviewRenderer {
             .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
             .cropped(to: CGRect(origin: .zero, size: extent.size))
 
+        frame = applyCameraMotionBlur(
+            to: frame,
+            at: sourceTime,
+            camera: plan.camera,
+            extent: CGRect(origin: .zero, size: extent.size),
+            sampleInterval: cameraSampleInterval
+        )
+
         if let interaction = plan.interaction, interaction.showsClickPulse {
-            for pulse in interaction.clickPulses {
-                let elapsed = sourceTime - pulse.time
-                guard elapsed >= 0, elapsed <= pulse.duration else { continue }
-                let progress = min(max(elapsed / pulse.duration, 0), 1)
-                let eased = progress * progress * (3 - 2 * progress)
-                let screenPoint = CGPoint(
-                    x: extent.width * pulse.position.x,
-                    y: extent.height * (1 - pulse.position.y)
-                )
-                let outputPoint = CGPoint(
-                    x: (screenPoint.x - viewport.minX) * scale,
-                    y: (screenPoint.y - viewport.minY) * scale
-                )
-                let targetWidth = extent.width * (0.018 + 0.026 * eased)
-                let ringScale = targetWidth / max(clickRingImage.extent.width, 1)
-                var ring = clickRingImage.transformed(
-                    by: CGAffineTransform(scaleX: ringScale, y: ringScale)
-                )
-                ring = ring.transformed(by: CGAffineTransform(
-                    translationX: outputPoint.x - ring.extent.midX,
-                    y: outputPoint.y - ring.extent.midY
-                ))
-                ring = ring.applyingFilter("CIColorMatrix", parameters: [
-                    "inputRVector": CIVector(x: 1, y: 0, z: 0, w: 0),
-                    "inputGVector": CIVector(x: 0, y: 1, z: 0, w: 0),
-                    "inputBVector": CIVector(x: 0, y: 0, z: 1, w: 0),
-                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1 - eased)
-                ])
-                frame = ring.composited(over: frame)
-            }
+            frame = applyClickFeedback(
+                to: frame,
+                at: sourceTime,
+                interaction: interaction,
+                viewport: viewport,
+                cameraScale: scale,
+                extent: extent,
+                clickRingImage: clickRingImage
+            )
         }
 
         let cursorPosition = plan.cursor.isEnabled == false
             ? nil
             : EffectTimeline.cursorPosition(
                 at: sourceTime,
-                keyframes: plan.cursor.keyframes
+                keyframes: plan.cursor.keyframes,
+                smoothing: plan.cursor.smoothing,
+                smoothingWindowMilliseconds: plan.cursor.smoothingWindowMilliseconds
             )
-        let cursorIsIdle: Bool = {
+        let cursorOpacity: Double = {
             guard plan.cursor.hidesWhenIdle,
-                      let lastActivity = EffectTimeline.lastCursorActivity(
+                  let lastActivity = EffectTimeline.lastCursorActivity(
                       at: sourceTime,
                       keyframes: plan.cursor.keyframes
-                  ) else { return false }
-            return sourceTime - lastActivity > 1.8
+                  ) else { return 1 }
+            let idleElapsed = max(sourceTime - lastActivity - 1.35, 0)
+            return 1 - min(idleElapsed / 0.35, 1)
         }()
 
-        if let cursorPosition, !cursorIsIdle {
+        if let cursorPosition, cursorOpacity > 0.001 {
             let screenPoint = CGPoint(
                 x: extent.width * cursorPosition.x,
                 y: extent.height * (1 - cursorPosition.y)
@@ -392,15 +594,69 @@ final class AutoPreviewRenderer {
                 x: (screenPoint.x - viewport.minX) * scale,
                 y: (screenPoint.y - viewport.minY) * scale
             )
-            let targetCursorWidth = min(max(extent.width * 0.012, 28), 72) * plan.cursor.scale
-            let cursorScale = targetCursorWidth / max(cursorImage.extent.width, 1)
-            let scaledCursor = cursorImage.transformed(
-                by: CGAffineTransform(scaleX: cursorScale, y: cursorScale)
+            let cursorAsset = resolvedCursorAsset(
+                at: sourceTime,
+                cursor: plan.cursor,
+                assets: cursorAssets
             )
-            let positionedCursor = scaledCursor.transformed(by: CGAffineTransform(
-                translationX: outputPoint.x - scaledCursor.extent.minX,
-                y: outputPoint.y - scaledCursor.extent.maxY
-            ))
+            let targetCursorWidth = Self.baseCursorWidth(
+                sourcePixelWidth: extent.width
+            )
+                * plan.cursor.scale
+                * cursorAsset.relativeWidth
+            frame = applyCursorMotionEffect(
+                to: frame,
+                at: sourceTime,
+                cursor: plan.cursor,
+                currentPosition: cursorPosition,
+                currentOutputPoint: outputPoint,
+                cursorAsset: cursorAsset,
+                targetCursorWidth: targetCursorWidth,
+                opacity: cursorOpacity,
+                viewport: viewport,
+                cameraScale: scale,
+                extent: extent
+            )
+            if EffectTimeline.cursorKind(
+                at: sourceTime,
+                keyframes: plan.cursor.keyframes
+            ) == .dragged {
+                let accent = color(
+                    hex: plan.cursor.accentColorHex,
+                    fallback: CIColor(red: 0.36, green: 0.84, blue: 1)
+                )
+                let dragRing = clickRingLayer(
+                    clickRingImage,
+                    width: targetCursorWidth * 1.65,
+                    center: outputPoint,
+                    color: accent,
+                    opacity: 0.78
+                )
+                let dragGlow = radialGlowLayer(
+                    center: outputPoint,
+                    radius: targetCursorWidth * 1.15,
+                    color: accent,
+                    opacity: 0.24
+                )
+                frame = dragGlow.composited(over: frame)
+                frame = dragRing.composited(over: frame)
+            }
+            var positionedCursor = cursorLayer(
+                asset: cursorAsset,
+                width: targetCursorWidth,
+                hotSpot: outputPoint,
+                opacity: cursorOpacity
+            )
+            if plan.cursor.appearance == .minimalDot {
+                positionedCursor = tint(
+                    positionedCursor,
+                    color: color(
+                        hex: plan.cursor.accentColorHex,
+                        fallback: CIColor(red: 0.36, green: 0.84, blue: 1)
+                    ),
+                    opacity: 1
+                )
+            }
             frame = positionedCursor.composited(over: frame)
         }
         frame = frame.cropped(to: CGRect(origin: .zero, size: extent.size))
@@ -412,6 +668,454 @@ final class AutoPreviewRenderer {
             )
         }
         return captionRenderer?.apply(to: frame, at: time) ?? frame
+    }
+
+    nonisolated private static func resolvedCursorAsset(
+        at sourceTime: Double,
+        cursor: AutoEditPlan.Cursor,
+        assets: CursorRenderAssets
+    ) -> CursorRenderAsset {
+        switch cursor.appearance {
+        case .macOS:
+            return assets.arrow
+        case .highContrast:
+            return assets.highContrast
+        case .minimalDot:
+            return assets.minimalDot
+        case .recorded:
+            let shape = cursor.shapeKeyframes.last {
+                $0.time <= sourceTime
+            }?.shape ?? .arrow
+            return assets.system[shape] ?? assets.arrow
+        }
+    }
+
+    nonisolated private static func cursorLayer(
+        asset: CursorRenderAsset,
+        width: CGFloat,
+        hotSpot: CGPoint,
+        opacity: Double
+    ) -> CIImage {
+        let scale = width / max(asset.image.extent.width, 1)
+        var image = asset.image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let hotSpotX = image.extent.width * asset.hotSpot.x
+        let hotSpotYFromBottom = image.extent.height * (1 - asset.hotSpot.y)
+        image = image.transformed(by: CGAffineTransform(
+            translationX: hotSpot.x - image.extent.minX - hotSpotX,
+            y: hotSpot.y - image.extent.minY - hotSpotYFromBottom
+        ))
+        guard opacity < 0.999 else { return image }
+        return image.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 1, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 1, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 1, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: opacity)
+        ])
+    }
+
+    nonisolated private static func applyCursorMotionEffect(
+        to frame: CIImage,
+        at sourceTime: Double,
+        cursor: AutoEditPlan.Cursor,
+        currentPosition: TracePoint,
+        currentOutputPoint: CGPoint,
+        cursorAsset: CursorRenderAsset,
+        targetCursorWidth: CGFloat,
+        opacity: Double,
+        viewport: CGRect,
+        cameraScale: CGFloat,
+        extent: CGRect
+    ) -> CIImage {
+        guard cursor.motionEffect != .none,
+              cursor.motionEffectStrength > 0,
+              opacity > 0.001 else { return frame }
+        let accent = color(
+            hex: cursor.accentColorHex,
+            fallback: CIColor(red: 0.36, green: 0.84, blue: 1)
+        )
+        let strength = min(max(cursor.motionEffectStrength, 0.1), 1) * opacity
+        var result = frame
+
+        switch cursor.motionEffect {
+        case .none:
+            break
+        case .halo:
+            let glow = radialGlowLayer(
+                center: currentOutputPoint,
+                radius: targetCursorWidth * (0.72 + 0.38 * strength),
+                color: accent,
+                opacity: 0.34 * strength
+            )
+            result = glow.composited(over: result)
+        case .spotlight:
+            let glow = radialGlowLayer(
+                center: currentOutputPoint,
+                radius: max(targetCursorWidth * 2.5, extent.width * 0.035),
+                color: accent,
+                opacity: 0.30 * strength
+            )
+            result = glow.composited(over: result)
+        case .trail:
+            let samples: [(offset: Double, alpha: Double)] = [
+                (0.025, 0.30), (0.055, 0.21), (0.09, 0.13), (0.13, 0.07)
+            ]
+            for sample in samples.reversed() {
+                guard let position = EffectTimeline.cursorPosition(
+                    at: max(sourceTime - sample.offset, 0),
+                    keyframes: cursor.keyframes,
+                    smoothing: cursor.smoothing,
+                    smoothingWindowMilliseconds: cursor.smoothingWindowMilliseconds
+                ) else { continue }
+                let movement = hypot(
+                    position.x - currentPosition.x,
+                    position.y - currentPosition.y
+                )
+                guard movement > 0.0015 else { continue }
+                let screenPoint = CGPoint(
+                    x: extent.width * position.x,
+                    y: extent.height * (1 - position.y)
+                )
+                let outputPoint = CGPoint(
+                    x: (screenPoint.x - viewport.minX) * cameraScale,
+                    y: (screenPoint.y - viewport.minY) * cameraScale
+                )
+                let ghost = cursorLayer(
+                    asset: cursorAsset,
+                    width: targetCursorWidth,
+                    hotSpot: outputPoint,
+                    opacity: sample.alpha * strength
+                ).applyingFilter("CIGaussianBlur", parameters: [
+                    kCIInputRadiusKey: 0.7 + sample.offset * 11
+                ])
+                result = ghost.composited(over: result)
+            }
+        }
+        return result.cropped(to: extent)
+    }
+
+    /// Burns an impact glow and two expanding rings into the final frame. The
+    /// click stays legible even when the pointer itself is small or hidden.
+    nonisolated static func applyClickFeedback(
+        to frame: CIImage,
+        at sourceTime: Double,
+        interaction: AutoEditPlan.Interaction,
+        viewport: CGRect,
+        cameraScale: CGFloat,
+        extent: CGRect,
+        clickRingImage: CIImage
+    ) -> CIImage {
+        guard interaction.showsClickPulse else { return frame }
+        var result = frame
+        let pulseColor = color(
+            hex: interaction.clickPulseColorHex,
+            fallback: CIColor(red: 1, green: 0.41, blue: 0.30)
+        )
+        for pulse in interaction.clickPulses {
+            let elapsed = sourceTime - pulse.time
+            let duration = interaction.clickPulseDuration ?? pulse.duration
+            guard elapsed >= 0, elapsed <= duration else { continue }
+            let progress = min(max(elapsed / duration, 0), 1)
+            let eased = progress * progress * (3 - 2 * progress)
+            let strength = min(max(interaction.clickEffectStrength, 0.1), 1)
+            let opacity = pow(1 - progress, 0.68) * strength
+            let screenPoint = CGPoint(
+                x: extent.width * pulse.position.x,
+                y: extent.height * (1 - pulse.position.y)
+            )
+            let outputPoint = CGPoint(
+                x: (screenPoint.x - viewport.minX) * cameraScale,
+                y: (screenPoint.y - viewport.minY) * cameraScale
+            )
+
+            switch interaction.clickEffect {
+            case .ripple:
+                let primaryWidth = extent.width
+                    * (0.020 + 0.035 * eased)
+                    * interaction.clickPulseScale
+                let primaryRing = clickRingLayer(
+                    clickRingImage,
+                    width: primaryWidth,
+                    center: outputPoint,
+                    color: pulseColor,
+                    opacity: opacity
+                )
+                let glow = primaryRing
+                    .applyingFilter("CIGaussianBlur", parameters: [
+                        kCIInputRadiusKey: max(primaryWidth * 0.055, 1.5)
+                    ])
+                    .applyingFilter("CIColorMatrix", parameters: [
+                        "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 0.48)
+                    ])
+                result = glow.composited(over: result)
+                result = primaryRing.composited(over: result)
+
+                let echoProgress = min(max((progress - 0.12) / 0.88, 0), 1)
+                if echoProgress > 0 {
+                    let echoEased = echoProgress * echoProgress * (3 - 2 * echoProgress)
+                    let echoWidth = extent.width
+                        * (0.014 + 0.030 * echoEased)
+                        * interaction.clickPulseScale
+                    let echoRing = clickRingLayer(
+                        clickRingImage,
+                        width: echoWidth,
+                        center: outputPoint,
+                        color: pulseColor,
+                        opacity: 0.68 * pow(1 - echoProgress, 0.72) * strength
+                    )
+                    result = echoRing.composited(over: result)
+                }
+            case .pulse:
+                let pulseArc = sin(Double.pi * min(progress / 0.78, 1))
+                let radius = extent.width
+                    * (0.014 + 0.018 * pulseArc)
+                    * interaction.clickPulseScale
+                let impact = radialGlowLayer(
+                    center: outputPoint,
+                    radius: radius,
+                    color: pulseColor,
+                    opacity: (0.36 + 0.28 * pulseArc) * opacity
+                )
+                result = impact.composited(over: result)
+                let compactRing = clickRingLayer(
+                    clickRingImage,
+                    width: radius * 1.12,
+                    center: outputPoint,
+                    color: pulseColor,
+                    opacity: opacity * 0.82
+                )
+                result = compactRing.composited(over: result)
+            case .spotlight:
+                let radius = extent.width
+                    * (0.035 + 0.020 * eased)
+                    * interaction.clickPulseScale
+                let spotlight = radialGlowLayer(
+                    center: outputPoint,
+                    radius: radius,
+                    color: pulseColor,
+                    opacity: opacity * 0.48
+                )
+                result = spotlight.composited(over: result)
+                let focusRing = clickRingLayer(
+                    clickRingImage,
+                    width: radius * (0.62 + 0.18 * eased),
+                    center: outputPoint,
+                    color: pulseColor,
+                    opacity: opacity * 0.62
+                )
+                result = focusRing.composited(over: result)
+            }
+        }
+        return result.cropped(to: extent)
+    }
+
+    nonisolated private static func clickRingLayer(
+        _ image: CIImage,
+        width: CGFloat,
+        center: CGPoint,
+        color: CIColor,
+        opacity: Double
+    ) -> CIImage {
+        let scale = width / max(image.extent.width, 1)
+        var ring = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        ring = ring.transformed(by: CGAffineTransform(
+            translationX: center.x - ring.extent.midX,
+            y: center.y - ring.extent.midY
+        ))
+        return ring.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: color.red),
+            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: color.green),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: color.blue),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: opacity)
+        ])
+    }
+
+    nonisolated private static func tint(
+        _ image: CIImage,
+        color: CIColor,
+        opacity: Double
+    ) -> CIImage {
+        image.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: color.red),
+            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: color.green),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: color.blue),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: opacity)
+        ])
+    }
+
+    nonisolated private static func radialGlowLayer(
+        center: CGPoint,
+        radius: CGFloat,
+        color: CIColor,
+        opacity: Double
+    ) -> CIImage {
+        let safeRadius = max(radius, 1)
+        let safeOpacity = min(max(opacity, 0), 1)
+        let filter = CIFilter.radialGradient()
+        filter.center = center
+        filter.radius0 = 0
+        filter.radius1 = Float(safeRadius)
+        filter.color0 = CIColor(
+            red: color.red,
+            green: color.green,
+            blue: color.blue,
+            alpha: safeOpacity
+        )
+        filter.color1 = CIColor(
+            red: color.red,
+            green: color.green,
+            blue: color.blue,
+            alpha: 0
+        )
+        return filter.outputImage!.cropped(to: CGRect(
+            x: center.x - safeRadius,
+            y: center.y - safeRadius,
+            width: safeRadius * 2,
+            height: safeRadius * 2
+        ))
+    }
+
+    nonisolated static func applyCameraMotionBlur(
+        to image: CIImage,
+        at sourceTime: Double,
+        camera: AutoEditPlan.Camera,
+        extent: CGRect,
+        sampleInterval: Double = 1.0 / 30.0
+    ) -> CIImage {
+        let strength = min(max(
+            camera.motionBlurStrength.isFinite ? camera.motionBlurStrength : 0,
+            0
+        ), 1)
+        guard strength > 0.000_1,
+              camera.mode != "off",
+              extent.width > 1,
+              extent.height > 1 else {
+            return image
+        }
+
+        let interval = min(max(
+            sampleInterval.isFinite ? sampleInterval : 1.0 / 30.0,
+            1.0 / 240.0
+        ), 1.0 / 12.0)
+        let before = EffectTimeline.effectiveCameraState(
+            at: max(sourceTime - interval / 2, 0),
+            camera: camera
+        )
+        let after = EffectTimeline.effectiveCameraState(
+            at: sourceTime + interval / 2,
+            camera: camera
+        )
+        let averageScale = max((before.scale + after.scale) / 2, 1)
+        let panX = (after.center.x - before.center.x) * extent.width * averageScale
+        let panY = -(after.center.y - before.center.y) * extent.height * averageScale
+        let scaleRatio = max(after.scale, 0.001) / max(before.scale, 0.001)
+        let panVelocity = hypot(panX, panY) / interval
+        let zoomVelocity = abs(log(scaleRatio)) / interval
+        let normalizedPanVelocity = normalizedMotionVelocity(
+            panVelocity,
+            deadZone: 24,
+            fullStrength: 1_500
+        )
+        let normalizedZoomVelocity = normalizedMotionVelocity(
+            zoomVelocity,
+            deadZone: 0.025,
+            fullStrength: 1.60
+        )
+        let dominantVelocity = max(normalizedPanVelocity, normalizedZoomVelocity)
+        guard dominantVelocity > 0 else { return image }
+        let smoothVelocity = dominantVelocity * dominantVelocity
+            * (3 - 2 * dominantVelocity)
+        let motionBudget = cameraMotionBlurBudget(
+            at: sourceTime,
+            camera: camera,
+            sampleInterval: interval
+        )
+        let blurEnergy = sqrt(strength)
+            * smoothVelocity
+            * motionBudget.envelope
+            * motionBudget.intensity
+        guard blurEnergy > 0.01 else { return image }
+
+        let baseRadius: Double = switch camera.generationStrength {
+        case .restrained: 8
+        case .balanced: 11
+        case .active: 14
+        }
+        let resolutionScale = min(max(
+            max(extent.width, extent.height) / 1_380,
+            0.25
+        ), 2)
+        let radiusCap = baseRadius * resolutionScale
+        let radius = min(blurEnergy * radiusCap, radiusCap)
+        guard radius >= 0.25 else { return image }
+
+        if normalizedZoomVelocity >= normalizedPanVelocity {
+            return image.applyingFilter(
+                "CIZoomBlur",
+                parameters: [
+                    kCIInputCenterKey: CIVector(
+                        x: extent.midX,
+                        y: extent.midY
+                    ),
+                    kCIInputAmountKey: radius
+                ]
+            ).cropped(to: extent)
+        }
+        return image.applyingFilter(
+            "CIMotionBlur",
+            parameters: [
+                kCIInputRadiusKey: radius,
+                kCIInputAngleKey: atan2(panY, panX)
+            ]
+        ).cropped(to: extent)
+    }
+
+    nonisolated private static func normalizedMotionVelocity(
+        _ value: Double,
+        deadZone: Double,
+        fullStrength: Double
+    ) -> Double {
+        guard value.isFinite, fullStrength > deadZone else { return 0 }
+        return min(max((value - deadZone) / (fullStrength - deadZone), 0), 1)
+    }
+
+    /// Motion blur is a short transition accent, not a persistent softening
+    /// layer. Long camera moves receive a bounded center window, and the small
+    /// corrections generated by pointer following remain mostly crisp.
+    nonisolated private static func cameraMotionBlurBudget(
+        at time: Double,
+        camera: AutoEditPlan.Camera,
+        sampleInterval: Double
+    ) -> (envelope: Double, intensity: Double) {
+        let keyframes = EffectTimeline.effectiveCameraKeyframes(for: camera)
+        guard let nextIndex = keyframes.firstIndex(where: { $0.time >= time }),
+              nextIndex > 0 else { return (0, 0) }
+        let previous = keyframes[nextIndex - 1]
+        let next = keyframes[nextIndex]
+        let transitionDuration = next.time - previous.time
+        guard transitionDuration > 0 else { return (0, 0) }
+
+        let maximumWindow: Double = switch camera.generationStrength {
+        case .restrained: 0.14
+        case .balanced: 0.18
+        case .active: 0.22
+        }
+        let halfWindow = min(
+            transitionDuration / 2,
+            max(maximumWindow / 2, sampleInterval * 1.5)
+        )
+        let midpoint = (previous.time + next.time) / 2
+        let linearEnvelope = min(max(
+            1 - abs(time - midpoint) / max(halfWindow, 0.000_001),
+            0
+        ), 1)
+        let envelope = linearEnvelope * linearEnvelope * (3 - 2 * linearEnvelope)
+        let intensity: Double = switch next.reason {
+        case .pointerFollow: 0.22
+        case .returnToOverview, .manualReturn: 0.72
+        case .baseline, .clickHold, .manualAnchor, .manualHold: 0.45
+        case .clickFocus, .manualFocus: 1
+        }
+        return (envelope, intensity)
     }
 
     nonisolated private static func applyCanvas(

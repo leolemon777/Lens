@@ -28,15 +28,21 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private let onOCRFailed: (Error, SavedTrace) -> Void
     private let onScrollingCaptureCompleted: (Int, Int, Error?) -> Void
     private let onScrollingCaptureFailed: (Error) -> Void
+    private let onPerformanceMeasured: (String, [String: String]) -> Void
     private let captureService = ScreenCaptureService()
     private let ocrService = VisionOCRService()
     private let scrollingCapture = ScrollingCaptureSessionController()
     private var overlayWindows: [CaptureOverlayWindow] = []
+    private var overlayGeneration: UInt64 = 0
     private var windowTargets: [CGWindowID: WindowCaptureTarget] = [:]
     private var selectedWindowIDs: Set<CGWindowID> = []
     private var pendingPurpose: CapturePurpose = .screenshot
     private var isPreparingCapture = false
     private var isFinishingCapture = false
+    private var cachedRegionSnapRects: [CGRect] = []
+    private var cachedRegionSnapRectsAt: TimeInterval = -.infinity
+
+    private static let regionSnapRectCacheLifetime: TimeInterval = 3
 
     init(
         store: TraceProjectStore,
@@ -48,7 +54,8 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         onAutomaticOCRCompleted: @escaping (OCRDocument, SavedTrace) -> Void,
         onOCRFailed: @escaping (Error, SavedTrace) -> Void,
         onScrollingCaptureCompleted: @escaping (Int, Int, Error?) -> Void,
-        onScrollingCaptureFailed: @escaping (Error) -> Void
+        onScrollingCaptureFailed: @escaping (Error) -> Void,
+        onPerformanceMeasured: @escaping (String, [String: String]) -> Void
     ) {
         self.store = store
         self.model = model
@@ -60,6 +67,11 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         self.onOCRFailed = onOCRFailed
         self.onScrollingCaptureCompleted = onScrollingCaptureCompleted
         self.onScrollingCaptureFailed = onScrollingCaptureFailed
+        self.onPerformanceMeasured = onPerformanceMeasured
+
+        // Window enumeration can occasionally take several hundred milliseconds.
+        // Warm it at utility priority so the first overlay can still snap instantly.
+        prewarmRegionSnapRects()
     }
 
     func beginRegionCapture() {
@@ -82,6 +94,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     }
 
     private func beginRegionCapture(purpose: CapturePurpose) {
+        let requestStartedAt = ProcessInfo.processInfo.systemUptime
         guard canBeginCapture(), ensurePermission() else { return }
         pendingPurpose = purpose
         let action: CaptureOverlayAction = switch purpose {
@@ -89,12 +102,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         case .scrollingCapture: .scrollingCapture
         default: .screenshot
         }
-        showOverlays(mode: .region(
-            action: action,
-            snapRects: captureService.regionSnapRects(
-                excludingProcessID: ProcessInfo.processInfo.processIdentifier
-            )
-        ))
+        showRegionOverlays(action: action, requestStartedAt: requestStartedAt)
     }
 
     func beginWindowCapture() {
@@ -106,14 +114,10 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     }
 
     func beginRegionRecordingSelection() {
+        let requestStartedAt = ProcessInfo.processInfo.systemUptime
         guard canBeginCapture(), ensurePermission() else { return }
         pendingPurpose = .recordingRegion
-        showOverlays(mode: .region(
-            action: .recording,
-            snapRects: captureService.regionSnapRects(
-                excludingProcessID: ProcessInfo.processInfo.processIdentifier
-            )
-        ))
+        showRegionOverlays(action: .recording, requestStartedAt: requestStartedAt)
     }
 
     func beginWindowRecordingSelection() {
@@ -130,7 +134,8 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             defer { self.isPreparingCapture = false }
             do {
                 let targets = try await captureService.availableWindowTargets(
-                    excludingProcessID: ProcessInfo.processInfo.processIdentifier
+                    excludingProcessID: ProcessInfo.processInfo.processIdentifier,
+                    excludingBundleIdentifier: Bundle.main.bundleIdentifier
                 )
                 windowTargets = Dictionary(
                     uniqueKeysWithValues: targets.map { ($0.candidate.id, $0) }
@@ -172,7 +177,76 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         }
     }
 
-    private func showOverlays(mode: CaptureOverlayMode) {
+    private func showRegionOverlays(
+        action: CaptureOverlayAction,
+        requestStartedAt: TimeInterval
+    ) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let hasFreshSnapRects = now - cachedRegionSnapRectsAt
+            <= Self.regionSnapRectCacheLifetime
+        let initialSnapRects = hasFreshSnapRects ? cachedRegionSnapRects : []
+        let generation = showOverlays(mode: .region(
+            action: action,
+            snapRects: initialSnapRects
+        ))
+        guard !overlayWindows.isEmpty else { return }
+
+        onPerformanceMeasured(
+            "capture.region_overlay_ready",
+            [
+                "count": String(overlayWindows.count),
+                "durationMilliseconds": Self.performanceMilliseconds(since: requestStartedAt),
+                "intent": action.diagnosticValue,
+                "snapCacheHit": String(hasFreshSnapRects)
+            ]
+        )
+
+        let processID = ProcessInfo.processInfo.processIdentifier
+        let snapRectTask = Task.detached(priority: .utility) {
+            ScreenCaptureService.loadRegionSnapRects(excludingProcessID: processID)
+        }
+        Task { @MainActor [weak self] in
+            let snapRects = await snapRectTask.value
+            guard let self else { return }
+            cachedRegionSnapRects = snapRects
+            cachedRegionSnapRectsAt = ProcessInfo.processInfo.systemUptime
+            guard
+                  overlayGeneration == generation,
+                  !overlayWindows.isEmpty else { return }
+            overlayWindows.forEach { window in
+                (window.contentView as? CaptureOverlayView)?
+                    .setRegionSnapRects(snapRects)
+            }
+            onPerformanceMeasured(
+                "capture.region_snap_targets_ready",
+                [
+                    "count": String(snapRects.count),
+                    "durationMilliseconds": Self.performanceMilliseconds(
+                        since: requestStartedAt
+                    ),
+                    "intent": action.diagnosticValue
+                ]
+            )
+        }
+    }
+
+    private func prewarmRegionSnapRects() {
+        let processID = ProcessInfo.processInfo.processIdentifier
+        let task = Task.detached(priority: .utility) {
+            ScreenCaptureService.loadRegionSnapRects(excludingProcessID: processID)
+        }
+        Task { @MainActor [weak self] in
+            let snapRects = await task.value
+            guard let self else { return }
+            cachedRegionSnapRects = snapRects
+            cachedRegionSnapRectsAt = ProcessInfo.processInfo.systemUptime
+        }
+    }
+
+    @discardableResult
+    private func showOverlays(mode: CaptureOverlayMode) -> UInt64 {
+        overlayGeneration &+= 1
+        let generation = overlayGeneration
         overlayWindows = NSScreen.screens.compactMap { screen in
             guard let displayID = screen.displayID else { return nil }
             return CaptureOverlayWindow(
@@ -186,7 +260,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         guard !overlayWindows.isEmpty else {
             windowTargets.removeAll()
             showError(message: "没有找到可以捕获的显示器。")
-            return
+            return generation
         }
 
         overlayWindows.forEach { $0.orderFrontRegardless() }
@@ -194,6 +268,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             pointerWindow.makeKey()
             pointerWindow.makeFirstResponder(pointerWindow.contentView)
         }
+        return generation
     }
 
     func captureOverlayDidCancel(_ view: CaptureOverlayView) {
@@ -308,6 +383,37 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         }
     }
 
+    func captureOverlay(
+        _ view: CaptureOverlayView,
+        didMeasureRegionDrag performance: CaptureOverlayDragPerformance
+    ) {
+        onPerformanceMeasured(
+            "capture.region_drag_performance",
+            [
+                "averageMilliseconds": Self.formattedMilliseconds(
+                    performance.averageUpdateMilliseconds
+                ),
+                "count": String(performance.eventCount),
+                "maximumMilliseconds": Self.formattedMilliseconds(
+                    performance.maximumUpdateMilliseconds
+                ),
+                "totalMilliseconds": Self.formattedMilliseconds(
+                    performance.totalUpdateMilliseconds
+                )
+            ]
+        )
+    }
+
+    private static func performanceMilliseconds(since startedAt: TimeInterval) -> String {
+        formattedMilliseconds(
+            max(0, (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000)
+        )
+    }
+
+    private static func formattedMilliseconds(_ value: Double) -> String {
+        String(format: "%.3f", value)
+    }
+
     private func finishCapture(
         purpose: CapturePurpose,
         titlePrefix: String = "截图",
@@ -343,8 +449,14 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                 onTraceChanged()
                 switch purpose {
                 case .screenshot, .multiWindowScreenshot:
-                    copyImageToClipboard(image)
-                    quickAccess.show(trace: saved, image: image)
+                    let copied = copyImageToClipboard(image)
+                    quickAccess.show(
+                        trace: saved,
+                        image: image,
+                        confirmationTitle: copied
+                            ? "截图已复制"
+                            : "截图已保存，复制未完成"
+                    )
                     scheduleAutomaticOCR(
                         cgImage: cgImage,
                         saved: saved,
@@ -429,8 +541,14 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             }
             model.setRecentTrace(completed, thumbnail: image)
             onTraceChanged()
-            copyImageToClipboard(image)
-            quickAccess.show(trace: completed, image: image)
+            let copied = copyImageToClipboard(image)
+            quickAccess.show(
+                trace: completed,
+                image: image,
+                confirmationTitle: copied
+                    ? "长截图已复制"
+                    : "长截图已保存，复制未完成"
+            )
             scheduleAutomaticOCR(
                 cgImage: assembly.image,
                 saved: completed,
@@ -523,14 +641,14 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     }
 
     private func dismissOverlays() {
+        overlayGeneration &+= 1
         overlayWindows.forEach { $0.orderOut(nil) }
         overlayWindows.removeAll()
     }
 
-    private func copyImageToClipboard(_ image: NSImage) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([image])
+    @discardableResult
+    private func copyImageToClipboard(_ image: NSImage) -> Bool {
+        ImageClipboardWriter.write(image)
     }
 
     private func copyTextToClipboard(_ text: String) {

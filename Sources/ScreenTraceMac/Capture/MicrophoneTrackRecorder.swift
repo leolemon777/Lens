@@ -27,6 +27,10 @@ final class MicrophoneTrackRecorder {
     private var engine: AVAudioEngine?
     private var writer: MicrophoneFileWriter?
     private var outputURL: URL?
+    private var configurationObserver: NSObjectProtocol?
+    private var didReportUnexpectedStop = false
+
+    var onUnexpectedStop: ((Error) -> Void)?
 
     var isRecording: Bool { engine?.isRunning == true }
 
@@ -36,6 +40,7 @@ final class MicrophoneTrackRecorder {
 
     func start(outputURL: URL) throws {
         stopWithoutValidation()
+        didReportUnexpectedStop = false
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -64,11 +69,13 @@ final class MicrophoneTrackRecorder {
         self.engine = engine
         self.writer = writer
         self.outputURL = outputURL
+        observeConfigurationChanges(for: engine)
     }
 
     func stop() throws {
         guard let engine, let writer, let outputURL else { return }
         let stoppedUnexpectedly = !engine.isRunning
+        removeConfigurationObserver()
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         engine.reset()
@@ -94,6 +101,7 @@ final class MicrophoneTrackRecorder {
     }
 
     private func stopWithoutValidation() {
+        removeConfigurationObserver()
         guard let engine else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
@@ -101,6 +109,32 @@ final class MicrophoneTrackRecorder {
         self.engine = nil
         writer = nil
         outputURL = nil
+    }
+
+    private func observeConfigurationChanges(for engine: AVAudioEngine) {
+        removeConfigurationObserver()
+        let observedEngineID = ObjectIdentifier(engine)
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      let currentEngine = self.engine,
+                      ObjectIdentifier(currentEngine) == observedEngineID,
+                      !currentEngine.isRunning,
+                      !self.didReportUnexpectedStop else { return }
+                self.didReportUnexpectedStop = true
+                self.onUnexpectedStop?(MicrophoneTrackRecordingError.stoppedUnexpectedly)
+            }
+        }
+    }
+
+    private func removeConfigurationObserver() {
+        guard let configurationObserver else { return }
+        NotificationCenter.default.removeObserver(configurationObserver)
+        self.configurationObserver = nil
     }
 
     nonisolated static func makeTap(

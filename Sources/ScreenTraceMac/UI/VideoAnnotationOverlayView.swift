@@ -4,13 +4,25 @@ import SwiftUI
 struct VideoAnnotationOverlayView: View {
     @ObservedObject var model: VideoEditorModel
     @ObservedObject var playback: VideoEditorPlaybackController
+    @ObservedObject private var clock: VideoEditorPlaybackClock
     let contentRect: CGRect
+
+    init(
+        model: VideoEditorModel,
+        playback: VideoEditorPlaybackController,
+        contentRect: CGRect
+    ) {
+        self.model = model
+        self.playback = playback
+        _clock = ObservedObject(wrappedValue: playback.clock)
+        self.contentRect = contentRect
+    }
 
     var body: some View {
         ZStack {
             Canvas { context, _ in
                 for visible in model.visibleVideoAnnotations(
-                    atOutputTime: playback.currentTimeSeconds
+                    atOutputTime: clock.currentTimeSeconds
                 ) {
                     context.drawLayer { layer in
                         layer.opacity = visible.opacity
@@ -27,7 +39,7 @@ struct VideoAnnotationOverlayView: View {
                 if model.isVideoAnnotationSelectionMode,
                    let selected = model.selectedVideoAnnotation,
                    model.visibleVideoAnnotations(
-                       atOutputTime: playback.currentTimeSeconds
+                       atOutputTime: clock.currentTimeSeconds
                    ).contains(where: { $0.item.id == selected.id }) {
                     drawSelection(selected.annotation, context: &context)
                 }

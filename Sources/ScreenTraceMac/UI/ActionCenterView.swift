@@ -5,6 +5,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
     case windowScreenshot
     case multiWindowScreenshot
     case displayScreenshot
+    case recordingSetup
     case recording
     case regionRecording
     case windowRecording
@@ -22,7 +23,8 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         case .windowScreenshot: "窗口截图"
         case .multiWindowScreenshot: "多窗口截图"
         case .displayScreenshot: "屏幕截图"
-        case .recording: "录屏"
+        case .recordingSetup: "录屏"
+        case .recording: "当前屏幕"
         case .regionRecording: "区域录制"
         case .windowRecording: "窗口录制"
         case .ocr: "OCR"
@@ -39,7 +41,8 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         case .windowScreenshot: "选择一个窗口"
         case .multiWindowScreenshot: "组合多个窗口"
         case .displayScreenshot: "当前显示器"
-        case .recording: "区域 · 窗口 · 屏幕"
+        case .recordingSetup: "智能成片工作台"
+        case .recording: "录制当前显示器"
         case .regionRecording: "选择一个区域"
         case .windowRecording: "选择一个窗口"
         case .ocr: "识别文字"
@@ -56,7 +59,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         case .windowScreenshot: "macwindow"
         case .multiWindowScreenshot: "rectangle.3.group"
         case .displayScreenshot: "display"
-        case .recording: "record.circle"
+        case .recordingSetup, .recording: "record.circle"
         case .regionRecording: "viewfinder.circle"
         case .windowRecording: "macwindow.badge.plus"
         case .ocr: "text.viewfinder"
@@ -69,7 +72,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
 
     var tint: Color {
         switch self {
-        case .recording, .regionRecording, .windowRecording: .red
+        case .recordingSetup, .recording, .regionRecording, .windowRecording: .red
         case .screenshot, .windowScreenshot, .multiWindowScreenshot, .displayScreenshot: .cyan
         case .ocr: .indigo
         case .scrollingCapture: .orange
@@ -94,7 +97,7 @@ struct ActionCenterView: View {
         }
         .frame(width: 620)
         .padding(16)
-        .traceGlassPanel(cornerRadius: 30)
+        .traceGlassSurface(role: .window, cornerRadius: TraceGlassMetrics.windowCornerRadius)
         .padding(34)
     }
 
@@ -103,18 +106,20 @@ struct ActionCenterView: View {
             Image(systemName: "camera.aperture")
                 .font(.system(size: 17, weight: .semibold))
                 .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(TraceGlassPalette.brandGradient)
             Text("屏迹")
                 .font(.system(size: 15, weight: .semibold))
             Text("ScreenTrace")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
             Spacer()
-            Text("原生原型")
+            Text("内测版 A")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
-                .background(.primary.opacity(0.055), in: Capsule())
+                .background(TraceGlassPalette.ice.opacity(0.08), in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
         }
         .padding(.horizontal, 4)
         .padding(.bottom, 13)
@@ -123,7 +128,7 @@ struct ActionCenterView: View {
     private var primaryActions: some View {
         HStack(spacing: 10) {
             screenshotMenu
-            recordingMenu
+            actionTile(.recordingSetup, shortcut: "2")
             actionTile(.ocr, shortcut: "3")
             actionTile(.scrollingCapture, shortcut: "4")
             actionTile(.pin, shortcut: "5")
@@ -158,64 +163,11 @@ struct ActionCenterView: View {
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .buttonStyle(TraceActionButtonStyle(tint: .cyan))
+        .buttonStyle(TraceGlassButtonStyle(tint: .cyan, cornerRadius: 18))
         .keyboardShortcut("1", modifiers: [])
         .help("选择截图模式")
         .accessibilityLabel("选择截图模式")
         .accessibilityHint("区域截图、窗口截图、多窗口截图或当前屏幕")
-    }
-
-    private var recordingMenu: some View {
-        Menu {
-            Button {
-                onAction(.regionRecording)
-            } label: {
-                Label("录制区域", systemImage: "viewfinder.circle")
-            }
-            Button {
-                onAction(.windowRecording)
-            } label: {
-                Label("录制窗口", systemImage: "macwindow.badge.plus")
-            }
-            Button {
-                onAction(.recording)
-            } label: {
-                Label("录制当前屏幕", systemImage: "display")
-            }
-            Divider()
-            Toggle(isOn: $model.capturesSystemAudio) {
-                Label("录制系统声音", systemImage: "speaker.wave.2")
-            }
-            Toggle(isOn: $model.capturesMicrophone) {
-                Label("单独录制麦克风", systemImage: "mic")
-            }
-            Toggle(isOn: $model.capturesCamera) {
-                Label("单独录制摄像头", systemImage: "video")
-            }
-            Divider()
-            Picker("录制帧率", selection: $model.recordingFrameRate) {
-                Text("30 FPS · 省空间").tag(RecordingFrameRate.fps30)
-                Text("60 FPS · 更流畅").tag(RecordingFrameRate.fps60)
-            }
-            Divider()
-            Toggle(isOn: $model.automaticallyTranscribesRecordings) {
-                Label("录完自动转写与整理", systemImage: "sparkles")
-            }
-            Picker("转写语言", selection: $model.transcriptionLanguage) {
-                ForEach(TranscriptionLanguage.allCases) { language in
-                    Text(language.title).tag(language)
-                }
-            }
-        } label: {
-            actionTileLabel(.recording)
-        }
-        .menuStyle(.button)
-        .menuIndicator(.hidden)
-        .buttonStyle(TraceActionButtonStyle(tint: .red))
-        .keyboardShortcut("2", modifiers: [])
-        .help("选择录屏来源")
-        .accessibilityLabel("选择录屏来源")
-        .accessibilityHint("区域、窗口或当前屏幕，并可配置声音、摄像头和转写")
     }
 
     private func actionTile(_ action: ActionCenterAction, shortcut: KeyEquivalent) -> some View {
@@ -224,7 +176,7 @@ struct ActionCenterView: View {
         } label: {
             actionTileLabel(action)
         }
-        .buttonStyle(TraceActionButtonStyle(tint: action.tint))
+        .buttonStyle(TraceGlassButtonStyle(tint: action.tint, cornerRadius: 18))
         .keyboardShortcut(shortcut, modifiers: [])
         .help(action.title)
     }
@@ -290,7 +242,7 @@ struct ActionCenterView: View {
                         .foregroundStyle(.green)
                 }
                 .padding(10)
-                .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .traceGlassSurface(role: .card, cornerRadius: TraceGlassMetrics.cardCornerRadius)
             } else {
                 HStack(spacing: 10) {
                     Image(systemName: "sparkles")
@@ -301,7 +253,7 @@ struct ActionCenterView: View {
                     Spacer()
                 }
                 .padding(12)
-                .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .traceGlassSurface(role: .card, cornerRadius: TraceGlassMetrics.cardCornerRadius)
             }
         }
         .padding(.vertical, 13)
@@ -325,33 +277,5 @@ struct ActionCenterView: View {
         .foregroundStyle(.tertiary)
         .padding(.horizontal, 4)
         .padding(.top, 1)
-    }
-}
-
-private struct TraceActionButtonStyle: ButtonStyle {
-    let tint: Color
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.traceReduceMotionOverride) private var reduceMotionOverride
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(configuration.isPressed ? tint.opacity(0.16) : .primary.opacity(0.045))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .stroke(.white.opacity(configuration.isPressed ? 0.22 : 0.10), lineWidth: 1)
-            )
-            .scaleEffect(TraceMotionPolicy.pressedScale(
-                isPressed: configuration.isPressed,
-                reduceMotion: reduceMotionOverride ?? reduceMotion
-            ))
-            .animation(
-                TraceMotionPolicy.buttonAnimation(
-                    reduceMotion: reduceMotionOverride ?? reduceMotion
-                ),
-                value: configuration.isPressed
-            )
     }
 }

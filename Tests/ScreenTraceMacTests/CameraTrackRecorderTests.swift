@@ -31,4 +31,25 @@ final class CameraTrackRecorderTests: XCTestCase {
             XCTFail("Unexpected validation error: \(error)")
         }
     }
+
+    func testDisconnectedDeviceFilterOnlyMatchesCapturedCamera() {
+        XCTAssertTrue(
+            CameraTrackRecorder.matchesDisconnectedDevice(
+                capturedUniqueID: "camera-a",
+                disconnectedUniqueID: "camera-a"
+            )
+        )
+        XCTAssertFalse(
+            CameraTrackRecorder.matchesDisconnectedDevice(
+                capturedUniqueID: "camera-a",
+                disconnectedUniqueID: "camera-b"
+            )
+        )
+        XCTAssertFalse(
+            CameraTrackRecorder.matchesDisconnectedDevice(
+                capturedUniqueID: nil,
+                disconnectedUniqueID: "camera-a"
+            )
+        )
+    }
 }

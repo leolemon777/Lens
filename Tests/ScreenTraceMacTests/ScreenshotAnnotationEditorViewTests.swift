@@ -7,6 +7,27 @@ import ScreenTraceCore
 
 @MainActor
 final class ScreenshotAnnotationEditorViewTests: XCTestCase {
+    func testAccessibilityAuditRequiresNamedScreenshotSliders() throws {
+        let editorSource = try String(
+            contentsOf: screenshotEditorSourceURL(
+                "Sources/ScreenTraceMac/UI/ScreenshotAnnotationEditorView.swift"
+            ),
+            encoding: .utf8
+        )
+        let canvasSource = try String(
+            contentsOf: screenshotEditorSourceURL(
+                "Sources/ScreenTraceMac/UI/ScreenshotCanvasToolbar.swift"
+            ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(editorSource.contains(
+            ".accessibilityLabel(\"\\(activeEffectAnnotation?.editorTitle ?? \"效果\")强度\")"
+        ))
+        XCTAssertTrue(canvasSource.contains(".accessibilityLabel(\"画布\\(title)\")"))
+        XCTAssertTrue(canvasSource.contains(".accessibilityValue"))
+    }
+
     func testEditorViewLaysOutAndRendersAtDesktopWindowSize() throws {
         let image = try sourceImage(width: 1_000, height: 600)
         let model = ScreenshotAnnotationEditorModel(
@@ -30,6 +51,7 @@ final class ScreenshotAnnotationEditorViewTests: XCTestCase {
             model: model,
             image: image,
             onSave: { _ in },
+            onCopy: { _ in },
             onExport: { _, _ in },
             onCancel: {}
         )
@@ -73,4 +95,12 @@ final class ScreenshotAnnotationEditorViewTests: XCTestCase {
         }
         return ImageEncoding.nsImage(from: image)
     }
+}
+
+private func screenshotEditorSourceURL(_ relativePath: String) -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent(relativePath)
 }

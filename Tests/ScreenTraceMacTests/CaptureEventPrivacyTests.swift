@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import ScreenTraceCore
 import XCTest
 @testable import ScreenTraceMac
@@ -116,6 +117,41 @@ final class CaptureEventPrivacyTests: XCTestCase {
         let keys = try TraceEventReader.read(KeyboardEvent.self, from: session.keyboardEventsURL)
         XCTAssertEqual(keys.map(\.label), ["S"])
         XCTAssertEqual(removedMonitorCount, 1)
+    }
+
+    func testRecorderPersistsScrollIntentWithoutTreatingItAsTextInput() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceScrollRecorder-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let session = try store.beginRecording(width: 1280, height: 720)
+        let recorder = PointerEventRecorder()
+        try recorder.start(
+            session: session,
+            captureBounds: CGRect(x: 0, y: 0, width: 1280, height: 720)
+        )
+        let cgEvent = try XCTUnwrap(CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: -8,
+            wheel2: 2,
+            wheel3: 0
+        ))
+        cgEvent.location = CGPoint(x: 640, y: 360)
+        let event = try XCTUnwrap(NSEvent(cgEvent: cgEvent))
+
+        recorder.handle(event)
+        await recorder.stop()
+
+        let events = try TraceEventReader.read(
+            PointerEvent.self,
+            from: session.pointerEventsURL
+        )
+        let scroll = try XCTUnwrap(events.first { $0.kind == .scroll })
+        let delta = try XCTUnwrap(scroll.scrollDelta)
+        XCTAssertEqual(delta.x, 2, accuracy: 0.000_1)
+        XCTAssertEqual(delta.y, -8, accuracy: 0.000_1)
     }
 
     private func keyEvent(

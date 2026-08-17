@@ -59,6 +59,23 @@ final class TraceLibraryModel: ObservableObject {
         }
     }
 
+    func canDelete(_ entry: TraceLibraryEntry) -> Bool {
+        guard !isTranscribing(entry.id), !isOrganizing(entry.id) else { return false }
+        switch entry.manifest.state {
+        case .capturing, .processing:
+            return false
+        case .ready, .interrupted, .failed:
+            return true
+        }
+    }
+
+    func removeEntries(withIDs ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        entries.removeAll { ids.contains($0.id) }
+        transcribingIDs.subtract(ids)
+        organizingIDs.subtract(ids)
+    }
+
     func reload() {
         reloadTask?.cancel()
         isLoading = true

@@ -59,6 +59,7 @@ struct PinnedImagePresentation: Equatable {
 @MainActor
 final class PinnedImageWindowController {
     private var windows: [PinnedImageWindow] = []
+    var onCopyResult: ((Bool) -> Void)?
 
     func pin(trace: SavedTrace, image: NSImage) {
         let window = PinnedImageWindow(
@@ -70,6 +71,7 @@ final class PinnedImageWindowController {
             guard let self, let window else { return }
             windows.removeAll { $0 === window }
         }
+        window.onCopyResult = { [weak self] in self?.onCopyResult?($0) }
         windows.append(window)
         window.center()
         window.orderFrontRegardless()
@@ -85,6 +87,7 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
     }
 
     var onClose: (() -> Void)?
+    var onCopyResult: ((Bool) -> Void)?
 
     private let trace: SavedTrace
     private let pinnedContentView: PinnedImageContentView
@@ -153,10 +156,11 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
     }
 
     @objc private func copyImage() {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        pasteboard.writeObjects([pinnedContentView.image])
-        pinnedContentView.showConfirmation(symbol: "checkmark")
+        let copied = ImageClipboardWriter.write(pinnedContentView.image)
+        pinnedContentView.showConfirmation(
+            symbol: copied ? "checkmark" : "exclamationmark"
+        )
+        onCopyResult?(copied)
     }
 
     @objc private func zoomIn() {

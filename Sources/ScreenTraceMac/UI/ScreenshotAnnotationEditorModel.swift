@@ -1,12 +1,19 @@
 import Foundation
 import ScreenTraceCore
 
+enum ScreenshotClipboardFeedback: Equatable {
+    case copied
+    case failed
+}
+
 @MainActor
 final class ScreenshotAnnotationEditorModel: ObservableObject {
     let sourceDimensions: TraceDimensions
 
     @Published var selectedTool: ScreenshotAnnotationKind = .arrow
     @Published var selectedColor: TraceColor = .red
+    @Published var selectedGradientEndColor: TraceColor?
+    @Published var effectIntensity = 0.014
     @Published var textDraft = "重点"
     @Published private(set) var annotations: [ScreenshotAnnotation]
     @Published private(set) var canvasStyle: ScreenshotCanvasStyle?
@@ -15,6 +22,8 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
     @Published private(set) var selectedAnnotationID: UUID?
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
+    @Published private(set) var isRendering = false
+    @Published private(set) var clipboardFeedback: ScreenshotClipboardFeedback?
 
     private struct EditorSnapshot: Equatable {
         let annotations: [ScreenshotAnnotation]
@@ -63,6 +72,26 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
     var selectedAnnotation: ScreenshotAnnotation? {
         guard let selectedAnnotationID else { return nil }
         return annotations.first { $0.id == selectedAnnotationID }
+    }
+
+    func beginRendering() -> Bool {
+        guard !isRendering else { return false }
+        isRendering = true
+        return true
+    }
+
+    func endRendering() {
+        isRendering = false
+    }
+
+    func showClipboardFeedback(succeeded: Bool) {
+        let feedback: ScreenshotClipboardFeedback = succeeded ? .copied : .failed
+        clipboardFeedback = feedback
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3.2))
+            guard !Task.isCancelled, self?.clipboardFeedback == feedback else { return }
+            self?.clipboardFeedback = nil
+        }
     }
 
     func activateSelectionTool() {
@@ -190,6 +219,10 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
 
         selectedAnnotationID = hitID
         selectedColor = hit.style.color
+        selectedGradientEndColor = hit.style.gradientEndColor
+        if hit.kind == .blur || hit.kind == .pixelate {
+            effectIntensity = hit.style.intensity
+        }
         if hit.kind == .text, let text = hit.text {
             textDraft = text
         }
@@ -249,14 +282,17 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
 
     func setColor(_ color: TraceColor) {
         selectedColor = color
+        selectedGradientEndColor = nil
         guard isSelectionMode,
               let selectedAnnotationID,
               let index = annotations.firstIndex(where: { $0.id == selectedAnnotationID }) else {
             return
         }
-        guard annotations[index].style.color != color else { return }
+        guard annotations[index].style.color != color
+                || annotations[index].style.gradientEndColor != nil else { return }
         recordUndoPoint()
         annotations[index].style.color = color
+        annotations[index].style.gradientEndColor = nil
         if let fill = annotations[index].style.fillColor {
             annotations[index].style.fillColor = TraceColor(
                 red: color.red,
@@ -265,6 +301,43 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
                 alpha: fill.alpha
             )
         }
+    }
+
+    func setGradient(start: TraceColor, end: TraceColor) {
+        selectedColor = start
+        selectedGradientEndColor = end
+        guard isSelectionMode,
+              let selectedAnnotationID,
+              let index = annotations.firstIndex(where: { $0.id == selectedAnnotationID }) else {
+            return
+        }
+        guard annotations[index].style.color != start
+                || annotations[index].style.gradientEndColor != end else { return }
+        recordUndoPoint()
+        annotations[index].style.color = start
+        annotations[index].style.gradientEndColor = end
+        if let fill = annotations[index].style.fillColor {
+            annotations[index].style.fillColor = TraceColor(
+                red: start.red,
+                green: start.green,
+                blue: start.blue,
+                alpha: fill.alpha
+            )
+        }
+    }
+
+    func setEffectIntensity(_ intensity: Double) {
+        let normalized = min(max(intensity, 0.004), 0.06)
+        effectIntensity = normalized
+        guard isSelectionMode,
+              let selectedAnnotationID,
+              let index = annotations.firstIndex(where: { $0.id == selectedAnnotationID }),
+              annotations[index].kind == .blur || annotations[index].kind == .pixelate else {
+            return
+        }
+        guard annotations[index].style.intensity != normalized else { return }
+        recordUndoPoint()
+        annotations[index].style.intensity = normalized
     }
 
     func setCanvasEnabled(_ enabled: Bool) {
@@ -374,8 +447,11 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
             lineWidth: selectedTool == .highlight ? 0 : 0.006,
             fontSize: 0.045,
             color: selectedColor,
+            gradientEndColor: selectedGradientEndColor,
             fillColor: fillColor,
-            intensity: selectedTool == .pixelate ? 0.055 : 0.035
+            intensity: selectedTool == .pixelate
+                ? max(effectIntensity, 0.018)
+                : effectIntensity
         )
         let annotationText: String? = switch selectedTool {
         case .text: normalizedTextDraft
@@ -413,7 +489,8 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
             points: simplified,
             style: ScreenshotAnnotationStyle(
                 lineWidth: 0.006,
-                color: selectedColor
+                color: selectedColor,
+                gradientEndColor: selectedGradientEndColor
             )
         )
     }

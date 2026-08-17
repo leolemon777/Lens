@@ -62,6 +62,8 @@ final class TraceLibraryViewTests: XCTestCase {
             onTranscribe: { _ in },
             onOrganize: { _ in },
             onSaveInsights: { _, _ in },
+            onDelete: { _ in },
+            onDeleteAll: {},
             onOpenFolder: {},
             onClose: {}
         )

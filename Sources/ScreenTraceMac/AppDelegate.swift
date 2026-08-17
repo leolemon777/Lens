@@ -37,6 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await self?.makeDiagnosticSummary() ?? "ScreenTrace 诊断摘要\n应用尚未完成启动。"
         }
     )
+    private lazy var onboarding = OnboardingWindowController(
+        appModel: model,
+        onQuitRequested: { NSApp.terminate(nil) },
+        onFinished: { [weak self] in self?.actionCenter.show() }
+    )
     private lazy var annotationEditor = ScreenshotAnnotationEditorWindowController(store: store)
     private lazy var traceLibrary = TraceLibraryWindowController(store: store)
     private lazy var videoEditor = VideoEditorWindowController(store: store)
@@ -139,7 +144,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureStatusItem()
         wireControllers()
         startHotKeys()
-        actionCenter.show()
+        // The shipped shortcuts are modifier-only, so they are delivered by a
+        // global event monitor that stays silent until accessibility is
+        // granted. A first run that opened straight into the action center
+        // left the primary way into the app looking broken.
+        if onboarding.shouldPresentOnLaunch {
+            onboarding.show()
+            logDiagnostic("onboarding.presented", metadata: ["reason": "first_launch"])
+        } else {
+            actionCenter.show()
+        }
         restoreRecentScreenshot()
         scheduleRecordingRecovery(startedBefore: recoveryCutoff)
         logDiagnostic("app.launched", metadata: version)
@@ -190,6 +204,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// Permissions are granted over in System Settings and TCC sends no change
+    /// notification, so the guide rechecks whenever the user comes back.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard didCompleteApplicationLaunch else { return }
+        onboarding.refresh()
     }
 
     func applicationShouldHandleReopen(

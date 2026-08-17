@@ -1,0 +1,306 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-08-13",
+  "scenarios": [
+    {
+      "id": "ST-G0-001",
+      "gate": "G1",
+      "area": "screenshot",
+      "title": "区域截图按住拖动",
+      "evidenceLevel": "E4",
+      "automation": "hybrid",
+      "steps": ["用主快捷键呼出区域遮罩", "按住并拖动后松开"],
+      "expected": ["第一次按下立即建立选区", "原图落盘并进入剪贴板"]
+    },
+    {
+      "id": "ST-G0-002",
+      "gate": "G1",
+      "area": "screenshot",
+      "title": "触控板两次轻点选区",
+      "evidenceLevel": "E4",
+      "automation": "hybrid",
+      "steps": ["轻点一次确定起点", "移动指针并再次轻点"],
+      "expected": ["不要求开启系统拖移或用力按压", "第二次轻点完成截图"]
+    },
+    {
+      "id": "ST-G0-003",
+      "gate": "G1",
+      "area": "screenshot",
+      "title": "遮罩首次点击与提示标签命中",
+      "evidenceLevel": "E3+E4",
+      "automation": "hybrid",
+      "steps": ["从非活跃 App 呼出遮罩", "在中央提示标签上立即点击"],
+      "expected": ["首次点击不被窗口激活或标签吞掉"]
+    },
+    {
+      "id": "ST-G0-004",
+      "gate": "G1",
+      "area": "screenshot",
+      "title": "独立窗口截图",
+      "evidenceLevel": "E4",
+      "automation": "manual",
+      "steps": ["打开多个有重叠的窗口", "选择一个后台窗口并截图"],
+      "expected": ["只保存目标窗口且透明边缘正确"]
+    },
+    {
+      "id": "ST-G0-005",
+      "gate": "G1",
+      "area": "screenshot",
+      "title": "跨屏多窗口截图",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["在两块显示器各打开一个窗口", "多选、反选并确认"],
+      "expected": ["联合边界和窗口层级正确", "不同缩放不产生错位"]
+    },
+    {
+      "id": "ST-G0-006",
+      "gate": "G1",
+      "area": "screenshot",
+      "title": "当前显示器截图",
+      "evidenceLevel": "E4",
+      "automation": "manual",
+      "steps": ["把指针移到目标显示器", "执行当前显示器截图"],
+      "expected": ["只捕获指针所在显示器", "Retina 像素尺寸正确"]
+    },
+    {
+      "id": "ST-G0-007",
+      "gate": "G1",
+      "area": "clipboard",
+      "title": "截图落盘、剪贴板与 Quick Access 顺序",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["完成区域截图", "立即在目标 App 粘贴并打开 Quick Access"],
+      "expected": ["粘贴内容可解码", "动画不阻塞保存和复制"]
+    },
+    {
+      "id": "ST-G0-008",
+      "gate": "G1",
+      "area": "quick-access",
+      "title": "Quick Access 文件拖出",
+      "evidenceLevel": "E4",
+      "automation": "manual",
+      "steps": ["从 Quick Access 拖动缩略图", "分别放入 Finder、聊天和文档 App"],
+      "expected": ["拖出对象具有真实文件语义", "目标 App 能读取图片"]
+    },
+    {
+      "id": "ST-G0-009",
+      "gate": "G1",
+      "area": "annotation",
+      "title": "标注后 Command+C",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["添加箭头、文字和编号", "按 Command+C 并粘贴"],
+      "expected": ["复制的是最终渲染图", "出现明确成功提示"]
+    },
+    {
+      "id": "ST-G0-010",
+      "gate": "G1",
+      "area": "annotation",
+      "title": "画布即时预览与导出一致",
+      "evidenceLevel": "E2+E3",
+      "automation": "hybrid",
+      "steps": ["调整留白、圆角、阴影和比例", "复制并导出 PNG"],
+      "expected": ["画布控件即时生效", "预览、复制和导出像素一致"]
+    },
+    {
+      "id": "ST-G0-011",
+      "gate": "G1",
+      "area": "annotation",
+      "title": "模糊、像素化与安全遮挡",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["对同一区域分别应用三类隐私效果", "改变强度并导出"],
+      "expected": ["强度连续且边缘干净", "安全遮挡不可从导出像素恢复"]
+    },
+    {
+      "id": "ST-G0-012",
+      "gate": "G1",
+      "area": "visual",
+      "title": "截图玻璃与色板视觉矩阵",
+      "evidenceLevel": "E3+E4",
+      "automation": "hybrid",
+      "steps": ["切换浅色、深色、高对比度和降低透明度", "检查边缘、圆角、橙色与渐变色"],
+      "expected": ["玻璃无裁切残缺", "复杂背景上控件仍可读"]
+    },
+    {
+      "id": "ST-G0-013",
+      "gate": "G1",
+      "area": "long-capture",
+      "title": "Safari 固定页头长截图",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["打开包含固定页头的长页面", "滚动至页尾并完成捕获"],
+      "expected": ["页头只保留一份", "无跳段、覆盖或明显接缝"]
+    },
+    {
+      "id": "ST-G0-014",
+      "gate": "G1",
+      "area": "long-capture",
+      "title": "Chrome 或 Edge 长截图",
+      "evidenceLevel": "E4",
+      "automation": "manual",
+      "steps": ["打开短页、长页和动态区域页面", "分别完成捕获"],
+      "expected": ["稳定帧才进入拼接", "失败不伪装完整结果"]
+    },
+    {
+      "id": "ST-G0-015",
+      "gate": "G1",
+      "area": "long-capture",
+      "title": "原生滚动 App 长截图",
+      "evidenceLevel": "E4",
+      "automation": "manual",
+      "steps": ["在 Finder 或文档类原生 App 选择滚动区域", "滚动并收尾"],
+      "expected": ["普通 NSScrollView 内容可拼接", "源帧和计划可诊断"]
+    },
+    {
+      "id": "ST-G0-016",
+      "gate": "G1",
+      "area": "long-capture",
+      "title": "动态内容稳定门控",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["捕获持续动画页面", "等待静止后继续滚动"],
+      "expected": ["运动帧不导致高度异常增长", "停稳后恢复取帧"]
+    },
+    {
+      "id": "ST-G0-017",
+      "gate": "G1",
+      "area": "long-capture",
+      "title": "长截图取消与失败收尾",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["捕获中主动取消", "注入无法对齐的帧并重试"],
+      "expected": ["不会生成伪成功项目", "错误说明失败位置并保留诊断"]
+    },
+    {
+      "id": "ST-G0-018",
+      "gate": "G1",
+      "area": "long-capture",
+      "title": "超大长图内存与尺寸保护",
+      "evidenceLevel": "E2",
+      "automation": "automatic",
+      "steps": ["向拼接器输入接近上限的稳定帧", "继续输入超过上限的帧"],
+      "expected": ["在上限安全收尾", "不崩溃且项目保持可读"]
+    },
+    {
+      "id": "ST-G0-019",
+      "gate": "G2",
+      "area": "recording",
+      "title": "显示器四轨录屏且摄像头默认关闭",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["新会话选择当前显示器", "确认音频并开始录制"],
+      "expected": ["摄像头默认关闭", "屏幕、系统声和麦克风按设置独立落盘"]
+    },
+    {
+      "id": "ST-G0-020",
+      "gate": "G2",
+      "area": "recording",
+      "title": "区域录屏来源和坐标",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["选择非整数缩放下的区域", "录制点击与指针移动"],
+      "expected": ["视频尺寸和来源元数据正确", "事件坐标归一化正确"]
+    },
+    {
+      "id": "ST-G0-021",
+      "gate": "G2",
+      "area": "recording",
+      "title": "实时窗口来源选择",
+      "evidenceLevel": "E3+E4",
+      "automation": "hybrid",
+      "steps": ["在后台打开浏览器和普通 App", "从实时缩略图选择一个窗口"],
+      "expected": ["窗口身份和缩略图匹配", "只录制所选来源"]
+    },
+    {
+      "id": "ST-G0-022",
+      "gate": "G2",
+      "area": "recording",
+      "title": "录屏浮标跨空间常驻与排除",
+      "evidenceLevel": "E4",
+      "automation": "manual",
+      "steps": ["录制中切换 App、桌面和全屏空间", "隐藏并从菜单栏恢复浮标"],
+      "expected": ["浮标始终可恢复且不进入成片"]
+    },
+    {
+      "id": "ST-G0-023",
+      "gate": "G2",
+      "area": "recording",
+      "title": "暂停、继续与丢弃重录",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["连续执行两次暂停和继续", "确认后丢弃并按同来源重录"],
+      "expected": ["暂停时间不进入时间线", "旧项目可从废纸篓恢复"]
+    },
+    {
+      "id": "ST-G0-024",
+      "gate": "G2",
+      "area": "recording",
+      "title": "停止后原始视频立即可用",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["停止一分钟录屏", "立即打开并播放原始素材"],
+      "expected": ["不等待转写或预览即可播放", "后台处理失败不影响原始视频"]
+    },
+    {
+      "id": "ST-G0-025",
+      "gate": "G2",
+      "area": "reliability",
+      "title": "一小时录屏稳定性",
+      "evidenceLevel": "E4",
+      "automation": "manual",
+      "steps": ["以固定分辨率和帧率录制一小时", "记录内存、CPU、音画漂移和文件状态"],
+      "expected": ["无崩溃和不可接受漂移", "峰值资源进入报告"]
+    },
+    {
+      "id": "ST-G0-026",
+      "gate": "G2",
+      "area": "reliability",
+      "title": "麦克风与摄像头设备拔出",
+      "evidenceLevel": "E4",
+      "automation": "manual",
+      "steps": ["录制中拔出当前输入设备", "继续操作并停止录制"],
+      "expected": ["其他正常轨继续或安全停止", "说明降级且保留已写分片"]
+    },
+    {
+      "id": "ST-G0-027",
+      "gate": "G2",
+      "area": "reliability",
+      "title": "系统流中断与磁盘不足",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["注入系统流提前结束", "分别达到预警和安全停止阈值"],
+      "expected": ["不写出伪成功文件", "已有分片可恢复且原因明确"]
+    },
+    {
+      "id": "ST-G0-028",
+      "gate": "G2",
+      "area": "reliability",
+      "title": "录制强退恢复",
+      "evidenceLevel": "E2+E4",
+      "automation": "hybrid",
+      "steps": ["录制中强制结束 App", "重启并恢复中断项目"],
+      "expected": ["已写入分片不丢失", "项目恢复为可编辑状态"]
+    },
+    {
+      "id": "ST-G0-029",
+      "gate": "G3",
+      "area": "draft",
+      "title": "自动运镜、光标和点击效果",
+      "evidenceLevel": "E2+E4+E5",
+      "automation": "hybrid",
+      "steps": ["用固定一分钟脚本录制点击、滚动和窗口切换", "分别生成克制、适中和积极草稿"],
+      "expected": ["三档可区分且不追逐指针", "点击帧光标与真实目标保持一致"]
+    },
+    {
+      "id": "ST-G0-030",
+      "gate": "G4+G5",
+      "area": "delivery",
+      "title": "编辑、三档导出、无障碍与安装发布",
+      "evidenceLevel": "E2+E3+E4",
+      "automation": "hybrid",
+      "steps": ["完成画布、镜头、字幕、音频和标注编辑", "运行安装版系统 AX 语义审计并完成真人 VoiceOver 与键盘路径", "导出三档并在干净账户安装候选包"],
+      "expected": ["预览与导出一致且 raw 哈希不变", "真实截图与视频编辑器的关键按钮、滑块具有系统角色、名称、值和动作", "键盘和 VoiceOver 可完成主路径", "签名、公证和 Gatekeeper 达到发布闸门"]
+    }
+  ]
+}

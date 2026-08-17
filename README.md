@@ -46,7 +46,7 @@
 - 开放 `.screentrace` 项目包；
 - 版本化核心 worker 协议已定义 Swift/Rust/Windows 共用的能力握手、请求关联、稳定错误码和 1 MiB 上限的大端长度前缀 JSON 帧；支持分片与多帧输入，并提供请求/响应/错误的语言无关字节黄金文件；Swift stdio 运行时适配器已覆盖显式可执行文件、响应限额、超时/崩溃/不兼容回退，当前生产链仍使用 Swift；
 - 原生设置与权限中心，覆盖屏幕、麦克风、摄像头和辅助功能；标准应用菜单提供 `Command + Q` 退出；内置严格白名单的本地 JSONL 诊断日志、512 KiB 双文件轮转、异常退出/强退会话检测、ScreenTrace `.ips` 脱敏崩溃指纹与可复制诊断摘要，不记录媒体、正文、调用栈、窗口标题或项目路径；
-- 282 项单元、快捷键配置/冲突回退/持久化、旧偏好升级兼容、后台事件纯值桥接与停止代际失效、原生应用菜单、捕获几何、选区吸附/Option 绕过/方向键精调事件链、多窗口像素层级与项目来源往返、贴图缩放/透明度状态和悬停工具条渲染、录制帧率偏好与元数据兼容、转写语言偏好/设备端 locale 映射/后台授权回调隔离、录制控制条动态辅助功能语义、录制重录过渡防护、强退分片恢复与处理中项目续跑、只读/磁盘失败恢复、隐私收敛事件轨/本地诊断日志/会话异常退出检测/脱敏崩溃指纹、核心 worker 协议/黄金帧/帧编解码/进程回退、开放项目 schema/旧版黄金样本/未来版本读写拒绝、对象标注、截图画布样式与 PNG/JPEG 编码、长截图去重/拼接/动态画面稳定门控/源帧归档、非破坏性时间线、真实重叠转场、源时间视频标注、原生 AVPlayerView 播放分支、独立音轨、分片归档/合并、磁盘空间预警/安全停止、动态画中画、旁白检测/自动压低、K 加权响度、降噪与音频混合、项目兼容、持久索引、分段转写、字幕时码/分句编辑与烧录、三档导出、本地整理、隐私脱敏、搜索、深色高对比度、降低透明度、减少动态效果与常规 UI 快照、渲染及媒体集成测试。
+- 351 项自动测试，覆盖单元、快捷键配置/冲突回退/持久化、旧偏好升级兼容、后台事件纯值桥接与停止代际失效、原生应用菜单、捕获几何、选区吸附/Option 绕过/方向键精调事件链、多窗口像素层级与项目来源往返、安装版真实截图及截图落盘/剪贴板/Quick Access 100 次交付回归、贴图缩放/透明度状态和悬停工具条渲染、录制帧率偏好与元数据兼容、转写语言偏好/设备端 locale 映射/后台授权回调隔离、录制控制条动态辅助功能语义、录制重录过渡防护、强退分片恢复与处理中项目续跑、可播未完成分片恢复/越界事件过滤/侧轨时长裁齐、只读/磁盘失败恢复、隐私收敛事件轨/本地诊断日志/会话异常退出检测/脱敏崩溃指纹、核心 worker 协议/黄金帧/帧编解码/进程回退、开放项目 schema/旧版黄金样本/未来版本读写拒绝、对象标注、截图画布样式与 PNG/JPEG 编码、长截图去重/拼接/动态画面稳定门控/源帧归档、非破坏性时间线、真实重叠转场、源时间视频标注、自动倍率实时重算、点击双波纹渲染、原生 AVPlayerView 播放分支、AppKit 60 Hz 实时运镜与播放头、播放时钟隔离、独立音轨、分片归档/合并、磁盘空间预警/安全停止、动态画中画、旁白检测/自动压低、K 加权响度、降噪与音频混合、项目兼容、持久索引、分段转写、字幕时码/分句编辑与烧录、三档导出、本地整理、隐私脱敏、搜索、深色高对比度、降低透明度、减少动态效果、G0 场景清单与常规 UI 快照、渲染及媒体集成测试。
 
 ## 尚未完成
 
@@ -65,11 +65,13 @@ open Build/ScreenTrace.app
 
 发布候选包应使用 `bash Scripts/build-release-artifacts.sh`；脚本会生成 Release App、严格校验签名结构，并在 `Build/Symbols/` 生成与 Mach-O UUID 一致的 dSYM 及 zip 归档。
 
-本地可安装 DMG、App zip、dSYM、SHA-256 清单、机器可读 `release.json` 与发布说明使用 `bash Scripts/package-macos-release.sh`，输出到 `Build/Releases/`。发布清单记录版本、发布级别、最低系统、Git commit/工作区状态、Mach-O UUID、签名身份、Team ID、公证 request ID，以及三类制品的尺寸和摘要；发布说明自动列出能力、已知限制、权限、数据路径、兼容性和四类核心文件摘要，其自身也进入校验和清单。默认发布级别为 `beta`、签名为 ad-hoc 且跳过公证；发布环境需通过 `SCREENTRACE_SIGNING_IDENTITY`、`SCREENTRACE_NOTARY_PROFILE`、`SCREENTRACE_VERSION`、`SCREENTRACE_BUILD_NUMBER` 和 `SCREENTRACE_RELEASE_CHANNEL` 显式提供签名、公证与发布身份。公证凭据只通过 `notarytool` 钥匙串 profile 读取，不写入仓库或命令行。
+G1 真实截图压力门槛使用 `bash Scripts/run-g1-screenshot-stress.sh`；它以 Release App 连续验证真实截图、原子落盘、系统剪贴板和 Quick Access PNG 文件提供，输出聚合 P50/P95，运行后恢复原剪贴板并删除临时项目。
 
-生成后用 `bash Scripts/verify-macos-release.sh --development Build/Releases/ScreenTrace-0.1.0-1-release.json` 独立反查开发包结构；去掉 `--development` 即进入公开发布门槛，会额外要求根许可证、Developer ID、Team ID、App/DMG 公证 Accepted、Staple 和 Gatekeeper 全部通过；公开门槛会一次列出所有阻断项，避免修完一项后才看到下一项。
+本地可安装 DMG、App zip、dSYM、SHA-256 清单、机器可读 `release.json` 与发布说明使用 `bash Scripts/package-macos-release.sh`，输出到 `Build/Releases/`。发布清单记录版本、发布级别、最低系统、Git commit/工作区状态、完整源码快照 SHA-256（已跟踪文件和未跟踪但未忽略文件）、Mach-O UUID、签名身份、Team ID、公证 request ID，以及三类制品的尺寸和摘要；发布说明自动列出能力、已知限制、权限、数据路径、兼容性和四类核心文件摘要，其自身也进入校验和清单。默认发布级别为 `beta`、签名为 ad-hoc 且跳过公证；发布环境需通过 `SCREENTRACE_SIGNING_IDENTITY`、`SCREENTRACE_NOTARY_PROFILE`、`SCREENTRACE_VERSION`、`SCREENTRACE_BUILD_NUMBER` 和 `SCREENTRACE_RELEASE_CHANNEL` 显式提供签名、公证与发布身份。公证凭据只通过 `notarytool` 钥匙串 profile 读取，不写入仓库或命令行。
 
-通过校验的候选可用 `bash Scripts/archive-macos-release.sh --development <release.json> Build/ReleaseArchives` 创建带 Git commit 前缀的不可覆盖档案，再用 `bash Scripts/verify-macos-release-archive.sh --development <archive-directory>` 独立复验。档案保留全部安装/符号/清单/说明文件、原始 SHA-256 清单和额外归档身份元数据；公开档案必须移除 `--development` 并通过正式发布门槛。
+生成后用 `bash Scripts/verify-macos-release.sh --development Build/Releases/ScreenTrace-0.1.0-1-release.json` 独立反查开发包结构，并核对当前源码快照摘要；开发模式允许清单诚实记录 dirty，公开模式仍强制 clean commit。去掉 `--development` 即进入公开发布门槛，会额外要求根许可证、Developer ID、Team ID、App/DMG 公证 Accepted、Staple 和 Gatekeeper 全部通过；公开门槛会一次列出所有阻断项，避免修完一项后才看到下一项。
+
+通过校验的候选可用 `bash Scripts/archive-macos-release.sh --development <release.json> Build/ReleaseArchives` 创建带 Git commit 前缀的不可覆盖档案，再用 `bash Scripts/verify-macos-release-archive.sh --development <archive-directory>` 独立复验。档案保留全部安装/符号/清单/说明文件、原始 SHA-256 清单、Git commit 和源码快照摘要；历史档案复验不依赖当前工作区仍停留在当时源码，但会核对归档元数据与受校验和保护的发布清单完全一致。公开档案必须移除 `--development` 并通过正式发布门槛。
 
 公开源码前执行 `bash Scripts/audit-public-source.sh`；它会拒绝被 Git 跟踪的媒体、项目包、崩溃报告、发布/签名文件、超大或非文本文件，以及常见私钥和访问令牌格式。
 
@@ -79,6 +81,7 @@ open Build/ScreenTrace.app
 
 ## 项目资料
 
+- [顶级品质产品 SPEC PLAN](docs/屏迹-1.0-顶级品质产品-SPEC-PLAN.md)
 - [产品与研发总计划](docs/屏迹-1.0-产品与研发总计划.md)
 - [竞品能力吸收矩阵](docs/屏迹-竞品能力吸收矩阵.md)
 - [迹光玻璃 UI 规范](docs/屏迹-迹光玻璃UI规范.md)

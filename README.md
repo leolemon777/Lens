@@ -2,11 +2,11 @@
 
 屏迹是一款本地优先、计划开源、AI 原生的截图与录屏工作台：一按即捕捉，停下即成品，之后永远找得到。
 
-当前仓库是 macOS 原生 Beta 候选，已跑通从捕获、开放项目包、事件轨到自动成片、编辑和导出的完整技术链路；公开分发仍需许可证、Developer ID 签名、公证与剩余真机矩阵。
+当前仓库是 macOS 原生 Beta 候选，已跑通从捕获、开放项目包、事件轨到自动成片、编辑和导出的完整技术链路；公开分发仍需 Developer ID 签名、公证与剩余真机矩阵。
 
 ## 开源状态
 
-当前源码可见，但仓库尚未选定许可证，因此还不构成已授权的开源发布。在根目录出现正式 `LICENSE` 前，请不要复制、重新分发或提交外部代码 PR；问题与设计建议可按 [贡献指南](CONTRIBUTING.md) 先行整理。
+本项目以 [MIT 许可证](LICENSE) 发布，可自由使用、修改、分发与商用，只需保留版权与许可声明。外部代码 PR 已开放，请先阅读 [贡献指南](CONTRIBUTING.md)。
 
 ## 已经跑通
 
@@ -53,7 +53,7 @@
 - 多窗口截图的多屏/不同缩放真机回归、长截图的真实浏览器/普通 App 兼容回归，以及贴图工具条与拖动锁定的真机手感验收；
 - 真人清晰语音的设备端转写/字幕全链路、物理 `Fn` 热键、VoiceOver/辅助功能焦点顺序，以及长时录制与设备/系统流异常中断验证；
 - 可选生成式模型、语义聚类与批量整理；
-- 开源许可证选择、Developer ID 签名/公证、未安装开发证书 Mac 的分发验证、自动更新和 Windows 适配；本地安装 DMG 已可生成并校验。
+- Developer ID 签名/公证、未安装开发证书 Mac 的分发验证、自动更新和 Windows 适配；本地安装 DMG 已可生成并校验。
 
 ## 开发
 
@@ -71,7 +71,7 @@ open Build/ScreenTrace.app
 
 通过校验的候选可用 `bash Scripts/archive-macos-release.sh --development <release.json> Build/ReleaseArchives` 创建带 Git commit 前缀的不可覆盖档案，再用 `bash Scripts/verify-macos-release-archive.sh --development <archive-directory>` 独立复验。档案保留全部安装/符号/清单/说明文件、原始 SHA-256 清单和额外归档身份元数据；公开档案必须移除 `--development` 并通过正式发布门槛。
 
-公开源码前执行 `bash Scripts/audit-public-source.sh`；它会拒绝被 Git 跟踪的媒体、项目包、崩溃报告、发布/签名文件、超大或非文本文件，以及常见私钥和访问令牌格式。脚本通过不代表已经选定许可证。
+公开源码前执行 `bash Scripts/audit-public-source.sh`；它会拒绝被 Git 跟踪的媒体、项目包、崩溃报告、发布/签名文件、超大或非文本文件，以及常见私钥和访问令牌格式。
 
 离线崩溃符号化使用 `Scripts/symbolicate-screen-trace-crash.sh <ScreenTrace.ips> <ScreenTrace.dSYM>`。脚本会先校验 Bundle ID 和 UUID，不一致时拒绝继续；仅符号化故障线程中 ScreenTrace 自身镜像的帧。
 

@@ -256,7 +256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.pinnedImages.pin(trace: trace, image: image)
             self?.toast.show(
                 title: "已贴在桌面",
-                detail: "移入显示工具栏，右键查看更多操作，Esc 关闭",
+                detail: "拖动可挪位置，滚轮缩放，Option + 滚轮调透明",
                 symbol: "pin.fill"
             )
         }
@@ -581,6 +581,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(menuItem("快速录制窗口", action: #selector(beginWindowRecording)))
         menu.addItem(menuItem("快速录制当前屏幕", action: #selector(beginRecording)))
         menu.addItem(.separator())
+        menu.addItem(menuItem("贴上剪贴板", action: #selector(pinFromClipboard)))
+        menu.addItem(menuItem("隐藏全部贴图", action: #selector(togglePinnedImagesHidden)))
+        menu.addItem(menuItem("关闭全部贴图", action: #selector(closeAllPinnedImages)))
         menu.addItem(menuItem("打开屏迹库", action: #selector(showTraceLibrary)))
         menu.addItem(menuItem("在 Finder 中打开屏迹目录", action: #selector(openTraceDirectory)))
         menu.addItem(menuItem("设置与权限", action: #selector(openSettingsAndPermissions)))
@@ -701,25 +704,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             captureCoordinator.beginScrollingCapture()
         case .pin:
             actionCenter.hide()
-            if let recent = model.recentTrace {
-                let manifest = TraceManifest(
-                    id: recent.id,
-                    kind: .screenshot,
-                    title: recent.title,
-                    dimensions: recent.dimensions,
-                    assets: [TraceAsset(role: .screenshot, relativePath: "raw/screenshot.png")]
-                )
-                pinnedImages.pin(
-                    trace: SavedTrace(
-                        packageURL: recent.packageURL,
-                        rawAssetURL: recent.imageURL,
-                        manifest: manifest
-                    ),
-                    image: recent.thumbnail
-                )
-            } else {
-                toast.show(title: "还没有可贴的截图", detail: "先完成一次截图", symbol: "pin")
-            }
+            pinClipboardOrRecent()
         case .openLibrary:
             actionCenter.hide()
             traceLibrary.show()
@@ -798,6 +783,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openTraceDirectory() {
         try? FileManager.default.createDirectory(at: store.rootDirectory, withIntermediateDirectories: true)
         NSWorkspace.shared.open(store.rootDirectory)
+    }
+
+    @objc private func pinFromClipboard() {
+        actionCenter.hide()
+        pinClipboardOrRecent()
+    }
+
+    @objc private func togglePinnedImagesHidden() {
+        pinnedImages.toggleHidden()
+    }
+
+    @objc private func closeAllPinnedImages() {
+        pinnedImages.closeAll()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(togglePinnedImagesHidden):
+            menuItem.title = pinnedImages.areHidden ? "显示全部贴图" : "隐藏全部贴图"
+            return pinnedImages.hasPins
+        case #selector(closeAllPinnedImages):
+            return pinnedImages.hasPins
+        default:
+            return true
+        }
+    }
+
+    private func pinClipboardOrRecent() {
+        if pinnedImages.pinClipboard() {
+            toast.show(
+                title: "已贴上剪贴板",
+                detail: "图像、文字或色值会浮在桌面上",
+                symbol: "pin.fill"
+            )
+            return
+        }
+        if let recent = model.recentTrace {
+            let manifest = TraceManifest(
+                id: recent.id,
+                kind: .screenshot,
+                title: recent.title,
+                dimensions: recent.dimensions,
+                assets: [TraceAsset(role: .screenshot, relativePath: "raw/screenshot.png")]
+            )
+            pinnedImages.pin(
+                trace: SavedTrace(
+                    packageURL: recent.packageURL,
+                    rawAssetURL: recent.imageURL,
+                    manifest: manifest
+                ),
+                image: recent.thumbnail
+            )
+            return
+        }
+        toast.show(
+            title: "没有可贴的内容",
+            detail: "先复制图像、文字或色值，或完成一次截图",
+            symbol: "pin"
+        )
     }
 
     @objc private func showTraceLibrary() {

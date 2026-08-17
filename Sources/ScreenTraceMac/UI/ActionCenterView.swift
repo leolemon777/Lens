@@ -47,7 +47,7 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         case .windowRecording: "选择一个窗口"
         case .ocr: "识别文字"
         case .scrollingCapture: "滚动捕获"
-        case .pin: "浮在桌面"
+        case .pin: "剪贴板或最近截图"
         case .openLibrary: "所有记录"
         case .openSettings: "偏好与权限"
         }

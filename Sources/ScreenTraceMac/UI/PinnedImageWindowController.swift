@@ -9,6 +9,7 @@ struct PinnedImagePresentation: Equatable {
     var scale: CGFloat
     var opacity: CGFloat = 1
     var isPositionLocked = false
+    var isClickThrough = false
 
     init(imageSize: CGSize, maximumInitialSize: CGSize) {
         self.imageSize = CGSize(
@@ -54,26 +55,121 @@ struct PinnedImagePresentation: Equatable {
         let currentIndex = levels.firstIndex { abs($0 - opacity) < 0.01 } ?? 0
         opacity = levels[(currentIndex + 1) % levels.count]
     }
+
+    /// Trackpad pixel deltas are large; mouse wheels report one notch as ±1.
+    mutating func applyScroll(
+        deltaY: CGFloat,
+        isPrecise: Bool,
+        adjustsOpacity: Bool
+    ) {
+        guard deltaY.isFinite, deltaY != 0 else { return }
+        if adjustsOpacity {
+            let delta = isPrecise ? deltaY / 350 : deltaY * 0.08
+            setOpacity(opacity + delta)
+            return
+        }
+        let steps = isPrecise ? deltaY / 70 : deltaY
+        zoom(by: pow(1.1, steps))
+    }
+
+    mutating func applyMagnification(_ magnification: CGFloat) {
+        guard magnification.isFinite, magnification != 0 else { return }
+        zoom(by: 1 + magnification)
+    }
+
+    static func scrollAdjustsOpacity(_ modifiers: NSEvent.ModifierFlags) -> Bool {
+        let flags = modifiers.intersection(.deviceIndependentFlagsMask)
+        return flags.contains(.control) || flags.contains(.option)
+    }
+
+    /// Click-through dims a fully opaque pin so the window below stays readable.
+    var displayedOpacity: CGFloat {
+        isClickThrough ? min(opacity, 0.6) : opacity
+    }
+}
+
+struct PinnedImageSource {
+    let title: String
+    let trace: SavedTrace?
+
+    static func project(_ trace: SavedTrace) -> PinnedImageSource {
+        PinnedImageSource(title: trace.manifest.title, trace: trace)
+    }
+
+    static func clipboard(title: String) -> PinnedImageSource {
+        PinnedImageSource(title: title, trace: nil)
+    }
 }
 
 @MainActor
 final class PinnedImageWindowController {
     private var windows: [PinnedImageWindow] = []
     var onCopyResult: ((Bool) -> Void)?
+    private(set) var areHidden = false
+
+    var hasPins: Bool { !windows.isEmpty }
+
+    @discardableResult
+    func pinClipboard(from pasteboard: NSPasteboard = .general) -> Bool {
+        guard let item = PinnedClipboardReader.read(from: pasteboard) else { return false }
+        pin(image: item.image, source: .clipboard(title: item.title))
+        return true
+    }
 
     func pin(trace: SavedTrace, image: NSImage) {
+        pin(image: image, source: .project(trace))
+    }
+
+    func hideAll() {
+        guard hasPins else { return }
+        areHidden = true
+        windows.forEach { $0.setGroupHidden(true) }
+    }
+
+    func showAll() {
+        areHidden = false
+        windows.forEach { $0.setGroupHidden(false) }
+    }
+
+    func toggleHidden() {
+        if areHidden {
+            showAll()
+        } else {
+            hideAll()
+        }
+    }
+
+    func closeAll() {
+        let snapshot = windows
+        snapshot.forEach { $0.closePinnedImage() }
+    }
+
+    private func pin(image: NSImage, source: PinnedImageSource) {
+        if areHidden {
+            showAll()
+        }
         let window = PinnedImageWindow(
             image: image,
-            trace: trace,
+            source: source,
             maximumInitialSize: CGSize(width: 520, height: 420)
         )
         window.onClose = { [weak self, weak window] in
             guard let self, let window else { return }
             windows.removeAll { $0 === window }
+            if windows.isEmpty {
+                areHidden = false
+            }
         }
         window.onCopyResult = { [weak self] in self?.onCopyResult?($0) }
         windows.append(window)
         window.center()
+        let offset = CGFloat(windows.count - 1) * 28
+        if offset > 0 {
+            var origin = window.frame.origin
+            origin.x += offset
+            origin.y -= offset
+            window.setFrameOrigin(origin)
+        }
         window.orderFrontRegardless()
         window.makeKey()
     }
@@ -84,17 +180,24 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
     private enum MenuTag {
         static let opacityBase = 2_000
         static let lockPosition = 3_000
+        static let clickThrough = 3_001
     }
 
     var onClose: (() -> Void)?
     var onCopyResult: ((Bool) -> Void)?
 
-    private let trace: SavedTrace
+    private let source: PinnedImageSource
     private let pinnedContentView: PinnedImageContentView
     private var presentation: PinnedImagePresentation
+    private var clickThroughBadge: PinnedClickThroughBadgeWindow?
+    private var ownedDragFileURL: URL?
 
-    init(image: NSImage, trace: SavedTrace, maximumInitialSize: CGSize) {
-        self.trace = trace
+    convenience init(image: NSImage, trace: SavedTrace, maximumInitialSize: CGSize) {
+        self.init(image: image, source: .project(trace), maximumInitialSize: maximumInitialSize)
+    }
+
+    init(image: NSImage, source: PinnedImageSource, maximumInitialSize: CGSize) {
+        self.source = source
         presentation = PinnedImagePresentation(
             imageSize: image.size,
             maximumInitialSize: maximumInitialSize
@@ -118,8 +221,8 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isMovableByWindowBackground = true
-        title = trace.manifest.title
-        setAccessibilityLabel("贴图：\(trace.manifest.title)")
+        title = source.title
+        setAccessibilityLabel("贴图：\(source.title)")
         minSize = CGSize(
             width: presentation.imageSize.width * presentation.minimumScale,
             height: presentation.imageSize.height * presentation.minimumScale
@@ -137,7 +240,11 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {
-            closePinnedImage()
+            if presentation.isClickThrough {
+                toggleClickThrough()
+            } else {
+                closePinnedImage()
+            }
             return
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -175,7 +282,39 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
 
     @objc private func resetSize() {
         presentation.resetScale()
-        applyPresentation(resizing: true)
+        applyPresentation(resizing: true, animated: true)
+    }
+
+    func resetSizeAndOpacity() {
+        presentation.resetScale()
+        presentation.setOpacity(1)
+        applyPresentation(resizing: true, animated: true)
+    }
+
+    func applyScroll(
+        deltaY: CGFloat,
+        isPrecise: Bool,
+        modifiers: NSEvent.ModifierFlags
+    ) {
+        let previousSize = presentation.windowSize
+        presentation.applyScroll(
+            deltaY: deltaY,
+            isPrecise: isPrecise,
+            adjustsOpacity: PinnedImagePresentation.scrollAdjustsOpacity(modifiers)
+        )
+        applyPresentation(
+            resizing: presentation.windowSize != previousSize,
+            animated: false
+        )
+    }
+
+    func applyMagnification(_ magnification: CGFloat) {
+        let previousSize = presentation.windowSize
+        presentation.applyMagnification(magnification)
+        applyPresentation(
+            resizing: presentation.windowSize != previousSize,
+            animated: false
+        )
     }
 
     @objc private func cycleOpacity() {
@@ -193,19 +332,81 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
         applyPresentation(resizing: false)
     }
 
-    @objc private func revealProject() {
-        NSWorkspace.shared.activateFileViewerSelecting([trace.packageURL])
+    @objc private func toggleClickThrough() {
+        presentation.isClickThrough.toggle()
+        applyPresentation(resizing: false)
     }
 
-    @objc private func closePinnedImage() {
+    @objc private func revealProject() {
+        guard let packageURL = source.trace?.packageURL else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([packageURL])
+    }
+
+    @objc func closePinnedImage() {
+        clickThroughBadge?.orderOut(nil)
+        clickThroughBadge = nil
+        if let ownedDragFileURL {
+            try? FileManager.default.removeItem(at: ownedDragFileURL)
+            self.ownedDragFileURL = nil
+        }
         orderOut(nil)
         onClose?()
+    }
+
+    func setGroupHidden(_ hidden: Bool) {
+        if hidden {
+            clickThroughBadge?.orderOut(nil)
+            orderOut(nil)
+        } else {
+            orderFrontRegardless()
+            updateClickThroughBadge()
+        }
+    }
+
+    static func shouldBeginFileDrag(_ modifiers: NSEvent.ModifierFlags) -> Bool {
+        let flags = modifiers.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock)
+        // Control+click is the macOS context-menu chord, so it cannot also start a drag.
+        return flags.contains(.command) || flags.contains(.option)
+    }
+
+    func fileURLForDragging() -> URL? {
+        if let trace = source.trace,
+           let url = QuickAccessFileTransfer.bestFileURL(for: trace) {
+            return url
+        }
+        if let ownedDragFileURL,
+           FileManager.default.fileExists(atPath: ownedDragFileURL.path) {
+            return ownedDragFileURL
+        }
+        guard let tiff = pinnedContentView.image.tiffRepresentation,
+              let representation = NSBitmapImageRep(data: tiff),
+              let png = representation.representation(using: .png, properties: [:]) else {
+            return nil
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTrace-Pin-\(UUID().uuidString).png")
+        do {
+            try png.write(to: url, options: .atomic)
+            ownedDragFileURL = url
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    func beginFileDrag(with event: NSEvent) {
+        guard let url = fileURLForDragging() else { return }
+        let item = NSDraggingItem(pasteboardWriter: url as NSURL)
+        item.setDraggingFrame(pinnedContentView.bounds, contents: pinnedContentView.image)
+        pinnedContentView.beginDraggingSession(with: [item], event: event, source: pinnedContentView)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         for item in menu.items {
             if item.tag == MenuTag.lockPosition {
                 item.state = presentation.isPositionLocked ? .on : .off
+            } else if item.tag == MenuTag.clickThrough {
+                item.state = presentation.isClickThrough ? .on : .off
             } else if item.tag >= MenuTag.opacityBase,
                       item.tag <= MenuTag.opacityBase + 100 {
                 let itemOpacity = CGFloat(item.tag - MenuTag.opacityBase) / 100
@@ -218,7 +419,7 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
         pinnedContentView.setToolbarVisible(visible, animated: false)
     }
 
-    private func applyPresentation(resizing: Bool) {
+    func applyPresentation(resizing: Bool, animated: Bool = true) {
         if resizing {
             let center = CGPoint(x: frame.midX, y: frame.midY)
             let nextSize = presentation.windowSize
@@ -230,13 +431,36 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
                     height: nextSize.height
                 ),
                 display: true,
-                animate: true
+                animate: animated
             )
         }
-        alphaValue = presentation.opacity
-        isMovableByWindowBackground = !presentation.isPositionLocked
+        alphaValue = presentation.displayedOpacity
+        ignoresMouseEvents = presentation.isClickThrough
+        isMovableByWindowBackground = !presentation.isPositionLocked && !presentation.isClickThrough
         pinnedContentView.setPositionLocked(presentation.isPositionLocked)
+        pinnedContentView.setClickThrough(presentation.isClickThrough)
         pinnedContentView.setOpacityLabel(Int((presentation.opacity * 100).rounded()))
+        pinnedContentView.setClickThroughChrome(presentation.isClickThrough)
+        if let menu = pinnedContentView.menu {
+            menuWillOpen(menu)
+        }
+        updateClickThroughBadge()
+    }
+
+    private func updateClickThroughBadge() {
+        if presentation.isClickThrough {
+            let badge = clickThroughBadge ?? PinnedClickThroughBadgeWindow { [weak self] in
+                self?.toggleClickThrough()
+            }
+            clickThroughBadge = badge
+            badge.reposition(over: frame)
+            if isVisible {
+                badge.orderFrontRegardless()
+            }
+        } else {
+            clickThroughBadge?.orderOut(nil)
+            clickThroughBadge = nil
+        }
     }
 
     private func configureToolbar() {
@@ -247,6 +471,7 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
             zoomInAction: #selector(zoomIn),
             opacityAction: #selector(cycleOpacity),
             lockAction: #selector(togglePositionLock),
+            clickThroughAction: #selector(toggleClickThrough),
             closeAction: #selector(closePinnedImage)
         )
     }
@@ -274,8 +499,14 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
         let lockItem = menuItem("锁定位置", action: #selector(togglePositionLock))
         lockItem.tag = MenuTag.lockPosition
         menu.addItem(lockItem)
+        let clickThroughItem = menuItem("鼠标穿透", action: #selector(toggleClickThrough), keyEquivalent: "p")
+        clickThroughItem.keyEquivalentModifierMask = []
+        clickThroughItem.tag = MenuTag.clickThrough
+        menu.addItem(clickThroughItem)
         menu.addItem(.separator())
-        menu.addItem(menuItem("在 Finder 中显示项目", action: #selector(revealProject)))
+        if source.trace != nil {
+            menu.addItem(menuItem("在 Finder 中显示项目", action: #selector(revealProject)))
+        }
         menu.addItem(menuItem("关闭贴图", action: #selector(closePinnedImage), keyEquivalent: "w"))
         pinnedContentView.menu = menu
     }
@@ -292,7 +523,7 @@ final class PinnedImageWindow: NSWindow, NSMenuDelegate {
 }
 
 @MainActor
-private final class PinnedImageContentView: NSView {
+private final class PinnedImageContentView: NSView, NSDraggingSource {
     let image: NSImage
 
     private let imageView: NSImageView
@@ -301,12 +532,13 @@ private final class PinnedImageContentView: NSView {
     private let copyButton = NSButton()
     private let opacityButton = NSButton()
     private let lockButton = NSButton()
+    private let clickThroughButton = NSButton()
     private var trackingAreaReference: NSTrackingArea?
     private var confirmationWorkItem: DispatchWorkItem?
 
     init(frame: CGRect, image: NSImage) {
         self.image = image
-        imageView = NSImageView(frame: frame)
+        imageView = PinnedImageView(frame: frame)
         super.init(frame: frame)
         wantsLayer = true
         layer?.cornerRadius = 10
@@ -329,6 +561,7 @@ private final class PinnedImageContentView: NSView {
         toolbarStack.edgeInsets = NSEdgeInsets(top: 4, left: 5, bottom: 4, right: 5)
         toolbar.addSubview(toolbarStack)
         addSubview(toolbar)
+        toolTip = "拖动移动；Command 或 Option 拖出 PNG"
     }
 
     required init?(coder: NSCoder) {
@@ -363,6 +596,51 @@ private final class PinnedImageContentView: NSView {
         super.updateTrackingAreas()
     }
 
+    override var mouseDownCanMoveWindow: Bool {
+        window?.isMovableByWindowBackground ?? true
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if PinnedImageWindow.shouldBeginFileDrag(event.modifierFlags) {
+            (window as? PinnedImageWindow)?.beginFileDrag(with: event)
+            return
+        }
+        // Borderless pins have no title bar. NSImageView is an NSControl, so
+        // AppKit would otherwise eat the drag instead of moving the window.
+        if window?.isMovableByWindowBackground == true {
+            window?.performDrag(with: event)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor context: NSDraggingContext
+    ) -> NSDragOperation {
+        .copy
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        forwardScroll(event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        (window as? PinnedImageWindow)?.applyMagnification(event.magnification)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2 {
+            (window as? PinnedImageWindow)?.resetSizeAndOpacity()
+            return
+        }
+        super.otherMouseDown(with: event)
+    }
+
     override func mouseEntered(with event: NSEvent) {
         setToolbarVisible(true, animated: true)
     }
@@ -389,6 +667,7 @@ private final class PinnedImageContentView: NSView {
         zoomInAction: Selector,
         opacityAction: Selector,
         lockAction: Selector,
+        clickThroughAction: Selector,
         closeAction: Selector
     ) {
         configure(
@@ -427,6 +706,20 @@ private final class PinnedImageContentView: NSView {
             action: lockAction
         )
         toolbarStack.addArrangedSubview(lockButton)
+        configure(
+            clickThroughButton,
+            symbol: "cursorarrow.slash",
+            label: "鼠标穿透",
+            target: target,
+            action: clickThroughAction
+        )
+        if clickThroughButton.image == nil {
+            clickThroughButton.image = NSImage(
+                systemSymbolName: "eye.slash",
+                accessibilityDescription: "鼠标穿透"
+            )
+        }
+        toolbarStack.addArrangedSubview(clickThroughButton)
         toolbarStack.addArrangedSubview(button(
             symbol: "xmark",
             label: "关闭贴图",
@@ -444,9 +737,33 @@ private final class PinnedImageContentView: NSView {
         lockButton.toolTip = isLocked ? "解锁位置" : "锁定位置"
     }
 
+    func setClickThrough(_ isClickThrough: Bool) {
+        let symbol = isClickThrough ? "cursorarrow" : "cursorarrow.slash"
+        let fallback = isClickThrough ? "eye" : "eye.slash"
+        let label = isClickThrough ? "退出鼠标穿透" : "鼠标穿透"
+        clickThroughButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+            ?? NSImage(systemSymbolName: fallback, accessibilityDescription: label)
+        clickThroughButton.toolTip = label
+        clickThroughButton.setAccessibilityLabel(label)
+    }
+
+    func setClickThroughChrome(_ isClickThrough: Bool) {
+        layer?.borderWidth = isClickThrough ? 2 : 0
+        layer?.borderColor = NSColor.systemGreen.withAlphaComponent(0.9).cgColor
+    }
+
     func setOpacityLabel(_ percent: Int) {
-        opacityButton.toolTip = "透明度 \(percent)%"
+        opacityButton.toolTip = "透明度 \(percent)% · Option 或 Control + 滚轮"
         opacityButton.setAccessibilityLabel("透明度 \(percent)%")
+    }
+
+    private func forwardScroll(_ event: NSEvent) {
+        let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY
+        (window as? PinnedImageWindow)?.applyScroll(
+            deltaY: delta,
+            isPrecise: event.hasPreciseScrollingDeltas,
+            modifiers: event.modifierFlags
+        )
     }
 
     func showConfirmation(symbol: String) {
@@ -494,5 +811,96 @@ private final class PinnedImageContentView: NSView {
         button.translatesAutoresizingMaskIntoConstraints = false
         button.widthAnchor.constraint(equalToConstant: 26).isActive = true
         button.heightAnchor.constraint(equalToConstant: 24).isActive = true
+    }
+}
+
+/// Fills the pin. NSControl defaults to swallowing mouse-down, which would
+/// leave a borderless screenshot stuck in place after it is pinned.
+private final class PinnedImageView: NSImageView {
+    override var mouseDownCanMoveWindow: Bool {
+        window?.isMovableByWindowBackground ?? true
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if PinnedImageWindow.shouldBeginFileDrag(event.modifierFlags) {
+            (window as? PinnedImageWindow)?.beginFileDrag(with: event)
+            return
+        }
+        if window?.isMovableByWindowBackground == true {
+            window?.performDrag(with: event)
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        superview?.scrollWheel(with: event)
+    }
+
+    override func magnify(with event: NSEvent) {
+        superview?.magnify(with: event)
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        superview?.otherMouseDown(with: event)
+    }
+}
+
+/// Stays clickable while the pin ignores mouse events, so click-through is reversible
+/// without a global hotkey or Accessibility key monitoring.
+private final class PinnedClickThroughBadgeWindow: NSPanel {
+    private let onExit: () -> Void
+
+    init(onExit: @escaping () -> Void) {
+        self.onExit = onExit
+        super.init(
+            contentRect: CGRect(x: 0, y: 0, width: 88, height: 28),
+            styleMask: [.nonactivatingPanel, .borderless],
+            backing: .buffered,
+            defer: false
+        )
+        isFloatingPanel = true
+        becomesKeyOnlyIfNeeded = true
+        hidesOnDeactivate = false
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
+        level = .statusBar
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        ignoresMouseEvents = false
+
+        let button = NSButton(frame: NSRect(x: 0, y: 0, width: 88, height: 28))
+        button.title = "退出穿透"
+        button.bezelStyle = .rounded
+        button.font = .systemFont(ofSize: 11, weight: .medium)
+        button.target = self
+        button.action = #selector(exitClickThrough)
+        button.setAccessibilityLabel("退出鼠标穿透")
+        contentView = button
+    }
+
+    @objc private func exitClickThrough() {
+        onExit()
+    }
+
+    func reposition(over pinFrame: CGRect) {
+        let size = frame.size
+        var origin = CGPoint(
+            x: pinFrame.midX - size.width / 2,
+            y: pinFrame.maxY + 8
+        )
+        if let screen = NSScreen.screens.first(where: { $0.frame.intersects(pinFrame) })
+            ?? NSScreen.main {
+            let visible = screen.visibleFrame
+            if origin.y + size.height > visible.maxY {
+                origin.y = pinFrame.minY - size.height - 8
+            }
+            origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
+        }
+        setFrameOrigin(origin)
     }
 }

@@ -4,16 +4,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MODE="public"
+DETACHED_SOURCE=0
 
 usage() {
-    echo "Usage: $0 [--development] <release.json>" >&2
+    echo "Usage: $0 [--development] [--detached-source] <release.json>" >&2
     exit 64
 }
 
-if [[ "${1:-}" == "--development" ]]; then
-    MODE="development"
+while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+        --development) MODE="development" ;;
+        --detached-source) DETACHED_SOURCE=1 ;;
+        *) usage ;;
+    esac
     shift
-fi
+done
 [[ $# -eq 1 ]] || usage
 [[ -f "$1" ]] || { echo "Release manifest does not exist: $1" >&2; exit 66; }
 
@@ -120,6 +125,7 @@ MINIMUM_MACOS="$(manifest_value minimumMacOS)"
 MACHO_UUID="$(manifest_value binary.machOUUID)"
 GIT_COMMIT="$(manifest_value git.commit)"
 GIT_WORKTREE="$(manifest_value git.worktree)"
+SOURCE_SNAPSHOT_SHA256="$(manifest_value git.sourceSnapshotSHA256)"
 SIGNING_KIND="$(manifest_value signing.kind)"
 TEAM_IDENTIFIER="$(manifest_value signing.teamIdentifier)"
 APP_NOTARY_ID="$(manifest_value notarization.app.requestID)"
@@ -135,10 +141,33 @@ case "$RELEASE_CHANNEL" in
     *) fail "invalid release channel: $RELEASE_CHANNEL" ;;
 esac
 [[ -n "$MINIMUM_MACOS" && -n "$MACHO_UUID" ]] || fail "missing platform or UUID metadata"
-expect_value "release worktree state" "$GIT_WORKTREE" "clean"
-expect_value "release Git commit" "$GIT_COMMIT" "$(git -C "$PROJECT_DIR" rev-parse HEAD)"
-[[ -z "$(git -C "$PROJECT_DIR" status --porcelain)" ]] \
-    || fail "current Git worktree is not clean"
+[[ "$GIT_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "invalid release Git commit: $GIT_COMMIT"
+[[ "$SOURCE_SNAPSHOT_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "invalid source snapshot SHA-256: $SOURCE_SNAPSHOT_SHA256"
+if [[ "$DETACHED_SOURCE" -eq 0 ]]; then
+    expect_value "release Git commit" "$GIT_COMMIT" "$(git -C "$PROJECT_DIR" rev-parse HEAD)"
+    expect_value "source snapshot SHA-256" "$SOURCE_SNAPSHOT_SHA256" \
+        "$("$SCRIPT_DIR/source-snapshot-digest.sh" "$PROJECT_DIR")"
+    if [[ -n "$(git -C "$PROJECT_DIR" status --porcelain)" ]]; then
+        CURRENT_WORKTREE="dirty"
+    else
+        CURRENT_WORKTREE="clean"
+    fi
+fi
+if [[ "$MODE" == "public" ]]; then
+    [[ "$GIT_WORKTREE" == "clean" ]] \
+        || public_fail "release worktree state expected=clean actual=$GIT_WORKTREE"
+    if [[ "$DETACHED_SOURCE" -eq 0 ]]; then
+        [[ "$CURRENT_WORKTREE" == "clean" ]] \
+            || public_fail "current Git worktree is not clean"
+    fi
+else
+    # A development package may intentionally represent an in-progress source
+    # snapshot. It is still rejected if the manifest lies about that snapshot.
+    if [[ "$DETACHED_SOURCE" -eq 0 ]]; then
+        expect_value "development worktree state" "$GIT_WORKTREE" "$CURRENT_WORKTREE"
+    fi
+fi
 
 ARTIFACT_NAME="ScreenTrace-$APP_VERSION-$BUILD_NUMBER"
 expect_value "release manifest filename" "$(basename "$MANIFEST_PATH")" \

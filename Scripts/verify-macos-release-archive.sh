@@ -41,6 +41,7 @@ APP_VERSION="$(metadata_value version)"
 BUILD_NUMBER="$(metadata_value buildNumber)"
 RELEASE_CHANNEL="$(metadata_value releaseChannel)"
 GIT_COMMIT="$(metadata_value gitCommit)"
+SOURCE_SNAPSHOT_SHA256="$(metadata_value sourceSnapshotSHA256)"
 MACHO_UUID="$(metadata_value machOUUID)"
 RELEASE_MANIFEST_FILENAME="$(metadata_value releaseManifest)"
 ARTIFACT_NAME="ScreenTrace-$APP_VERSION-$BUILD_NUMBER"
@@ -52,6 +53,7 @@ RELEASE_NOTES_FILENAME="$ARTIFACT_NAME-RELEASE_NOTES.md"
 [[ "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || fail "invalid archived version"
 [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || fail "invalid archived build number"
 [[ "$GIT_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "invalid archived Git commit"
+[[ "$SOURCE_SNAPSHOT_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail "invalid archived source snapshot SHA-256"
 [[ "$MACHO_UUID" =~ ^[0-9A-F-]{36}$ ]] || fail "invalid archived Mach-O UUID"
 case "$RELEASE_CHANNEL" in
     alpha|beta|stable) ;;
@@ -120,7 +122,9 @@ manifest_value() {
 [[ "$(manifest_value buildNumber)" == "$BUILD_NUMBER" ]] || fail "archived build metadata drift"
 [[ "$(manifest_value releaseChannel)" == "$RELEASE_CHANNEL" ]] || fail "archived channel metadata drift"
 [[ "$(manifest_value git.commit)" == "$GIT_COMMIT" ]] || fail "archived Git metadata drift"
+[[ "$(manifest_value git.sourceSnapshotSHA256)" == "$SOURCE_SNAPSHOT_SHA256" ]] \
+    || fail "archived source snapshot metadata drift"
 [[ "$(manifest_value binary.machOUUID)" == "$MACHO_UUID" ]] || fail "archived UUID metadata drift"
 
-"$SCRIPT_DIR/verify-macos-release.sh" "${MODE_FLAG[@]}" "$RELEASE_MANIFEST_PATH"
+"$SCRIPT_DIR/verify-macos-release.sh" "${MODE_FLAG[@]}" --detached-source "$RELEASE_MANIFEST_PATH"
 echo "Release archive verification passed: $ARCHIVE_DIR"

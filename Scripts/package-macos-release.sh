@@ -12,6 +12,7 @@ APP_NOTARY_REQUEST_ID="not-submitted"
 APP_NOTARY_STATUS="not-submitted"
 DMG_NOTARY_REQUEST_ID="not-submitted"
 DMG_NOTARY_STATUS="not-submitted"
+SOURCE_SNAPSHOT_BEFORE="$("$SCRIPT_DIR/source-snapshot-digest.sh" "$PROJECT_DIR")"
 
 if [[ -n "$NOTARY_PROFILE" && "$SIGNING_IDENTITY" == "-" ]]; then
     echo "SCREENTRACE_NOTARY_PROFILE requires a Developer ID signing identity." >&2
@@ -147,7 +148,16 @@ APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST_
 MINIMUM_MACOS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$PLIST_PATH")"
 MACHO_UUID="$(xcrun dwarfdump --uuid "$APP_DIR/Contents/MacOS/ScreenTrace" | awk 'NR == 1 { print $2 }')"
 GIT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
-if [[ -n "$(git -C "$PROJECT_DIR" status --porcelain --untracked-files=no)" ]]; then
+SOURCE_SNAPSHOT_SHA256="$("$SCRIPT_DIR/source-snapshot-digest.sh" "$PROJECT_DIR")"
+if [[ "$SOURCE_SNAPSHOT_SHA256" != "$SOURCE_SNAPSHOT_BEFORE" ]]; then
+    echo "Source snapshot changed while release artifacts were being built." >&2
+    echo "before=$SOURCE_SNAPSHOT_BEFORE" >&2
+    echo "after=$SOURCE_SNAPSHOT_SHA256" >&2
+    exit 65
+fi
+# Untracked Swift/resource files can participate in the build, so the manifest
+# must describe the complete source snapshot instead of tracked changes only.
+if [[ -n "$(git -C "$PROJECT_DIR" status --porcelain)" ]]; then
     GIT_WORKTREE_STATE="dirty"
 else
     GIT_WORKTREE_STATE="clean"
@@ -188,6 +198,7 @@ plutil -insert minimumMacOS -string "$MINIMUM_MACOS" "$RELEASE_MANIFEST_PLIST"
 plutil -insert git -dictionary "$RELEASE_MANIFEST_PLIST"
 plutil -insert git.commit -string "$GIT_COMMIT" "$RELEASE_MANIFEST_PLIST"
 plutil -insert git.worktree -string "$GIT_WORKTREE_STATE" "$RELEASE_MANIFEST_PLIST"
+plutil -insert git.sourceSnapshotSHA256 -string "$SOURCE_SNAPSHOT_SHA256" "$RELEASE_MANIFEST_PLIST"
 plutil -insert binary -dictionary "$RELEASE_MANIFEST_PLIST"
 plutil -insert binary.machOUUID -string "$MACHO_UUID" "$RELEASE_MANIFEST_PLIST"
 plutil -insert signing -dictionary "$RELEASE_MANIFEST_PLIST"
@@ -235,6 +246,7 @@ verify_manifest_value "bundleIdentifier" "$APP_BUNDLE_ID"
 verify_manifest_value "version" "$APP_VERSION"
 verify_manifest_value "buildNumber" "$BUILD_VERSION"
 verify_manifest_value "releaseChannel" "$RELEASE_CHANNEL"
+verify_manifest_value "git.sourceSnapshotSHA256" "$SOURCE_SNAPSHOT_SHA256"
 verify_manifest_value "binary.machOUUID" "$MACHO_UUID"
 verify_manifest_value "artifacts.0.sha256" "$DMG_SHA256"
 verify_manifest_value "artifacts.1.sha256" "$APP_ARCHIVE_SHA256"

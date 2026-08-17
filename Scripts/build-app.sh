@@ -5,8 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIGURATION="${1:-debug}"
 APP_VERSION="${SCREENTRACE_VERSION:-0.1.0}"
-BUILD_VERSION="${SCREENTRACE_BUILD_NUMBER:-1}"
-SIGNING_IDENTITY="${SCREENTRACE_SIGNING_IDENTITY:--}"
+BUILD_VERSION="${SCREENTRACE_BUILD_NUMBER:-$(date -u +%Y%m%d%H%M%S)}"
+BUILD_CHANNEL="${SCREENTRACE_BUILD_CHANNEL:-development}"
+BUILT_AT="${SCREENTRACE_BUILT_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+GIT_COMMIT="${SCREENTRACE_GIT_COMMIT:-$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null || true)}"
+GIT_COMMIT="${GIT_COMMIT:-unknown}"
+SIGNING_IDENTITY="${SCREENTRACE_SIGNING_IDENTITY:-}"
 BUILD_DIR="$PROJECT_DIR/Build"
 APP_DIR="$BUILD_DIR/ScreenTrace.app"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -15,6 +19,17 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ICON_SOURCE="$PROJECT_DIR/Assets/AppIcon.png"
 ENTITLEMENTS_PATH="$PROJECT_DIR/Config/ScreenTrace.entitlements"
 ICON_TEMP_ROOT=""
+
+if [[ -z "$SIGNING_IDENTITY" ]]; then
+    AVAILABLE_SIGNING_IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+    for candidate in "ScreenTrace Local Code Signing" "PathShot Local Code Signing"; do
+        if grep -Fq "\"$candidate\"" <<<"$AVAILABLE_SIGNING_IDENTITIES"; then
+            SIGNING_IDENTITY="$candidate"
+            break
+        fi
+    done
+    SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
+fi
 
 cleanup() {
     if [[ -n "$ICON_TEMP_ROOT" && -d "$ICON_TEMP_ROOT" ]]; then
@@ -31,9 +46,21 @@ if [[ ! "$BUILD_VERSION" =~ ^[0-9]+$ ]]; then
     echo "Invalid SCREENTRACE_BUILD_NUMBER: $BUILD_VERSION" >&2
     exit 64
 fi
+if [[ ! "$BUILD_CHANNEL" =~ ^(development|beta|release)$ ]]; then
+    echo "Invalid SCREENTRACE_BUILD_CHANNEL: $BUILD_CHANNEL" >&2
+    exit 64
+fi
+if [[ ! "$GIT_COMMIT" =~ ^([0-9a-fA-F]{7,64}|unknown)$ ]]; then
+    echo "Invalid SCREENTRACE_GIT_COMMIT: $GIT_COMMIT" >&2
+    exit 64
+fi
 
 cd "$PROJECT_DIR"
-swift build -c "$CONFIGURATION" --product ScreenTrace
+SWIFT_BUILD_ARGUMENTS=(-c "$CONFIGURATION" --product ScreenTrace)
+if [[ "$CONFIGURATION" == "release" ]]; then
+    SWIFT_BUILD_ARGUMENTS+=(-Xswiftc -warnings-as-errors)
+fi
+swift build "${SWIFT_BUILD_ARGUMENTS[@]}"
 BIN_DIR="$(swift build -c "$CONFIGURATION" --show-bin-path)"
 
 EXPECTED_APP_DIR="$PROJECT_DIR/Build/ScreenTrace.app"
@@ -91,6 +118,9 @@ PLIST_PATH="$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $APP_VERSION" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $BUILD_VERSION" "$PLIST_PATH"
+/usr/libexec/PlistBuddy -c "Add :ScreenTraceBuildChannel string $BUILD_CHANNEL" "$PLIST_PATH"
+/usr/libexec/PlistBuddy -c "Add :ScreenTraceBuiltAt string $BUILT_AT" "$PLIST_PATH"
+/usr/libexec/PlistBuddy -c "Add :ScreenTraceGitCommit string $GIT_COMMIT" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 15.2" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "$PLIST_PATH"
@@ -115,4 +145,6 @@ else
         --sign "$SIGNING_IDENTITY" \
         "$APP_DIR"
 fi
+echo "Signing identity: $SIGNING_IDENTITY"
+echo "Build identity: $APP_VERSION ($BUILD_VERSION) · $BUILD_CHANNEL · ${GIT_COMMIT:0:12} · $BUILT_AT"
 echo "$APP_DIR"

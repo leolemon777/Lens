@@ -25,7 +25,9 @@ swift build -c release --product ScreenTrace -Xswiftc -warnings-as-errors
 bash Scripts/build-release-artifacts.sh
 ```
 
-本地脚本生成的是 ad-hoc 签名 App，不能代替 Developer ID 签名和 Apple 公证。
+本地脚本会优先使用钥匙串中的 `ScreenTrace Local Code Signing` 或
+`PathShot Local Code Signing` 稳定开发身份，避免每次重建后 macOS TCC 权限失配；
+找不到时才退回 ad-hoc 签名。两者都不能代替 Developer ID 签名和 Apple 公证。
 
 ## 代码结构
 

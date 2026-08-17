@@ -8,3 +8,7 @@ DerivedData/
 *.screentrace
 *.mp4
 *.mov
+
+# 图标设计稿：仅 Assets/AppIcon.png 是经过审计的品牌资产，
+# audit-public-source.sh 会拒绝任何其他被跟踪的图片。
+/Assets/IconCandidates/

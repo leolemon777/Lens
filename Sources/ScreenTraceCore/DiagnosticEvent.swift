@@ -16,16 +16,24 @@ public struct DiagnosticEvent: Codable, Equatable, Sendable {
 
     public static let allowedMetadataKeys: Set<String> = [
         "appVersion",
+        "averageMilliseconds",
         "build",
         "captureMode",
         "count",
+        "durationMilliseconds",
         "errorCode",
         "errorDomain",
+        "eventCaptureMode",
+        "eventStatus",
         "frameRate",
         "intent",
+        "maximumMilliseconds",
+        "measuredFrameRate",
         "phase",
         "status",
-        "storageLevel"
+        "storageLevel",
+        "totalMilliseconds",
+        "videoStatus"
     ]
 
     public let timestamp: Date

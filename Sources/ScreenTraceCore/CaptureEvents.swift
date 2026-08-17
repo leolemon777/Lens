@@ -13,6 +13,28 @@ public struct TracePoint: Codable, Equatable, Sendable {
 public enum PointerEventKind: String, Codable, Sendable {
     case moved
     case dragged
+    case scroll
+}
+
+/// A privacy-safe description of the system cursor that was visible while
+/// recording. Custom third-party cursor artwork intentionally falls back to
+/// `unknown`; no application pixels or accessibility text are stored.
+public enum PointerCursorShape: String, Codable, CaseIterable, Hashable, Sendable {
+    case arrow
+    case pointingHand
+    case iBeam
+    case verticalIBeam
+    case crosshair
+    case openHand
+    case closedHand
+    case horizontalResize
+    case verticalResize
+    case operationNotAllowed
+    case dragCopy
+    case dragLink
+    case contextualMenu
+    case disappearingItem
+    case unknown
 }
 
 public struct PointerEvent: Codable, Equatable, Sendable {
@@ -21,19 +43,25 @@ public struct PointerEvent: Codable, Equatable, Sendable {
     public let location: TracePoint
     public let normalizedLocation: TracePoint?
     public let displayID: UInt32?
+    public let scrollDelta: TracePoint?
+    public let cursorShape: PointerCursorShape?
 
     public init(
         time: Double,
         kind: PointerEventKind,
         location: TracePoint,
         normalizedLocation: TracePoint? = nil,
-        displayID: UInt32?
+        displayID: UInt32?,
+        scrollDelta: TracePoint? = nil,
+        cursorShape: PointerCursorShape? = nil
     ) {
         self.time = time
         self.kind = kind
         self.location = location
         self.normalizedLocation = normalizedLocation
         self.displayID = displayID
+        self.scrollDelta = scrollDelta
+        self.cursorShape = cursorShape
     }
 }
 
@@ -57,6 +85,7 @@ public struct ClickEvent: Codable, Equatable, Sendable {
     public let normalizedLocation: TracePoint?
     public let displayID: UInt32?
     public let clickCount: Int
+    public let cursorShape: PointerCursorShape?
 
     public init(
         time: Double,
@@ -65,7 +94,8 @@ public struct ClickEvent: Codable, Equatable, Sendable {
         location: TracePoint,
         normalizedLocation: TracePoint? = nil,
         displayID: UInt32? = nil,
-        clickCount: Int
+        clickCount: Int,
+        cursorShape: PointerCursorShape? = nil
     ) {
         self.time = time
         self.button = button
@@ -74,6 +104,7 @@ public struct ClickEvent: Codable, Equatable, Sendable {
         self.normalizedLocation = normalizedLocation
         self.displayID = displayID
         self.clickCount = clickCount
+        self.cursorShape = cursorShape
     }
 }
 
@@ -134,7 +165,7 @@ private extension String {
 }
 
 public struct AutoEditPlan: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.8"
+    public static let currentSchemaVersion = "1.2"
 
     public struct ClickPulse: Codable, Equatable, Sendable {
         public let time: Double
@@ -156,12 +187,99 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     }
 
     public struct Interaction: Codable, Equatable, Sendable {
+        public enum ClickEffect: String, Codable, CaseIterable, Hashable, Sendable {
+            case ripple
+            case pulse
+            case spotlight
+        }
+
         public var showsClickPulse: Bool
+        public var clickEffect: ClickEffect
+        public var clickEffectStrength: Double
+        public var clickPulseScale: Double
+        public var clickPulseColorHex: String
+        /// Nil preserves each legacy pulse's authored duration.
+        public var clickPulseDuration: Double?
         public var clickPulses: [ClickPulse]
 
-        public init(showsClickPulse: Bool = true, clickPulses: [ClickPulse] = []) {
+        public init(
+            showsClickPulse: Bool = true,
+            clickEffect: ClickEffect = .ripple,
+            clickEffectStrength: Double = 1,
+            clickPulseScale: Double = 1.25,
+            clickPulseColorHex: String = "#FF684D",
+            clickPulseDuration: Double? = 0.62,
+            clickPulses: [ClickPulse] = []
+        ) {
             self.showsClickPulse = showsClickPulse
+            self.clickEffect = clickEffect
+            self.clickEffectStrength = min(max(
+                clickEffectStrength.isFinite ? clickEffectStrength : 1,
+                0.1
+            ), 1)
+            self.clickPulseScale = min(max(
+                clickPulseScale.isFinite ? clickPulseScale : 1,
+                0.5
+            ), 3)
+            self.clickPulseColorHex = Self.normalizedHex(clickPulseColorHex)
+            self.clickPulseDuration = clickPulseDuration.map {
+                min(max($0.isFinite ? $0 : 0.55, 0.15), 1.5)
+            }
             self.clickPulses = clickPulses
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case showsClickPulse
+            case clickEffect
+            case clickEffectStrength
+            case clickPulseScale
+            case clickPulseColorHex
+            case clickPulseDuration
+            case clickPulses
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                showsClickPulse: try container.decodeIfPresent(
+                    Bool.self,
+                    forKey: .showsClickPulse
+                ) ?? true,
+                clickEffect: try container.decodeIfPresent(
+                    ClickEffect.self,
+                    forKey: .clickEffect
+                ) ?? .ripple,
+                clickEffectStrength: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .clickEffectStrength
+                ) ?? 1,
+                clickPulseScale: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .clickPulseScale
+                ) ?? 1,
+                clickPulseColorHex: try container.decodeIfPresent(
+                    String.self,
+                    forKey: .clickPulseColorHex
+                ) ?? "#00D9FF",
+                clickPulseDuration: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .clickPulseDuration
+                ),
+                clickPulses: try container.decodeIfPresent(
+                    [ClickPulse].self,
+                    forKey: .clickPulses
+                ) ?? []
+            )
+        }
+
+        private static func normalizedHex(_ value: String) -> String {
+            let trimmed = value.trimmingCharacters(
+                in: CharacterSet(charactersIn: "# ")
+            ).uppercased()
+            guard trimmed.count == 6, UInt32(trimmed, radix: 16) != nil else {
+                return "#00D9FF"
+            }
+            return "#\(trimmed)"
         }
     }
 
@@ -193,10 +311,28 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     public struct CursorKeyframe: Codable, Equatable, Sendable {
         public let time: Double
         public let position: TracePoint
+        /// Preserves whether the pointer was freely moving or actively dragging.
+        /// Legacy plans omit this field and continue to render normally.
+        public let kind: PointerEventKind?
 
-        public init(time: Double, position: TracePoint) {
+        public init(
+            time: Double,
+            position: TracePoint,
+            kind: PointerEventKind? = nil
+        ) {
             self.time = time
             self.position = position
+            self.kind = kind
+        }
+    }
+
+    public struct CursorShapeKeyframe: Codable, Equatable, Sendable {
+        public let time: Double
+        public let shape: PointerCursorShape
+
+        public init(time: Double, shape: PointerCursorShape) {
+            self.time = max(time.isFinite ? time : 0, 0)
+            self.shape = shape
         }
     }
 
@@ -204,8 +340,13 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         public enum Reason: String, Codable, Sendable {
             case baseline
             case clickFocus
+            case pointerFollow
             case clickHold
             case returnToOverview
+            case manualAnchor
+            case manualFocus
+            case manualHold
+            case manualReturn
         }
 
         public let time: Double
@@ -230,44 +371,224 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     }
 
     public struct Cursor: Codable, Equatable, Sendable {
+        public enum Appearance: String, Codable, CaseIterable, Hashable, Sendable {
+            /// Replays standard system shapes captured during recording.
+            case recorded
+            /// Preserves the legacy fixed macOS arrow.
+            case macOS
+            case highContrast
+            case minimalDot
+        }
+
+        public enum MotionEffect: String, Codable, CaseIterable, Hashable, Sendable {
+            case none
+            case halo
+            case trail
+            case spotlight
+        }
+
         /// Nil in legacy projects means enabled.
         public var isEnabled: Bool?
+        public var appearance: Appearance
+        public var accentColorHex: String
+        public var motionEffect: MotionEffect
+        public var motionEffectStrength: Double
         public var smoothing: Double
+        /// Nil preserves the legacy normalized smoothing renderer.
+        public var smoothingWindowMilliseconds: Double?
         public var scale: Double
         public var hidesWhenIdle: Bool
         public var keyframes: [CursorKeyframe]
+        public var shapeKeyframes: [CursorShapeKeyframe]
 
         public init(
             isEnabled: Bool? = true,
+            appearance: Appearance = .recorded,
+            accentColorHex: String = "#5BD6FF",
+            motionEffect: MotionEffect = .halo,
+            motionEffectStrength: Double = 0.42,
             smoothing: Double,
+            smoothingWindowMilliseconds: Double? = nil,
             scale: Double,
             hidesWhenIdle: Bool,
-            keyframes: [CursorKeyframe] = []
+            keyframes: [CursorKeyframe] = [],
+            shapeKeyframes: [CursorShapeKeyframe] = []
         ) {
             self.isEnabled = isEnabled
+            self.appearance = appearance
+            self.accentColorHex = Self.normalizedHex(accentColorHex)
+            self.motionEffect = motionEffect
+            self.motionEffectStrength = min(max(
+                motionEffectStrength.isFinite ? motionEffectStrength : 0.42,
+                0.1
+            ), 1)
             self.smoothing = smoothing
+            self.smoothingWindowMilliseconds = smoothingWindowMilliseconds.map {
+                min(max($0.isFinite ? $0 : 0, 0), 160)
+            }
             self.scale = scale
             self.hidesWhenIdle = hidesWhenIdle
             self.keyframes = keyframes
+            self.shapeKeyframes = shapeKeyframes
+        }
+
+        public var resolvedSmoothingWindowMilliseconds: Double {
+            smoothingWindowMilliseconds
+                ?? min(max(smoothing.isFinite ? smoothing : 0.72, 0), 1) * 80
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case isEnabled
+            case appearance
+            case accentColorHex
+            case motionEffect
+            case motionEffectStrength
+            case smoothing
+            case smoothingWindowMilliseconds
+            case scale
+            case hidesWhenIdle
+            case keyframes
+            case shapeKeyframes
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                isEnabled: try container.decodeIfPresent(Bool.self, forKey: .isEnabled),
+                appearance: try container.decodeIfPresent(
+                    Appearance.self,
+                    forKey: .appearance
+                ) ?? .macOS,
+                accentColorHex: try container.decodeIfPresent(
+                    String.self,
+                    forKey: .accentColorHex
+                ) ?? "#5BD6FF",
+                motionEffect: try container.decodeIfPresent(
+                    MotionEffect.self,
+                    forKey: .motionEffect
+                ) ?? .none,
+                motionEffectStrength: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .motionEffectStrength
+                ) ?? 0.42,
+                smoothing: try container.decodeIfPresent(Double.self, forKey: .smoothing)
+                    ?? 0.72,
+                smoothingWindowMilliseconds: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .smoothingWindowMilliseconds
+                ),
+                scale: try container.decodeIfPresent(Double.self, forKey: .scale) ?? 1.15,
+                hidesWhenIdle: try container.decodeIfPresent(
+                    Bool.self,
+                    forKey: .hidesWhenIdle
+                ) ?? true,
+                keyframes: try container.decodeIfPresent(
+                    [CursorKeyframe].self,
+                    forKey: .keyframes
+                ) ?? [],
+                shapeKeyframes: try container.decodeIfPresent(
+                    [CursorShapeKeyframe].self,
+                    forKey: .shapeKeyframes
+                ) ?? []
+            )
+        }
+
+        private static func normalizedHex(_ value: String) -> String {
+            let trimmed = value.trimmingCharacters(
+                in: CharacterSet(charactersIn: "# ")
+            ).uppercased()
+            guard trimmed.count == 6, UInt32(trimmed, radix: 16) != nil else {
+                return "#5BD6FF"
+            }
+            return "#\(trimmed)"
         }
     }
 
     public struct Camera: Codable, Equatable, Sendable {
+        public enum GenerationStrength: String, Codable, CaseIterable, Sendable {
+            case restrained
+            case balanced
+            case active
+        }
+
         public var mode: String
+        /// Legacy normalized intensity. Nil `zoomScale` plans still use it so
+        /// existing projects render exactly as before.
         public var zoomIntensity: Double
         public var followPointer: Bool
+        public var clickToZoom: Bool
+        /// Absolute authored zoom for newly generated automatic keyframes.
+        /// Nil identifies a legacy plan whose keyframes still need intensity scaling.
+        public var zoomScale: Double?
+        public var generationStrength: GenerationStrength
+        /// Speed-driven blur applied only to the transformed screen content.
+        /// Zero is a strict bypass and preserves legacy project pixels.
+        public var motionBlurStrength: Double
         public var keyframes: [CameraKeyframe]
 
         public init(
             mode: String,
             zoomIntensity: Double,
             followPointer: Bool,
+            clickToZoom: Bool = true,
+            zoomScale: Double? = nil,
+            generationStrength: GenerationStrength = .balanced,
+            motionBlurStrength: Double = 0,
             keyframes: [CameraKeyframe] = []
         ) {
             self.mode = mode
             self.zoomIntensity = zoomIntensity
             self.followPointer = followPointer
+            self.clickToZoom = clickToZoom
+            self.zoomScale = zoomScale.map { min(max($0.isFinite ? $0 : 1.58, 1), 3) }
+            self.generationStrength = generationStrength
+            self.motionBlurStrength = min(max(
+                motionBlurStrength.isFinite ? motionBlurStrength : 0,
+                0
+            ), 1)
             self.keyframes = keyframes
+        }
+
+        public var resolvedZoomScale: Double {
+            zoomScale ?? min(max(1 + 0.58 * (zoomIntensity / 0.42), 1), 3)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case mode
+            case zoomIntensity
+            case followPointer
+            case clickToZoom
+            case zoomScale
+            case generationStrength
+            case motionBlurStrength
+            case keyframes
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                mode: try container.decodeIfPresent(String.self, forKey: .mode)
+                    ?? "event-driven",
+                zoomIntensity: try container.decodeIfPresent(Double.self, forKey: .zoomIntensity)
+                    ?? 0.42,
+                followPointer: try container.decodeIfPresent(Bool.self, forKey: .followPointer)
+                    ?? true,
+                clickToZoom: try container.decodeIfPresent(Bool.self, forKey: .clickToZoom)
+                    ?? true,
+                zoomScale: try container.decodeIfPresent(Double.self, forKey: .zoomScale),
+                generationStrength: try container.decodeIfPresent(
+                    GenerationStrength.self,
+                    forKey: .generationStrength
+                ) ?? .balanced,
+                motionBlurStrength: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .motionBlurStrength
+                ) ?? 0,
+                keyframes: try container.decodeIfPresent(
+                    [CameraKeyframe].self,
+                    forKey: .keyframes
+                ) ?? []
+            )
         }
     }
 
@@ -597,8 +918,21 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     public init(
         schemaVersion: String = AutoEditPlan.currentSchemaVersion,
         preset: String = "natural",
-        cursor: Cursor = Cursor(smoothing: 0.72, scale: 1.15, hidesWhenIdle: true),
-        camera: Camera = Camera(mode: "event-driven", zoomIntensity: 0.42, followPointer: true),
+        cursor: Cursor = Cursor(
+            smoothing: 0.72,
+            smoothingWindowMilliseconds: 48,
+            scale: 1.15,
+            hidesWhenIdle: false
+        ),
+        camera: Camera = Camera(
+            mode: "event-driven",
+            zoomIntensity: 0.42,
+            followPointer: true,
+            clickToZoom: true,
+            zoomScale: 1.60,
+            generationStrength: .balanced,
+            motionBlurStrength: 0.12
+        ),
         presenterCamera: PresenterCamera? = PresenterCamera(),
         audio: Audio? = Audio(),
         canvas: Canvas? = Canvas(),

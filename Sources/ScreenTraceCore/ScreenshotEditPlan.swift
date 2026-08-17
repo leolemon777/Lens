@@ -25,10 +25,18 @@ public struct TraceColor: Codable, Equatable, Sendable {
         self.alpha = alpha
     }
 
+    public func withAlpha(_ alpha: Double) -> TraceColor {
+        TraceColor(red: red, green: green, blue: blue, alpha: alpha)
+    }
+
     public static let red = TraceColor(red: 1, green: 0.23, blue: 0.19)
     public static let orange = TraceColor(red: 1, green: 0.58, blue: 0)
     public static let yellow = TraceColor(red: 1, green: 0.80, blue: 0)
+    public static let green = TraceColor(red: 0.20, green: 0.78, blue: 0.35)
+    public static let cyan = TraceColor(red: 0.13, green: 0.78, blue: 0.88)
     public static let blue = TraceColor(red: 0.10, green: 0.58, blue: 1)
+    public static let purple = TraceColor(red: 0.63, green: 0.36, blue: 0.94)
+    public static let pink = TraceColor(red: 1, green: 0.28, blue: 0.55)
     public static let white = TraceColor(red: 1, green: 1, blue: 1)
     public static let black = TraceColor(red: 0.04, green: 0.04, blue: 0.05)
 }
@@ -39,6 +47,9 @@ public struct ScreenshotAnnotationStyle: Codable, Equatable, Sendable {
     /// Font size as a fraction of the image's shortest side.
     public var fontSize: Double
     public var color: TraceColor
+    /// Optional end color for a top-leading to bottom-trailing annotation gradient.
+    /// Missing in older project files and therefore backward compatible.
+    public var gradientEndColor: TraceColor?
     public var fillColor: TraceColor?
     /// Normalized effect strength for blur and pixelation.
     public var intensity: Double
@@ -47,12 +58,14 @@ public struct ScreenshotAnnotationStyle: Codable, Equatable, Sendable {
         lineWidth: Double = 0.006,
         fontSize: Double = 0.045,
         color: TraceColor = .red,
+        gradientEndColor: TraceColor? = nil,
         fillColor: TraceColor? = nil,
         intensity: Double = 0.035
     ) {
         self.lineWidth = lineWidth
         self.fontSize = fontSize
         self.color = color
+        self.gradientEndColor = gradientEndColor
         self.fillColor = fillColor
         self.intensity = intensity
     }

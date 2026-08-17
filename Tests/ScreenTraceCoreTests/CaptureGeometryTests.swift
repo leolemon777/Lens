@@ -38,6 +38,30 @@ final class CaptureGeometryTests: XCTestCase {
 
         XCTAssertEqual(result, CaptureSnapResult(point: point, snappedX: nil, snappedY: nil))
     }
+
+    func testPreparedSnapTargetsCanBeReusedAcrossDragEvents() {
+        let bounds = CGRect(x: 0, y: 0, width: 1_440, height: 900)
+        let targets = CaptureGeometry.snapTargets(
+            for: [CGRect(x: 100, y: 80, width: 600, height: 420)],
+            inside: bounds
+        )
+
+        XCTAssertEqual(targets.x, [0, 100, 700, 1_440])
+        XCTAssertEqual(targets.y, [0, 80, 500, 900])
+        XCTAssertEqual(
+            CaptureGeometry.snappedPoint(
+                CGPoint(x: 97, y: 506),
+                to: targets,
+                inside: bounds
+            ),
+            CaptureSnapResult(
+                point: CGPoint(x: 100, y: 500),
+                snappedX: 100,
+                snappedY: 500
+            )
+        )
+    }
+
     func testLocalRegionMapsIntoOffsetDisplaySpace() {
         let display = CGRect(x: 1_920, y: -180, width: 1_440, height: 900)
         let local = CGRect(x: 120, y: 80, width: 640, height: 360)

@@ -8,6 +8,10 @@ final class DiagnosticEventTests: XCTestCase {
             metadata: [
                 "phase": "stop",
                 "count": "2",
+                "durationMilliseconds": "4.125",
+                "averageMilliseconds": "0.031",
+                "maximumMilliseconds": "0.114",
+                "totalMilliseconds": "2.480",
                 "projectPath": "/Users/example/secret.screentrace",
                 "status": "/private/recording.mov",
                 "intent": "file:///private/secret",
@@ -17,7 +21,14 @@ final class DiagnosticEventTests: XCTestCase {
         )
 
         XCTAssertEqual(event.code, "recording.failed")
-        XCTAssertEqual(event.metadata, ["phase": "stop", "count": "2"])
+        XCTAssertEqual(event.metadata, [
+            "averageMilliseconds": "0.031",
+            "count": "2",
+            "durationMilliseconds": "4.125",
+            "maximumMilliseconds": "0.114",
+            "phase": "stop",
+            "totalMilliseconds": "2.480"
+        ])
 
         let untrustedJSON = Data(
             #"{"timestamp":0,"level":"error","code":"preview.failed","metadata":{"phase":"render","status":"secret transcript","intent":"/Users/example/private"}}"#.utf8

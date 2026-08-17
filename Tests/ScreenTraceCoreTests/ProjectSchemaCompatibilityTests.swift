@@ -85,7 +85,7 @@ final class ProjectSchemaCompatibilityTests: XCTestCase {
         let original = try String(contentsOf: manifestURL, encoding: .utf8)
         let future = original.replacingOccurrences(
             of: #""schemaVersion": "0.1""#,
-            with: #""schemaVersion": "0.9""#
+            with: #""schemaVersion": "0.10""#
         )
         try Data(future.utf8).write(to: manifestURL, options: .atomic)
         let store = TraceProjectStore(rootDirectory: projectURL.deletingLastPathComponent())
@@ -95,8 +95,8 @@ final class ProjectSchemaCompatibilityTests: XCTestCase {
                 error as? TraceSchemaCompatibilityError,
                 .unsupported(
                     document: "manifest.json",
-                    found: "0.9",
-                    supported: "0.1...0.8"
+                    found: "0.10",
+                    supported: "0.1...0.9"
                 )
             )
         }

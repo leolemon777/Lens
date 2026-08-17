@@ -38,6 +38,7 @@ public struct TraceAsset: Codable, Equatable, Sendable {
         case ocr
         case transcript
         case insights
+        case recordingHealth
     }
 
     public let role: Role
@@ -69,7 +70,12 @@ public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
     public let sourceRect: TraceRect?
     public let windowTitle: String?
     public let applicationName: String?
+    /// Legacy requested frame rate retained for schema 0.8 and earlier readers.
     public let framesPerSecond: Int?
+    public let requestedFramesPerSecond: Int?
+    public let measuredFramesPerSecond: Double?
+    public let p95FrameIntervalMilliseconds: Double?
+    public let droppedFrameCount: Int?
 
     public init(
         mode: RecordingCaptureMode,
@@ -79,7 +85,11 @@ public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
         sourceRect: TraceRect? = nil,
         windowTitle: String? = nil,
         applicationName: String? = nil,
-        framesPerSecond: Int? = nil
+        framesPerSecond: Int? = nil,
+        requestedFramesPerSecond: Int? = nil,
+        measuredFramesPerSecond: Double? = nil,
+        p95FrameIntervalMilliseconds: Double? = nil,
+        droppedFrameCount: Int? = nil
     ) {
         self.mode = mode
         self.displayID = displayID
@@ -89,13 +99,26 @@ public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
         self.windowTitle = windowTitle
         self.applicationName = applicationName
         self.framesPerSecond = framesPerSecond.map { max($0, 1) }
+        self.requestedFramesPerSecond = (requestedFramesPerSecond ?? framesPerSecond)
+            .map { max($0, 1) }
+        self.measuredFramesPerSecond = measuredFramesPerSecond.flatMap {
+            $0.isFinite && $0 > 0 ? $0 : nil
+        }
+        self.p95FrameIntervalMilliseconds = p95FrameIntervalMilliseconds.flatMap {
+            $0.isFinite && $0 >= 0 ? $0 : nil
+        }
+        self.droppedFrameCount = droppedFrameCount.map { max($0, 0) }
     }
 
     public init(
         recordingSource source: RecordingCaptureSource,
         actualCaptureBounds: CGRect? = nil,
         actualSourceRect: CGRect? = nil,
-        framesPerSecond: Int? = nil
+        framesPerSecond: Int? = nil,
+        requestedFramesPerSecond: Int? = nil,
+        measuredFramesPerSecond: Double? = nil,
+        p95FrameIntervalMilliseconds: Double? = nil,
+        droppedFrameCount: Int? = nil
     ) {
         mode = source.mode
         displayID = source.displayID
@@ -105,6 +128,40 @@ public struct TraceCaptureMetadata: Codable, Equatable, Sendable {
         windowTitle = source.windowTitle
         applicationName = source.applicationName
         self.framesPerSecond = framesPerSecond.map { max($0, 1) }
+        self.requestedFramesPerSecond = (requestedFramesPerSecond ?? framesPerSecond)
+            .map { max($0, 1) }
+        self.measuredFramesPerSecond = measuredFramesPerSecond.flatMap {
+            $0.isFinite && $0 > 0 ? $0 : nil
+        }
+        self.p95FrameIntervalMilliseconds = p95FrameIntervalMilliseconds.flatMap {
+            $0.isFinite && $0 >= 0 ? $0 : nil
+        }
+        self.droppedFrameCount = droppedFrameCount.map { max($0, 0) }
+    }
+
+    public func updatingCapturePerformance(
+        measuredFramesPerSecond: Double?,
+        p95FrameIntervalMilliseconds: Double?,
+        droppedFrameCount: Int?
+    ) -> TraceCaptureMetadata {
+        TraceCaptureMetadata(
+            mode: mode,
+            displayID: displayID,
+            windowID: windowID,
+            globalBounds: globalBounds,
+            sourceRect: sourceRect,
+            windowTitle: windowTitle,
+            applicationName: applicationName,
+            framesPerSecond: framesPerSecond,
+            requestedFramesPerSecond: requestedFramesPerSecond ?? framesPerSecond,
+            measuredFramesPerSecond: measuredFramesPerSecond,
+            p95FrameIntervalMilliseconds: p95FrameIntervalMilliseconds,
+            droppedFrameCount: droppedFrameCount
+        )
+    }
+
+    public var effectiveRequestedFramesPerSecond: Int? {
+        requestedFramesPerSecond ?? framesPerSecond
     }
 }
 
@@ -133,7 +190,7 @@ public struct ScreenshotCaptureMetadata: Codable, Equatable, Sendable {
 }
 
 public struct TraceManifest: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "0.8"
+    public static let currentSchemaVersion = "0.9"
 
     public var schemaVersion: String
     public let id: UUID
@@ -143,7 +200,7 @@ public struct TraceManifest: Codable, Equatable, Sendable {
     public var state: TraceState
     public var durationSeconds: Double?
     public let dimensions: TraceDimensions?
-    public let captureSource: TraceCaptureMetadata?
+    public var captureSource: TraceCaptureMetadata?
     public let screenshotCaptureSource: ScreenshotCaptureMetadata?
     public var assets: [TraceAsset]
 

@@ -24,6 +24,7 @@ final class ScreenshotEditPlanTests: XCTestCase {
                     lineWidth: 0.008,
                     fontSize: 0.05,
                     color: .orange,
+                    gradientEndColor: .pink,
                     fillColor: TraceColor(red: 1, green: 0.2, blue: 0.1, alpha: 0.12),
                     intensity: 0.04
                 )
@@ -88,5 +89,27 @@ final class ScreenshotEditPlanTests: XCTestCase {
             ).outputDimensions,
             plan.sourceDimensions
         )
+    }
+
+    func testLegacyAnnotationStyleDecodesWithoutGradientColor() throws {
+        let json = """
+        {
+          "schemaVersion": "0.8",
+          "sourceDimensions": { "width": 800, "height": 500 },
+          "annotations": [{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "kind": "rectangle",
+            "bounds": { "x": 0.1, "y": 0.1, "width": 0.4, "height": 0.3 },
+            "style": {
+              "lineWidth": 0.006,
+              "fontSize": 0.045,
+              "color": { "red": 1, "green": 0.23, "blue": 0.19, "alpha": 1 },
+              "intensity": 0.035
+            }
+          }]
+        }
+        """
+        let plan = try JSONDecoder().decode(ScreenshotEditPlan.self, from: Data(json.utf8))
+        XCTAssertNil(plan.annotations.first?.style.gradientEndColor)
     }
 }

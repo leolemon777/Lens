@@ -535,14 +535,40 @@ final class TraceProjectStoreTests: XCTestCase {
             location: TracePoint(x: 900, y: 500),
             normalizedLocation: TracePoint(x: 0.47, y: 0.46),
             displayID: 1,
-            clickCount: 1
+            clickCount: 1,
+            cursorShape: .pointingHand
         ))
         try await writer.close()
+        let pointerWriter = try JSONLinesWriter<PointerEvent>(url: session.pointerEventsURL)
+        try await pointerWriter.append(PointerEvent(
+            time: 0.5,
+            kind: .moved,
+            location: TracePoint(x: 1_000, y: 700),
+            normalizedLocation: TracePoint(x: 0.8, y: 0.2),
+            displayID: 1,
+            cursorShape: .arrow
+        ))
+        try await pointerWriter.close()
 
         let plan = try store.writeAutoEditPlan(for: session, durationSeconds: 4)
 
         XCTAssertTrue(plan.camera.keyframes.contains { $0.reason == .clickFocus })
         XCTAssertEqual(plan.interaction?.clickPulses.count, 1)
+        XCTAssertEqual(
+            plan.cursor.keyframes,
+            [AutoEditPlan.CursorKeyframe(
+                time: 0.5,
+                position: TracePoint(x: 0.8, y: 0.2),
+                kind: .moved
+            )]
+        )
+        XCTAssertEqual(
+            plan.cursor.shapeKeyframes,
+            [
+                AutoEditPlan.CursorShapeKeyframe(time: 0.5, shape: .arrow),
+                AutoEditPlan.CursorShapeKeyframe(time: 1, shape: .pointingHand)
+            ]
+        )
         XCTAssertEqual(plan.timeline?.sourceDurationSeconds, 4)
         XCTAssertEqual(plan.timeline?.segments.count, 1)
         let persisted = try JSONDecoder().decode(
@@ -550,6 +576,168 @@ final class TraceProjectStoreTests: XCTestCase {
             from: Data(contentsOf: session.editPlanURL)
         )
         XCTAssertEqual(persisted, plan)
+    }
+
+    func testVersionOnePlanMigratesToDistanceAwareCameraWithoutRewritingPackage() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceCameraMigrationTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let session = try store.beginRecording(width: 2_560, height: 1_440)
+        try Data([1, 2, 3]).write(to: session.videoURL)
+
+        let writer = try JSONLinesWriter<ClickEvent>(url: session.clickEventsURL)
+        for click in [
+            ClickEvent(
+                time: 1,
+                button: .left,
+                phase: .down,
+                location: TracePoint(x: 640, y: 720),
+                normalizedLocation: TracePoint(x: 0.25, y: 0.5),
+                displayID: 1,
+                clickCount: 1
+            ),
+            ClickEvent(
+                time: 3,
+                button: .left,
+                phase: .down,
+                location: TracePoint(x: 1_920, y: 720),
+                normalizedLocation: TracePoint(x: 0.75, y: 0.5),
+                displayID: 1,
+                clickCount: 1
+            )
+        ] {
+            try await writer.append(click)
+        }
+        try await writer.close()
+        _ = try store.finalizeRecording(session, durationSeconds: 7, state: .ready)
+
+        var legacyPlan = AutoEditPlan()
+        legacyPlan.schemaVersion = "1.0"
+        legacyPlan.camera.generationStrength = .restrained
+        legacyPlan.camera.keyframes = [
+            AutoEditPlan.CameraKeyframe(
+                time: 0,
+                scale: 1,
+                center: TracePoint(x: 0.5, y: 0.5),
+                easing: "linear",
+                reason: .baseline
+            ),
+            AutoEditPlan.CameraKeyframe(
+                time: 1.82,
+                scale: 1.6,
+                center: TracePoint(x: 0.3125, y: 0.5),
+                easing: "ease-in-out-smootherstep",
+                reason: .clickFocus
+            ),
+            AutoEditPlan.CameraKeyframe(
+                time: 3.82,
+                scale: 1.6,
+                center: TracePoint(x: 0.6875, y: 0.5),
+                easing: "ease-in-out-smootherstep",
+                reason: .clickFocus
+            )
+        ]
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let legacyData = try encoder.encode(legacyPlan)
+        try legacyData.write(to: session.editPlanURL, options: .atomic)
+
+        let migrated = try store.loadAutoEditPlan(from: session.packageURL)
+        let persistedData = try Data(contentsOf: session.editPlanURL)
+        let focusFrames = migrated.camera.keyframes.filter { $0.reason == .clickFocus }
+
+        XCTAssertEqual(migrated.schemaVersion, "1.0")
+        XCTAssertEqual(focusFrames.count, 2)
+        XCTAssertGreaterThan(focusFrames[0].time, 1.82)
+        XCTAssertGreaterThan(focusFrames[1].time, 4.5)
+        XCTAssertTrue(
+            CameraMotionComfortAnalyzer.analyze(
+                camera: migrated.camera,
+                durationSeconds: 7
+            ).isComfortable
+        )
+        XCTAssertEqual(persistedData, legacyData)
+    }
+
+    func testAutoEditPlanDropsEventsOutsideFinalMediaDuration() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceEventBoundsTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let session = try store.beginRecording(width: 1_280, height: 720)
+        let clickWriter = try JSONLinesWriter<ClickEvent>(url: session.clickEventsURL)
+        for time in [1.0, 8.0] {
+            try await clickWriter.append(ClickEvent(
+                time: time,
+                button: .left,
+                phase: .down,
+                location: TracePoint(x: 640, y: 360),
+                normalizedLocation: TracePoint(x: 0.5, y: 0.5),
+                displayID: 1,
+                clickCount: 1
+            ))
+        }
+        try await clickWriter.close()
+        let pointerWriter = try JSONLinesWriter<PointerEvent>(url: session.pointerEventsURL)
+        for time in [0.5, 9.0] {
+            try await pointerWriter.append(PointerEvent(
+                time: time,
+                kind: .moved,
+                location: TracePoint(x: 400, y: 300),
+                normalizedLocation: TracePoint(x: 0.3, y: 0.4),
+                displayID: 1
+            ))
+        }
+        try await pointerWriter.close()
+
+        let plan = try store.writeAutoEditPlan(for: session, durationSeconds: 4)
+
+        XCTAssertEqual(plan.interaction?.clickPulses.map(\.time), [1])
+        XCTAssertEqual(plan.cursor.keyframes.map(\.time), [0.5])
+        XCTAssertFalse(plan.camera.keyframes.contains { $0.time > 4 })
+        XCTAssertEqual(plan.timeline?.sourceDurationSeconds, 4)
+    }
+
+    func testAutomaticCameraCanRegenerateFromEventsWithIndependentControls() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceRegenerateTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let session = try store.beginRecording(width: 1_280, height: 720)
+        let writer = try JSONLinesWriter<ClickEvent>(url: session.clickEventsURL)
+        try await writer.append(ClickEvent(
+            time: 1,
+            button: .left,
+            phase: .down,
+            location: TracePoint(x: 640, y: 360),
+            normalizedLocation: TracePoint(x: 0.5, y: 0.5),
+            displayID: 1,
+            clickCount: 1
+        ))
+        try await writer.close()
+        var camera = AutoEditPlan().camera
+        camera.zoomScale = 2.1
+        camera.clickToZoom = true
+        camera.followPointer = false
+
+        let generated = try store.regeneratedAutomaticCameraKeyframes(
+            from: session.packageURL,
+            durationSeconds: 4,
+            camera: camera
+        )
+        XCTAssertEqual(
+            generated.first { $0.reason == .clickFocus }?.scale,
+            2.1
+        )
+
+        camera.clickToZoom = false
+        let disabled = try store.regeneratedAutomaticCameraKeyframes(
+            from: session.packageURL,
+            durationSeconds: 4,
+            camera: camera
+        )
+        XCTAssertEqual(disabled.map(\.reason), [.baseline])
     }
 
     func testEditorPlanSaveNormalizesTimelineAndMarksPreviewForProcessing() throws {
@@ -671,6 +859,33 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertEqual(
             store.interruptedRecordingCandidates().map(\.manifest.id),
             [session.manifest.id]
+        )
+    }
+
+    func testLaunchRecoveryCutoffCannotInterruptANewRecording() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let oldSession = try store.beginRecording(
+            width: 1280,
+            height: 720,
+            createdAt: Date(timeIntervalSince1970: 100)
+        )
+        let newSession = try store.beginRecording(
+            width: 1280,
+            height: 720,
+            createdAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let recovered = store.recoverInterruptedRecordings(
+            startedBefore: Date(timeIntervalSince1970: 150)
+        )
+
+        XCTAssertEqual(recovered.map(\.manifest.id), [oldSession.manifest.id])
+        XCTAssertEqual(
+            try store.loadManifest(from: newSession.packageURL).state,
+            .capturing
         )
     }
 

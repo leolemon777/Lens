@@ -126,6 +126,15 @@ public struct TraceProjectStore: Sendable {
         try TraceProjectSchema.autoEditPlan.validate(plan.schemaVersion)
         if let manifest = try? loadManifest(from: packageURL),
            let duration = manifest.durationSeconds {
+            if let storedVersion = TraceSchemaVersion(plan.schemaVersion),
+               let latestAutomaticCameraVersion = TraceSchemaVersion("1.2"),
+               storedVersion < latestAutomaticCameraVersion {
+                hydrateModernPointerReplay(
+                    in: &plan,
+                    packageURL: packageURL,
+                    durationSeconds: duration
+                )
+            }
             plan.videoAnnotations = plan.videoAnnotations?.compactMap {
                 $0.normalized(sourceDurationSeconds: duration)
             }
@@ -137,6 +146,68 @@ public struct TraceProjectStore: Sendable {
             }
         }
         return plan
+    }
+
+    /// Upgrades legacy plans in memory from their source event streams. The
+    /// project remains untouched until the editor saves, while old recordings
+    /// immediately gain drag-aware cursor replay and the distance-aware target
+    /// camera without rewriting their package until the editor saves.
+    private func hydrateModernPointerReplay(
+        in plan: inout AutoEditPlan,
+        packageURL: URL,
+        durationSeconds: Double
+    ) {
+        let eventsURL = packageURL.appendingPathComponent("events", isDirectory: true)
+        let pointerURL = eventsURL.appendingPathComponent("pointer.jsonl")
+        let clickURL = eventsURL.appendingPathComponent("clicks.jsonl")
+        let pointers = ((try? TraceEventReader.read(
+            PointerEvent.self,
+            from: pointerURL
+        )) ?? []).filter { $0.time >= 0 && $0.time <= durationSeconds }
+        let clicks = ((try? TraceEventReader.read(
+            ClickEvent.self,
+            from: clickURL
+        )) ?? []).filter { $0.time >= 0 && $0.time <= durationSeconds }
+
+        if !pointers.isEmpty {
+            let planner = CursorPathPlanner(configuration: .init(
+                smoothing: plan.cursor.smoothing
+            ))
+            plan.cursor.keyframes = plan.cursor.smoothingWindowMilliseconds == nil
+                ? planner.plan(events: pointers)
+                : planner.rawPlan(events: pointers)
+            plan.cursor.shapeKeyframes = planner.shapePlan(
+                events: pointers,
+                clicks: clicks
+            )
+        }
+        if plan.interaction != nil, !clicks.isEmpty {
+            plan.interaction?.clickPulses = clicks.compactMap { click in
+                guard click.phase == .down,
+                      let position = click.normalizedLocation else { return nil }
+                return AutoEditPlan.ClickPulse(
+                    time: click.time,
+                    position: position,
+                    button: click.button
+                )
+            }
+        }
+        let hasManualCamera = plan.camera.keyframes.contains {
+            switch $0.reason {
+            case .manualAnchor, .manualFocus, .manualHold, .manualReturn:
+                true
+            default:
+                false
+            }
+        }
+        if !hasManualCamera, !pointers.isEmpty || !clicks.isEmpty {
+            plan.camera.keyframes = AutoCameraPlanner(camera: plan.camera).plan(
+                clicks: plan.camera.clickToZoom ? clicks : [],
+                pointerEvents: pointers,
+                followPointer: plan.camera.followPointer,
+                duration: durationSeconds
+            )
+        }
     }
 
     public func writeAutoEditPlan(
@@ -546,6 +617,7 @@ public struct TraceProjectStore: Sendable {
         includesSystemAudio: Bool = true,
         includesMicrophone: Bool = false,
         includesCamera: Bool = false,
+        initialEditPlan requestedInitialEditPlan: AutoEditPlan? = nil,
         createdAt: Date = Date(),
         id: UUID = UUID()
     ) throws -> RecordingTraceSession {
@@ -598,8 +670,12 @@ public struct TraceProjectStore: Sendable {
             )
             let planEncoder = JSONEncoder()
             planEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            var initialPlan = AutoEditPlan()
-            initialPlan.presenterCamera?.isEnabled = includesCamera
+            var initialPlan = requestedInitialEditPlan ?? AutoEditPlan()
+            if requestedInitialEditPlan == nil {
+                initialPlan.presenterCamera?.isEnabled = includesCamera
+            } else if !includesCamera {
+                initialPlan.presenterCamera?.isEnabled = false
+            }
             try planEncoder.encode(initialPlan).write(to: editPlanURL, options: .atomic)
 
             let titlePrefix: String = switch captureSource?.mode {
@@ -687,10 +763,73 @@ public struct TraceProjectStore: Sendable {
         )
     }
 
+    public func writeRecordingHealthReport(
+        _ report: RecordingHealthReport,
+        to packageURL: URL
+    ) throws -> SavedTrace {
+        var manifest = try loadManifest(from: packageURL)
+        guard manifest.kind == .recording else {
+            throw TraceProjectStoreError.incompatibleTraceKind
+        }
+        let relativePath = "diagnostics/recording-health.json"
+        let outputURL = packageURL.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(report).write(to: outputURL, options: .atomic)
+
+        manifest.schemaVersion = TraceManifest.currentSchemaVersion
+        manifest.captureSource = manifest.captureSource?.updatingCapturePerformance(
+            measuredFramesPerSecond: report.measuredFramesPerSecond,
+            p95FrameIntervalMilliseconds: report.p95FrameIntervalMilliseconds,
+            droppedFrameCount: report.droppedFrameCount
+        )
+        manifest.assets.removeAll { $0.role == .recordingHealth }
+        manifest.assets.append(
+            TraceAsset(role: .recordingHealth, relativePath: relativePath)
+        )
+        try writeManifest(manifest, to: packageURL)
+        let rawAssetURL = manifest.assets.first(where: { $0.role == .screenVideo })
+            .map { packageURL.appendingPathComponent($0.relativePath) }
+            ?? packageURL.appendingPathComponent("raw/screen.mp4")
+        return SavedTrace(
+            packageURL: packageURL,
+            rawAssetURL: rawAssetURL,
+            manifest: manifest
+        )
+    }
+
+    public func loadRecordingHealthReport(from packageURL: URL) throws -> RecordingHealthReport {
+        let manifest = try loadManifest(from: packageURL)
+        let relativePath = manifest.assets.first(where: { $0.role == .recordingHealth })?
+            .relativePath ?? "diagnostics/recording-health.json"
+        let data = try Data(contentsOf: packageURL.appendingPathComponent(relativePath))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(RecordingHealthReport.self, from: data)
+    }
+
     public func markRecordingInterrupted(_ session: RecordingTraceSession) throws {
         var manifest = (try? loadManifest(from: session.packageURL)) ?? session.manifest
         manifest.state = .interrupted
         try writeManifest(manifest, to: session.packageURL)
+    }
+
+    /// Permanently stops launch recovery for a package that contains no screen
+    /// media bytes at all. The package remains visible and user-deletable; no
+    /// evidence is removed, but every future launch no longer retries an
+    /// impossible recovery as if it were transient.
+    public func markRecordingRecoveryFailed(packageURL: URL) throws {
+        var manifest = try loadManifest(from: packageURL)
+        guard manifest.kind == .recording else {
+            throw TraceProjectStoreError.incompatibleTraceKind
+        }
+        manifest.state = .failed
+        try writeManifest(manifest, to: packageURL)
     }
 
     public func removeAsset(
@@ -814,23 +953,37 @@ public struct TraceProjectStore: Sendable {
         for session: RecordingTraceSession,
         durationSeconds: Double
     ) throws -> AutoEditPlan {
+        let sourceDuration = max(durationSeconds.isFinite ? durationSeconds : 0, 0)
         let clicks = try TraceEventReader.read(ClickEvent.self, from: session.clickEventsURL)
-        let pointerEvents = try TraceEventReader.read(PointerEvent.self, from: session.pointerEventsURL)
+            .filter { $0.time >= 0 && $0.time <= sourceDuration }
+        let pointerEvents = try TraceEventReader.read(
+            PointerEvent.self,
+            from: session.pointerEventsURL
+        ).filter { $0.time >= 0 && $0.time <= sourceDuration }
         var plan = (try? loadAutoEditPlan(from: session.packageURL)) ?? AutoEditPlan()
         plan.schemaVersion = AutoEditPlan.currentSchemaVersion
         plan.timeline = (plan.timeline ?? VideoEditTimeline(
-            sourceDurationSeconds: durationSeconds
-        )).normalized(sourceDurationSeconds: durationSeconds)
+            sourceDurationSeconds: sourceDuration
+        )).normalized(sourceDurationSeconds: sourceDuration)
         plan.videoAnnotations = plan.videoAnnotations?.compactMap {
-            $0.normalized(sourceDurationSeconds: durationSeconds)
+            $0.normalized(sourceDurationSeconds: sourceDuration)
         }
         if let customCues = plan.captions?.customCues {
             plan.captions?.customCues = CaptionCueEditor.normalized(
                 customCues,
-                sourceDurationSeconds: durationSeconds
+                sourceDurationSeconds: sourceDuration
             )
         }
-        plan.cursor.keyframes = CursorPathPlanner().plan(events: pointerEvents)
+        let cursorPlanner = CursorPathPlanner(configuration: .init(
+            smoothing: plan.cursor.smoothing
+        ))
+        plan.cursor.keyframes = plan.cursor.smoothingWindowMilliseconds == nil
+            ? cursorPlanner.plan(events: pointerEvents)
+            : cursorPlanner.rawPlan(events: pointerEvents)
+        plan.cursor.shapeKeyframes = cursorPlanner.shapePlan(
+            events: pointerEvents,
+            clicks: clicks
+        )
         plan.interaction?.clickPulses = clicks.compactMap { click in
             guard click.phase == .down, let position = click.normalizedLocation else { return nil }
             return AutoEditPlan.ClickPulse(
@@ -839,9 +992,11 @@ public struct TraceProjectStore: Sendable {
                 button: click.button
             )
         }
-        plan.camera.keyframes = AutoCameraPlanner().plan(
-            clicks: clicks,
-            duration: durationSeconds
+        plan.camera.keyframes = AutoCameraPlanner(camera: plan.camera).plan(
+            clicks: plan.camera.clickToZoom ? clicks : [],
+            pointerEvents: pointerEvents,
+            followPointer: plan.camera.followPointer,
+            duration: sourceDuration
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -849,12 +1004,37 @@ public struct TraceProjectStore: Sendable {
         return plan
     }
 
-    public func recoverInterruptedRecordings() -> [RecordingRecoveryCandidate] {
+    public func regeneratedAutomaticCameraKeyframes(
+        from packageURL: URL,
+        durationSeconds: Double,
+        camera: AutoEditPlan.Camera
+    ) throws -> [AutoEditPlan.CameraKeyframe] {
+        let eventsDirectory = packageURL.appendingPathComponent("events", isDirectory: true)
+        let clickURL = eventsDirectory.appendingPathComponent("clicks.jsonl")
+        let pointerURL = eventsDirectory.appendingPathComponent("pointer.jsonl")
+        let clicks = FileManager.default.fileExists(atPath: clickURL.path)
+            ? try TraceEventReader.read(ClickEvent.self, from: clickURL)
+            : []
+        let pointers = FileManager.default.fileExists(atPath: pointerURL.path)
+            ? try TraceEventReader.read(PointerEvent.self, from: pointerURL)
+            : []
+        return AutoCameraPlanner(camera: camera).plan(
+            clicks: camera.clickToZoom ? clicks : [],
+            pointerEvents: pointers,
+            followPointer: camera.followPointer,
+            duration: durationSeconds
+        )
+    }
+
+    public func recoverInterruptedRecordings(
+        startedBefore cutoff: Date = .distantFuture
+    ) -> [RecordingRecoveryCandidate] {
         var recovered: [RecordingRecoveryCandidate] = []
         for url in tracePackageURLs(in: rootDirectory) {
             guard var manifest = try? loadManifest(from: url),
                   manifest.kind == .recording,
-                  manifest.state == .capturing else {
+                  manifest.state == .capturing,
+                  manifest.createdAt < cutoff else {
                 continue
             }
             manifest.state = .interrupted
@@ -872,12 +1052,15 @@ public struct TraceProjectStore: Sendable {
     /// Returns projects that still need media-level recovery. Keeping this separate from
     /// `recoverInterruptedRecordings()` lets launch recovery be retried if the app itself exits
     /// after the manifest was marked interrupted but before preview generation completed.
-    public func interruptedRecordingCandidates() -> [RecordingRecoveryCandidate] {
+    public func interruptedRecordingCandidates(
+        startedBefore cutoff: Date = .distantFuture
+    ) -> [RecordingRecoveryCandidate] {
         tracePackageURLs(in: rootDirectory).compactMap { url in
             guard let manifest = try? loadManifest(from: url),
                   manifest.kind == .recording,
                   manifest.state == .interrupted,
-                  manifest.durationSeconds == nil else {
+                  manifest.durationSeconds == nil,
+                  manifest.createdAt < cutoff else {
                 return nil
             }
             return RecordingRecoveryCandidate(
@@ -890,12 +1073,15 @@ public struct TraceProjectStore: Sendable {
 
     /// Projects can be left in processing if the app exits after the raw recording was finalized
     /// but before preview generation or the final manifest write completes.
-    public func recordingsPendingProcessing() -> [SavedTrace] {
+    public func recordingsPendingProcessing(
+        startedBefore cutoff: Date = .distantFuture
+    ) -> [SavedTrace] {
         tracePackageURLs(in: rootDirectory).compactMap { url in
             guard let manifest = try? loadManifest(from: url),
                   manifest.kind == .recording,
                   manifest.state == .processing,
                   manifest.durationSeconds != nil,
+                  manifest.createdAt < cutoff,
                   let screenAsset = manifest.assets.first(where: { $0.role == .screenVideo }) else {
                 return nil
             }

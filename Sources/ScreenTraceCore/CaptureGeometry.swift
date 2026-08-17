@@ -103,10 +103,66 @@ public struct CaptureSnapResult: Equatable, Sendable {
     }
 }
 
+/// Immutable, sorted snap coordinates prepared once for a capture overlay.
+///
+/// Region selection receives mouse events much more frequently than the set of
+/// visible windows changes. Keeping the targets separate from the hot path avoids
+/// rebuilding and filtering two coordinate arrays for every drag event.
+public struct CaptureSnapTargets: Equatable, Sendable {
+    public let x: [CGFloat]
+    public let y: [CGFloat]
+
+    public init(x: [CGFloat], y: [CGFloat]) {
+        self.x = Self.normalized(x)
+        self.y = Self.normalized(y)
+    }
+
+    private static func normalized(_ values: [CGFloat]) -> [CGFloat] {
+        let sorted = values.filter(\.isFinite).sorted()
+        var result: [CGFloat] = []
+        result.reserveCapacity(sorted.count)
+        for value in sorted where result.last != value {
+            result.append(value)
+        }
+        return result
+    }
+}
+
 public enum CaptureGeometry {
+    public static func snapTargets(
+        for rects: [CGRect],
+        inside bounds: CGRect
+    ) -> CaptureSnapTargets {
+        let normalizedBounds = bounds.standardized
+        let visibleRects = rects.compactMap { rect -> CGRect? in
+            let intersection = rect.standardized.intersection(normalizedBounds)
+            return intersection.isNull || intersection.isEmpty ? nil : intersection
+        }
+        return CaptureSnapTargets(
+            x: [normalizedBounds.minX, normalizedBounds.maxX]
+                + visibleRects.flatMap { [$0.minX, $0.maxX] },
+            y: [normalizedBounds.minY, normalizedBounds.maxY]
+                + visibleRects.flatMap { [$0.minY, $0.maxY] }
+        )
+    }
+
     public static func snappedPoint(
         _ point: CGPoint,
         to rects: [CGRect],
+        inside bounds: CGRect,
+        threshold: CGFloat = 8
+    ) -> CaptureSnapResult {
+        snappedPoint(
+            point,
+            to: snapTargets(for: rects, inside: bounds),
+            inside: bounds,
+            threshold: threshold
+        )
+    }
+
+    public static func snappedPoint(
+        _ point: CGPoint,
+        to targets: CaptureSnapTargets,
         inside bounds: CGRect,
         threshold: CGFloat = 8
     ) -> CaptureSnapResult {
@@ -119,16 +175,8 @@ public enum CaptureGeometry {
             return CaptureSnapResult(point: clippedPoint, snappedX: nil, snappedY: nil)
         }
 
-        let visibleRects = rects.compactMap { rect -> CGRect? in
-            let intersection = rect.standardized.intersection(normalizedBounds)
-            return intersection.isNull || intersection.isEmpty ? nil : intersection
-        }
-        let xTargets = [normalizedBounds.minX, normalizedBounds.maxX]
-            + visibleRects.flatMap { [$0.minX, $0.maxX] }
-        let yTargets = [normalizedBounds.minY, normalizedBounds.maxY]
-            + visibleRects.flatMap { [$0.minY, $0.maxY] }
-        let snappedX = nearestTarget(to: clippedPoint.x, targets: xTargets, threshold: threshold)
-        let snappedY = nearestTarget(to: clippedPoint.y, targets: yTargets, threshold: threshold)
+        let snappedX = nearestTarget(to: clippedPoint.x, targets: targets.x, threshold: threshold)
+        let snappedY = nearestTarget(to: clippedPoint.y, targets: targets.y, threshold: threshold)
         return CaptureSnapResult(
             point: CGPoint(x: snappedX ?? clippedPoint.x, y: snappedY ?? clippedPoint.y),
             snappedX: snappedX,
@@ -141,16 +189,34 @@ public enum CaptureGeometry {
         targets: [CGFloat],
         threshold: CGFloat
     ) -> CGFloat? {
-        targets
-            .filter { $0.isFinite && abs($0 - value) <= threshold }
-            .min { lhs, rhs in
-                let lhsDistance = abs(lhs - value)
-                let rhsDistance = abs(rhs - value)
-                if lhsDistance != rhsDistance {
-                    return lhsDistance < rhsDistance
-                }
-                return lhs < rhs
+        guard !targets.isEmpty else { return nil }
+        var lowerBound = 0
+        var upperBound = targets.count
+        while lowerBound < upperBound {
+            let middle = lowerBound + (upperBound - lowerBound) / 2
+            if targets[middle] < value {
+                lowerBound = middle + 1
+            } else {
+                upperBound = middle
             }
+        }
+
+        var nearest: CGFloat?
+        for index in [lowerBound - 1, lowerBound] where targets.indices.contains(index) {
+            let candidate = targets[index]
+            guard abs(candidate - value) <= threshold else { continue }
+            guard let current = nearest else {
+                nearest = candidate
+                continue
+            }
+            let candidateDistance = abs(candidate - value)
+            let currentDistance = abs(current - value)
+            if candidateDistance < currentDistance
+                || candidateDistance == currentDistance && candidate < current {
+                nearest = candidate
+            }
+        }
+        return nearest
     }
 
     public static func globalRect(fromLocalRect localRect: CGRect, displayBounds: CGRect) -> CGRect {

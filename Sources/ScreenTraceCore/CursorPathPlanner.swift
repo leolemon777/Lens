@@ -15,6 +15,13 @@ public struct CursorPathPlanner: Sendable {
             self.fastTimeConstant = max(fastTimeConstant, 0.001)
             self.speedForFastResponse = max(speedForFastResponse, 0.001)
         }
+
+        public init(smoothing: Double) {
+            let smoothing = min(max(smoothing.isFinite ? smoothing : 0.72, 0), 1)
+            slowTimeConstant = 0.035 + smoothing * 0.075
+            fastTimeConstant = 0.010 + smoothing * 0.016
+            speedForFastResponse = 0.95 + smoothing * 0.45
+        }
     }
 
     public let configuration: Configuration
@@ -23,9 +30,58 @@ public struct CursorPathPlanner: Sendable {
         self.configuration = configuration
     }
 
+    public func rawPlan(events: [PointerEvent]) -> [AutoEditPlan.CursorKeyframe] {
+        events
+            .filter {
+                $0.kind != .scroll
+                    && $0.normalizedLocation != nil
+                    && $0.time >= 0
+            }
+            .sorted { $0.time < $1.time }
+            .compactMap { event in
+                guard let position = event.normalizedLocation else { return nil }
+                return AutoEditPlan.CursorKeyframe(
+                    time: event.time,
+                    position: clamped(position),
+                    kind: event.kind
+                )
+            }
+    }
+
+    /// Keeps only actual cursor-shape changes so the edit plan stays compact
+    /// even when pointer locations are sampled at 60 Hz.
+    public func shapePlan(
+        events: [PointerEvent],
+        clicks: [ClickEvent] = []
+    ) -> [AutoEditPlan.CursorShapeKeyframe] {
+        let pointerCandidates = events.compactMap { event -> AutoEditPlan.CursorShapeKeyframe? in
+            guard event.time >= 0,
+                  event.kind != .scroll,
+                  let shape = event.cursorShape else { return nil }
+            return AutoEditPlan.CursorShapeKeyframe(time: event.time, shape: shape)
+        }
+        let clickCandidates = clicks.compactMap { event -> AutoEditPlan.CursorShapeKeyframe? in
+            guard event.time >= 0, let shape = event.cursorShape else { return nil }
+            return AutoEditPlan.CursorShapeKeyframe(time: event.time, shape: shape)
+        }
+        let candidates = (pointerCandidates + clickCandidates).sorted { $0.time < $1.time }
+        var lastShape: PointerCursorShape?
+        var result: [AutoEditPlan.CursorShapeKeyframe] = []
+        for candidate in candidates {
+            guard candidate.shape != lastShape else { continue }
+            result.append(candidate)
+            lastShape = candidate.shape
+        }
+        return result
+    }
+
     public func plan(events: [PointerEvent]) -> [AutoEditPlan.CursorKeyframe] {
         let events = events
-            .filter { $0.normalizedLocation != nil && $0.time >= 0 }
+            .filter {
+                $0.kind != .scroll
+                    && $0.normalizedLocation != nil
+                    && $0.time >= 0
+            }
             .sorted { $0.time < $1.time }
         guard let firstEvent = events.first,
               let firstPosition = firstEvent.normalizedLocation else {
@@ -34,7 +90,8 @@ public struct CursorPathPlanner: Sendable {
 
         var result = [AutoEditPlan.CursorKeyframe(
             time: firstEvent.time,
-            position: clamped(firstPosition)
+            position: clamped(firstPosition),
+            kind: firstEvent.kind
         )]
         var previousRaw = clamped(firstPosition)
         var previousSmoothed = previousRaw
@@ -57,7 +114,8 @@ public struct CursorPathPlanner: Sendable {
 
             result.append(AutoEditPlan.CursorKeyframe(
                 time: event.time,
-                position: clamped(smoothed)
+                position: clamped(smoothed),
+                kind: event.kind
             ))
             previousRaw = raw
             previousSmoothed = smoothed

@@ -381,7 +381,9 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         let metadata = ScreenshotCaptureMetadata(
             mode: .window,
             windowIDs: [target.candidate.id],
-            globalBounds: target.candidate.globalFrame
+            globalBounds: target.candidate.globalFrame,
+            windowTitle: target.candidate.title,
+            applicationName: target.candidate.applicationName
         )
         finishCapture(purpose: .screenshot, captureSource: metadata) {
             try await self.captureService.capture(window: target.window)
@@ -409,10 +411,13 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             showError(message: "请至少选择一个仍然可用的窗口。")
             return
         }
+        let primary = targets.min(by: { $0.candidate.frontToBackOrder < $1.candidate.frontToBackOrder })
         let metadata = ScreenshotCaptureMetadata(
             mode: .multiWindow,
             windowIDs: targets.map { $0.candidate.id },
-            globalBounds: layout.globalBounds
+            globalBounds: layout.globalBounds,
+            windowTitle: primary?.candidate.title,
+            applicationName: primary?.candidate.applicationName
         )
         finishCapture(
             purpose: .multiWindowScreenshot,

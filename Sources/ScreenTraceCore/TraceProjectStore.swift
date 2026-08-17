@@ -90,7 +90,11 @@ public struct TraceProjectStore: Sendable {
                 id: id,
                 kind: .screenshot,
                 createdAt: createdAt,
-                title: "\(normalizedTitlePrefix.isEmpty ? "截图" : normalizedTitlePrefix) \(Self.displayTimestamp.string(from: createdAt))",
+                title: Self.screenshotTitle(
+                    prefix: normalizedTitlePrefix,
+                    captureSource: captureSource,
+                    createdAt: createdAt
+                ),
                 dimensions: TraceDimensions(width: width, height: height),
                 screenshotCaptureSource: captureSource,
                 assets: [TraceAsset(role: .screenshot, relativePath: "raw/screenshot.png")]
@@ -1201,6 +1205,27 @@ public struct TraceProjectStore: Sendable {
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
         return formatter
     }()
+
+    /// Dated "截图 …" titles make the library unsearchable once a day has
+    /// more than a handful of captures. A window screenshot already knows the
+    /// app and document name at capture time, so use that instead of waiting
+    /// for OCR.
+    private static func screenshotTitle(
+        prefix: String,
+        captureSource: ScreenshotCaptureMetadata?,
+        createdAt: Date
+    ) -> String {
+        let application = captureSource?.applicationName ?? ""
+        let windowTitle = captureSource?.windowTitle ?? ""
+        if !application.isEmpty, !windowTitle.isEmpty, windowTitle != application {
+            return String("\(application) · \(windowTitle)".prefix(46))
+        }
+        if !application.isEmpty {
+            return String(application.prefix(46))
+        }
+        let resolvedPrefix = prefix.isEmpty ? "截图" : prefix
+        return "\(resolvedPrefix) \(displayTimestamp.string(from: createdAt))"
+    }
 
     private static let displayTimestamp: DateFormatter = {
         let formatter = DateFormatter()

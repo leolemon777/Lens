@@ -173,19 +173,27 @@ public struct ScreenshotCaptureMetadata: Codable, Equatable, Sendable {
     public let globalBounds: TraceRect
     /// Display-local crop in logical points for region capture.
     public let sourceRect: TraceRect?
+    public let windowTitle: String?
+    public let applicationName: String?
 
     public init(
         mode: ScreenshotCaptureMode,
         displayID: UInt32? = nil,
         windowIDs: [UInt32] = [],
         globalBounds: CGRect,
-        sourceRect: CGRect? = nil
+        sourceRect: CGRect? = nil,
+        windowTitle: String? = nil,
+        applicationName: String? = nil
     ) {
         self.mode = mode
         self.displayID = displayID
         self.windowIDs = Array(Set(windowIDs)).sorted()
         self.globalBounds = TraceRect(globalBounds.standardized)
         self.sourceRect = sourceRect.map { TraceRect($0.standardized) }
+        let trimmedTitle = windowTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedApplication = applicationName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.windowTitle = (trimmedTitle?.isEmpty == false) ? trimmedTitle : nil
+        self.applicationName = (trimmedApplication?.isEmpty == false) ? trimmedApplication : nil
     }
 }
 

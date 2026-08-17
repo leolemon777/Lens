@@ -62,6 +62,40 @@ final class TraceProjectStoreTests: XCTestCase {
         XCTAssertTrue(reloaded.title.hasPrefix("多窗口截图 "))
     }
 
+    func testWindowScreenshotTitleUsesApplicationAndWindowName() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TraceProjectStore(rootDirectory: root)
+        let source = ScreenshotCaptureMetadata(
+            mode: .window,
+            windowIDs: [42],
+            globalBounds: CGRect(x: 0, y: 0, width: 800, height: 600),
+            windowTitle: "Launch roadmap",
+            applicationName: "Safari"
+        )
+
+        let saved = try store.saveScreenshot(
+            pngData: Data([0x89, 0x50, 0x4E, 0x47]),
+            width: 800,
+            height: 600,
+            captureSource: source
+        )
+        let reloaded = try store.loadManifest(from: saved.packageURL)
+
+        XCTAssertEqual(reloaded.screenshotCaptureSource?.applicationName, "Safari")
+        XCTAssertEqual(reloaded.screenshotCaptureSource?.windowTitle, "Launch roadmap")
+        XCTAssertTrue(
+            reloaded.title.contains("Safari"),
+            "窗口截图标题应当带上应用名，而不是只写截图加日期"
+        )
+        XCTAssertTrue(reloaded.title.contains("Launch roadmap"))
+        XCTAssertFalse(
+            reloaded.title.hasPrefix("截图 "),
+            "有窗口身份时不应再回落到通用截图日期标题"
+        )
+    }
+
     func testInvalidDimensionsDoNotCreatePackage() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScreenTraceTests-\(UUID().uuidString)", isDirectory: true)

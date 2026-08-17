@@ -164,6 +164,41 @@ final class CaptureGeometryTests: XCTestCase {
         XCTAssertEqual(decoded.globalBounds, TraceRect(x: -20, y: 4, width: 640, height: 480))
     }
 
+    func testScreenshotCaptureMetadataKeepsWindowIdentity() throws {
+        let metadata = ScreenshotCaptureMetadata(
+            mode: .window,
+            windowIDs: [42],
+            globalBounds: CGRect(x: 0, y: 0, width: 800, height: 600),
+            windowTitle: "Launch roadmap",
+            applicationName: "Safari"
+        )
+        let decoded = try JSONDecoder().decode(
+            ScreenshotCaptureMetadata.self,
+            from: JSONEncoder().encode(metadata)
+        )
+
+        XCTAssertEqual(decoded.windowTitle, "Launch roadmap")
+        XCTAssertEqual(decoded.applicationName, "Safari")
+    }
+
+    func testLegacyScreenshotMetadataDecodesWithoutWindowIdentity() throws {
+        let json = """
+        {
+          "mode": "window",
+          "windowIDs": [7],
+          "globalBounds": { "x": 0, "y": 0, "width": 100, "height": 80 }
+        }
+        """
+        let decoded = try JSONDecoder().decode(
+            ScreenshotCaptureMetadata.self,
+            from: Data(json.utf8)
+        )
+
+        XCTAssertNil(decoded.windowTitle)
+        XCTAssertNil(decoded.applicationName)
+        XCTAssertEqual(decoded.windowIDs, [7])
+    }
+
     func testRecordingModesRemainStableForCrossPlatformRouting() {
         XCTAssertEqual(RecordingCaptureMode.allCases.map(\.rawValue), ["region", "window", "display"])
     }

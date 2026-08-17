@@ -41,8 +41,14 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private var isFinishingCapture = false
     private var cachedRegionSnapRects: [CGRect] = []
     private var cachedRegionSnapRectsAt: TimeInterval = -.infinity
+    private var isPrewarmingRegionSnapRects = false
+    /// Only ever written on the main actor, and only read again by `deinit`,
+    /// which by definition holds the last reference and cannot race with it.
+    /// The token itself is not `Sendable`, so it needs the explicit opt out to
+    /// be readable from a nonisolated `deinit`.
+    private nonisolated(unsafe) var applicationActivationObserver: NSObjectProtocol?
 
-    private static let regionSnapRectCacheLifetime: TimeInterval = 3
+    private static let regionSnapRectCachePolicy = RegionSnapRectCachePolicy.standard
 
     init(
         store: TraceProjectStore,
@@ -72,6 +78,15 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         // Window enumeration can occasionally take several hundred milliseconds.
         // Warm it at utility priority so the first overlay can still snap instantly.
         prewarmRegionSnapRects()
+        observeApplicationActivation()
+    }
+
+    deinit {
+        if let applicationActivationObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(
+                applicationActivationObserver
+            )
+        }
     }
 
     func beginRegionCapture() {
@@ -182,8 +197,10 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         requestStartedAt: TimeInterval
     ) {
         let now = ProcessInfo.processInfo.systemUptime
-        let hasFreshSnapRects = now - cachedRegionSnapRectsAt
-            <= Self.regionSnapRectCacheLifetime
+        let hasFreshSnapRects = Self.regionSnapRectCachePolicy.isUsable(
+            cachedAt: cachedRegionSnapRectsAt,
+            now: now
+        )
         let initialSnapRects = hasFreshSnapRects ? cachedRegionSnapRects : []
         let generation = showOverlays(mode: .region(
             action: action,
@@ -230,7 +247,29 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         }
     }
 
+    /// The window layout changes when the user switches applications, which is
+    /// also the moment just before most captures start. Refreshing there keeps
+    /// the cache warm without polling.
+    private func observeApplicationActivation() {
+        applicationActivationObserver = NSWorkspace.shared.notificationCenter
+            .addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification,
+                object: nil,
+                queue: nil
+            ) { _ in
+                Task { @MainActor [weak self] in
+                    self?.prewarmRegionSnapRects()
+                }
+            }
+    }
+
     private func prewarmRegionSnapRects() {
+        guard Self.regionSnapRectCachePolicy.shouldRefresh(
+            cachedAt: cachedRegionSnapRectsAt,
+            now: ProcessInfo.processInfo.systemUptime,
+            isRefreshing: isPrewarmingRegionSnapRects
+        ) else { return }
+        isPrewarmingRegionSnapRects = true
         let processID = ProcessInfo.processInfo.processIdentifier
         let task = Task.detached(priority: .utility) {
             ScreenCaptureService.loadRegionSnapRects(excludingProcessID: processID)
@@ -238,6 +277,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         Task { @MainActor [weak self] in
             let snapRects = await task.value
             guard let self else { return }
+            isPrewarmingRegionSnapRects = false
             cachedRegionSnapRects = snapRects
             cachedRegionSnapRectsAt = ProcessInfo.processInfo.systemUptime
         }
@@ -644,6 +684,9 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         overlayGeneration &+= 1
         overlayWindows.forEach { $0.orderOut(nil) }
         overlayWindows.removeAll()
+        // Captures tend to arrive in bursts, and this one may have changed the
+        // window layout itself. Refresh so the next overlay starts warm.
+        prewarmRegionSnapRects()
     }
 
     @discardableResult

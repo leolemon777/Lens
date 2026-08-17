@@ -130,6 +130,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(natural.interaction?.clickPulseDuration, 0.64)
         XCTAssertTrue(natural.cursor.isEnabled == true)
         XCTAssertFalse(natural.presenterCamera?.isEnabled == true)
+        XCTAssertFalse(natural.captions?.isEnabled == true)
         XCTAssertEqual(natural.export?.preset, .balanced)
 
         let presentation = RecordingExperiencePreset.presentation.makeEditPlan(
@@ -165,6 +166,10 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(teaching.interaction?.clickEffect, .spotlight)
         XCTAssertTrue(teaching.audio?.ducksSystemUnderNarration == true)
         XCTAssertEqual(teaching.captions?.style, .glass)
+        XCTAssertTrue(
+            teaching.captions?.isEnabled == true,
+            "教学讲解档发出去必须自带字幕，不应再让用户进编辑器打开"
+        )
         XCTAssertEqual(teaching.export?.preset, .balanced)
 
         let source = RecordingExperiencePreset.source.makeEditPlan(includesCamera: true)

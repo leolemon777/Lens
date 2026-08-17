@@ -137,7 +137,7 @@ enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
                 duckedSystemVolume: 0.28
             )
             plan.captions = AutoEditPlan.Captions(
-                isEnabled: false,
+                isEnabled: true,
                 style: .glass,
                 position: .bottom,
                 fontScale: 1.08,

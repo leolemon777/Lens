@@ -1,0 +1,121 @@
+# 注意：本仓库尚未选定开源许可证（见 README 与 Scripts/audit-public-source.sh 的
+# LICENSE 阻断提示）。在根目录出现正式 LICENSE 前，本工作流仅用于内部质量闸门，
+# 不构成对外分发。
+
+name: CI
+
+# 运行器镜像：本地基线工具链是 Xcode 26.5 / Swift 6.3.2（见 docs/G0-基准与发布阻断清单.md）。
+# 这里固定 macos-26 以对齐本地编译器，避免 -warnings-as-errors 在不同 Swift 版本下产生
+# 假阳性失败。若该镜像在你的账户下不可用（报 "no runner matching labels"），
+# 把下面三处 runs-on 一并改为 macos-15，并复核一次 release 任务的告警输出。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # 公开源码审计：不编译，最快失败。校验隐私/制品红线、品牌资产哈希、
+  # 密钥模式，以及源码快照摘要脚本自身的正反例回归。
+  audit:
+    name: 公开源码审计
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 记录工具链
+        run: |
+          sw_vers
+          swift --version
+
+      - name: 公开源码审计
+        run: bash Scripts/audit-public-source.sh
+
+      - name: 源码快照摘要自测
+        run: bash Scripts/test-source-snapshot-digest.sh
+
+  # 全量单元测试。ScreenTraceCoreTests 与 ScreenTraceMacTests 都是纯逻辑测试，
+  # 不触碰 ScreenCaptureKit / AVCaptureDevice / NSScreen，因此无需 TCC 授权即可在
+  # 无人值守运行器上执行。
+  test:
+    name: 单元测试
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 记录工具链
+        run: |
+          sw_vers
+          swift --version
+
+      - name: swift test
+        run: |
+          swift test 2>&1 | tee swift-test.log
+
+      # 防御空跑：若测试目标被意外排除，swift test 仍可能以 0 退出。
+      # 这里强制要求日志里出现 "Executed N tests, with 0 failures"，
+      # 并把用例数打到任务摘要，方便和 G0 基线记录的数量对账。
+      - name: 断言测试真的执行了
+        run: |
+          count="$(awk '
+              /Executed [0-9]+ tests, with 0 failures/ { value = $2 }
+              END { if (value != "") print value }
+          ' swift-test.log)"
+          if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+              echo "未能从 swift test 输出中解析出通过用例数。" >&2
+              exit 65
+          fi
+          if (( count == 0 )); then
+              echo "swift test 报告执行了 0 个用例。" >&2
+              exit 65
+          fi
+          echo "通过用例数：$count"
+          echo "### 单元测试：$count 项通过" >> "$GITHUB_STEP_SUMMARY"
+
+  # Release 闸门：build-app.sh release 内部已带 -Xswiftc -warnings-as-errors，
+  # 因此这里不再单独跑一次 swift build -c release。
+  # 运行器上没有 Developer ID 证书，build-app.sh 会自动降级为 ad-hoc 签名（--sign -），
+  # codesign --verify 仍然有效——它校验的是 bundle 结构与签名完整性，不是证书信任链。
+  # Developer ID 签名、公证与 Staple 属于 G5 发布闸门，由本地
+  # Scripts/package-macos-release.sh 完成，不在 CI 范围内。
+  release-build:
+    name: Release 构建与打包校验
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 记录工具链
+        run: |
+          sw_vers
+          swift --version
+
+      - name: 构建 App Bundle（warnings-as-errors）
+        env:
+          SCREENTRACE_BUILD_CHANNEL: development
+          SCREENTRACE_GIT_COMMIT: ${{ github.sha }}
+        run: bash Scripts/build-app.sh release
+
+      - name: 校验签名与 bundle 结构
+        run: codesign --verify --deep --strict --verbose=2 Build/ScreenTrace.app
+
+      - name: 核对构建身份写入 Info.plist
+        run: |
+          plist="Build/ScreenTrace.app/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist"
+          /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$plist"
+          /usr/libexec/PlistBuddy -c "Print :ScreenTraceGitCommit" "$plist"

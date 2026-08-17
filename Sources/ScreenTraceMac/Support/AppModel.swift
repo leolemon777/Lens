@@ -70,7 +70,9 @@ enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
             plan.interaction?.clickPulseColorHex = "#FF684D"
             plan.interaction?.clickPulseDuration = 0.64
             plan.canvas?.isEnabled = true
-            plan.export?.preset = .source
+            // Shareable H.264 at source resolution. Compact is HEVC and often
+            // fails in chat apps; source quality is reserved for the archive preset.
+            plan.export?.preset = .balanced
         case .presentation:
             plan.camera.mode = "event-driven"
             plan.camera.zoomIntensity = 0.62
@@ -101,7 +103,9 @@ enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
                 backgroundTopHex: "#667EEA",
                 backgroundBottomHex: "#764BA2"
             )
-            plan.export?.preset = .source
+            // Shareable H.264 at source resolution. Compact is HEVC and often
+            // fails in chat apps; source quality is reserved for the archive preset.
+            plan.export?.preset = .balanced
         case .teaching:
             plan.camera.mode = "event-driven"
             plan.camera.zoomIntensity = 0.50
@@ -139,7 +143,9 @@ enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
                 fontScale: 1.08,
                 maxCharactersPerCue: 24
             )
-            plan.export?.preset = .source
+            // Shareable H.264 at source resolution. Compact is HEVC and often
+            // fails in chat apps; source quality is reserved for the archive preset.
+            plan.export?.preset = .balanced
         case .source:
             plan.camera.mode = "off"
             plan.camera.zoomIntensity = 0

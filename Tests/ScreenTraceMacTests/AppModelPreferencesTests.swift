@@ -130,7 +130,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(natural.interaction?.clickPulseDuration, 0.64)
         XCTAssertTrue(natural.cursor.isEnabled == true)
         XCTAssertFalse(natural.presenterCamera?.isEnabled == true)
-        XCTAssertEqual(natural.export?.preset, .source)
+        XCTAssertEqual(natural.export?.preset, .balanced)
 
         let presentation = RecordingExperiencePreset.presentation.makeEditPlan(
             includesCamera: true
@@ -153,7 +153,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertFalse(presentation.cursor.hidesWhenIdle)
         XCTAssertTrue(presentation.presenterCamera?.isEnabled == true)
         XCTAssertEqual(presentation.canvas?.backgroundTopHex, "#667EEA")
-        XCTAssertEqual(presentation.export?.preset, .source)
+        XCTAssertEqual(presentation.export?.preset, .balanced)
 
         let teaching = RecordingExperiencePreset.teaching.makeEditPlan(includesCamera: true)
         XCTAssertEqual(teaching.camera.zoomScale, 1.60)
@@ -165,7 +165,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(teaching.interaction?.clickEffect, .spotlight)
         XCTAssertTrue(teaching.audio?.ducksSystemUnderNarration == true)
         XCTAssertEqual(teaching.captions?.style, .glass)
-        XCTAssertEqual(teaching.export?.preset, .source)
+        XCTAssertEqual(teaching.export?.preset, .balanced)
 
         let source = RecordingExperiencePreset.source.makeEditPlan(includesCamera: true)
         XCTAssertEqual(source.camera.mode, "off")

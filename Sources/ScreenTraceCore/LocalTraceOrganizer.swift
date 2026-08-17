@@ -79,24 +79,67 @@ public enum LocalTraceOrganizer {
         sentences: [String],
         fallbackText: String
     ) -> String {
+        let windowTitle = manifest.captureSource?.windowTitle
+            ?? manifest.screenshotCaptureSource?.windowTitle
+            ?? ""
+        let application = privacyRedactedText(
+            manifest.captureSource?.applicationName
+                ?? manifest.screenshotCaptureSource?.applicationName
+                ?? ""
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+
         let firstContent = sentences.first
             ?? normalizedWhitespace(fallbackText)
-        var contentTitle = cleanTitle(firstContent)
+        var contentTitle = usableTitle(firstContent)
         if contentTitle.isEmpty {
-            contentTitle = cleanTitle(privacyRedactedText(
-                manifest.captureSource?.windowTitle ?? ""
-            ))
+            contentTitle = usableTitle(privacyRedactedText(windowTitle))
         }
-        if contentTitle.isEmpty { return privacyRedactedText(manifest.title) }
+        if contentTitle.isEmpty {
+            contentTitle = usableTitle(application)
+        }
+        if contentTitle.isEmpty {
+            return privacyRedactedText(manifest.title)
+        }
         contentTitle = truncated(contentTitle, maximumCharacters: 32)
-        let application = privacyRedactedText(
-            manifest.captureSource?.applicationName ?? ""
-        ).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !application.isEmpty,
               !contentTitle.localizedCaseInsensitiveContains(application) else {
             return contentTitle
         }
         return truncated("\(application) · \(contentTitle)", maximumCharacters: 46)
+    }
+
+    /// Dated capture names and calendar chrome are not searchable. A library
+    /// full of "8月" and "截图 04:12" is indistinguishable from no titles at all.
+    private static func isWeakTitle(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        if trimmed.count < 4 { return true }
+        if trimmed.range(
+            of: #"^(截图|长截图|多窗口截图|区域截图)\s"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+        if trimmed.contains("日一二三四五六") || trimmed.contains("星期") {
+            return true
+        }
+        let monthToken = #"(\d{1,2}|[一二三四五六七八九十]+)月"#
+        if trimmed.range(of: "^\(monthToken)$", options: .regularExpression) != nil {
+            return true
+        }
+        if let match = trimmed.range(of: "^\(monthToken)", options: .regularExpression) {
+            let rest = trimmed[match.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if rest.isEmpty || rest.contains("初") || rest.contains("日") {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func usableTitle(_ text: String) -> String {
+        let cleaned = cleanTitle(text)
+        return isWeakTitle(cleaned) ? "" : cleaned
     }
 
     private struct RankedSentence {
@@ -182,7 +225,9 @@ public enum LocalTraceOrganizer {
         ).lowercased()
         var tags: [String] = []
         let application = privacyRedactedText(
-            manifest.captureSource?.applicationName ?? ""
+            manifest.captureSource?.applicationName
+                ?? manifest.screenshotCaptureSource?.applicationName
+                ?? ""
         ).trimmingCharacters(in: .whitespacesAndNewlines)
         if !application.isEmpty {
             tags.append(application)

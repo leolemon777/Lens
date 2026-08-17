@@ -245,6 +245,78 @@ final class LocalTraceOrganizerTests: XCTestCase {
         )
     }
 
+    func testOrganizerDoesNotKeepDatedCaptureTitleWhenWindowIdentityExists() {
+        let manifest = TraceManifest(
+            kind: .screenshot,
+            title: "截图 2026年8月16日 04:12",
+            dimensions: TraceDimensions(width: 1_280, height: 720),
+            screenshotCaptureSource: ScreenshotCaptureMetadata(
+                mode: .window,
+                windowIDs: [7],
+                globalBounds: CGRect(x: 0, y: 0, width: 1_280, height: 720),
+                windowTitle: "Launch roadmap",
+                applicationName: "Safari"
+            ),
+            assets: []
+        )
+
+        let insights = LocalTraceOrganizer.organize(
+            manifest: manifest,
+            generatedAt: Date(timeIntervalSince1970: 20)
+        )
+
+        XCTAssertTrue(
+            insights.suggestedTitle.contains("Safari")
+                || insights.suggestedTitle.contains("Launch"),
+            "没有 OCR 时应当使用窗口身份，而不是截图日期"
+        )
+        XCTAssertFalse(insights.suggestedTitle.hasPrefix("截图 "))
+        XCTAssertTrue(insights.tags.contains("Safari"))
+    }
+
+    func testOrganizerRejectsCalendarFragmentTitles() {
+        let manifest = TraceManifest(
+            kind: .screenshot,
+            title: "截图 2026年8月16日 05:01",
+            dimensions: TraceDimensions(width: 420, height: 352),
+            screenshotCaptureSource: ScreenshotCaptureMetadata(
+                mode: .window,
+                windowIDs: [3],
+                globalBounds: CGRect(x: 0, y: 0, width: 420, height: 352),
+                windowTitle: "Calendar",
+                applicationName: "Calendar"
+            ),
+            assets: []
+        )
+        let ocr = OCRDocument(
+            engine: "test",
+            recognitionLanguages: ["zh-Hans"],
+            blocks: [
+                OCRTextBlock(
+                    text: "8月 七月初四 日一二三四五六",
+                    confidence: 0.9,
+                    normalizedBounds: TraceRect(x: 0, y: 0, width: 1, height: 1)
+                )
+            ]
+        )
+
+        let insights = LocalTraceOrganizer.organize(
+            manifest: manifest,
+            ocr: ocr,
+            generatedAt: Date(timeIntervalSince1970: 20)
+        )
+
+        XCTAssertFalse(
+            insights.suggestedTitle == "8月"
+                || insights.suggestedTitle.hasPrefix("8月"),
+            "日历表头不应成为标题"
+        )
+        XCTAssertTrue(
+            insights.suggestedTitle.contains("Calendar"),
+            "弱 OCR 时应回退到窗口身份"
+        )
+    }
+
     private func segment(
         _ start: Double,
         _ end: Double,

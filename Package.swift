@@ -3,29 +3,29 @@
 import PackageDescription
 
 let package = Package(
-    name: "ScreenTrace",
+    name: "Lens",
     defaultLocalization: "zh-Hans",
     platforms: [
         .macOS(.v15)
     ],
     products: [
-        .library(name: "ScreenTraceCore", targets: ["ScreenTraceCore"]),
-        .executable(name: "ScreenTrace", targets: ["ScreenTraceMac"])
+        .library(name: "LensCore", targets: ["LensCore"]),
+        .executable(name: "Lens", targets: ["LensMac"])
     ],
     targets: [
-        .target(name: "ScreenTraceCore"),
+        .target(name: "LensCore"),
         .executableTarget(
-            name: "ScreenTraceMac",
-            dependencies: ["ScreenTraceCore"]
+            name: "LensMac",
+            dependencies: ["LensCore"]
         ),
         .testTarget(
-            name: "ScreenTraceCoreTests",
-            dependencies: ["ScreenTraceCore"],
+            name: "LensCoreTests",
+            dependencies: ["LensCore"],
             resources: [.copy("Fixtures")]
         ),
         .testTarget(
-            name: "ScreenTraceMacTests",
-            dependencies: ["ScreenTraceMac", "ScreenTraceCore"]
+            name: "LensMacTests",
+            dependencies: ["LensMac", "LensCore"]
         )
     ]
 )

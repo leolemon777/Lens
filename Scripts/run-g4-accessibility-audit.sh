@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPORT_PATH="${1:-$PROJECT_DIR/Build/Quality/g4-accessibility-runtime-latest.json}"
-EXECUTABLE="/Applications/ScreenTrace.app/Contents/MacOS/ScreenTrace"
-TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ScreenTrace-g4-ax.XXXXXX")"
+EXECUTABLE="/Applications/Lens.app/Contents/MacOS/Lens"
+TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/Lens-g4-ax.XXXXXX")"
 READY_MARKER="$TEMP_ROOT/ready.marker"
 HOST_PID=""
 
@@ -33,9 +33,9 @@ if ioreg -n Root -d1 | grep -F 'CGSSessionScreenIsLocked"=Yes' >/dev/null; then
     exit 77
 fi
 
-[[ -x "$EXECUTABLE" ]] || { echo "Missing installed ScreenTrace executable." >&2; exit 66; }
-if pgrep -x ScreenTrace >/dev/null 2>&1; then
-    echo "ScreenTrace is already running. Quit it before the isolated G4 audit." >&2
+[[ -x "$EXECUTABLE" ]] || { echo "Missing installed Lens executable." >&2; exit 66; }
+if pgrep -x Lens >/dev/null 2>&1; then
+    echo "Lens is already running. Quit it before the isolated G4 audit." >&2
     exit 73
 fi
 

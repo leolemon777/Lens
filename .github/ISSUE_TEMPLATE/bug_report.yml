@@ -11,7 +11,7 @@ body:
   - type: input
     id: version
     attributes:
-      label: ScreenTrace 版本 / commit
+      label: Lens 版本 / commit
       placeholder: 0.1.0 (1) / abc1234
     validations:
       required: true
@@ -44,7 +44,7 @@ body:
         - 录屏 / 音频 / 摄像头
         - 自动运镜 / 光标 / 画中画
         - 编辑器 / 转场 / 字幕 / 导出
-        - 屏迹库 / 转写 / 整理 / 搜索
+        - Lens 库 / 转写 / 整理 / 搜索
         - 安装 / 权限 / 恢复
         - 其他
     validations:

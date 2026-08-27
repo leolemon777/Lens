@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ScreenTrace-source-digest-test.XXXXXX")"
+TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/Lens-source-digest-test.XXXXXX")"
 
 cleanup() {
     if [[ -d "$TEMP_ROOT" ]]; then

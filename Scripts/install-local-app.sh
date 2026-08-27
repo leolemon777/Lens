@@ -3,9 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-SOURCE_APP="${1:-$PROJECT_DIR/Build/ScreenTrace.app}"
-TARGET_APP="/Applications/ScreenTrace.app"
-STAGING_APP="/Applications/.ScreenTrace.install.$$.app"
+SOURCE_APP="${1:-$PROJECT_DIR/Build/Lens.app}"
+TARGET_APP="/Applications/Lens.app"
+STAGING_APP="/Applications/.Lens.install.$$.app"
 BACKUP_ROOT="$PROJECT_DIR/Build/InstallBackups"
 BACKUP_APP=""
 INSTALL_SUCCEEDED=0
@@ -20,7 +20,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ "$TARGET_APP" != "/Applications/ScreenTrace.app" ]]; then
+if [[ "$TARGET_APP" != "/Applications/Lens.app" ]]; then
     echo "Refusing unexpected install target: $TARGET_APP" >&2
     exit 64
 fi
@@ -28,12 +28,12 @@ if [[ ! -d "$SOURCE_APP" ]]; then
     echo "Missing source app: $SOURCE_APP" >&2
     exit 66
 fi
-if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SOURCE_APP/Contents/Info.plist" 2>/dev/null || true)" != "app.screentrace.mac" ]]; then
+if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SOURCE_APP/Contents/Info.plist" 2>/dev/null || true)" != "app.lens.mac" ]]; then
     echo "Source app has an unexpected bundle identifier." >&2
     exit 65
 fi
-if pgrep -x ScreenTrace >/dev/null 2>&1; then
-    echo "ScreenTrace is running. Stop any recording and quit the app before installing." >&2
+if pgrep -x Lens >/dev/null 2>&1; then
+    echo "Lens is running. Stop any recording and quit the app before installing." >&2
     exit 73
 fi
 
@@ -43,13 +43,13 @@ mkdir -p "$BACKUP_ROOT"
 codesign --verify --deep --strict --verbose=2 "$STAGING_APP"
 
 if [[ -e "$TARGET_APP" ]]; then
-    BACKUP_APP="$BACKUP_ROOT/ScreenTrace-$(date -u +%Y%m%dT%H%M%SZ).app"
+    BACKUP_APP="$BACKUP_ROOT/Lens-$(date -u +%Y%m%dT%H%M%SZ).app"
     mv -- "$TARGET_APP" "$BACKUP_APP"
 fi
 mv -- "$STAGING_APP" "$TARGET_APP"
 
 if ! "$SCRIPT_DIR/verify-installed-app.sh" "$SOURCE_APP" "$TARGET_APP"; then
-    FAILED_APP="$BACKUP_ROOT/Failed-ScreenTrace-$(date -u +%Y%m%dT%H%M%SZ).app"
+    FAILED_APP="$BACKUP_ROOT/Failed-Lens-$(date -u +%Y%m%dT%H%M%SZ).app"
     mv -- "$TARGET_APP" "$FAILED_APP"
     if [[ -n "$BACKUP_APP" && -e "$BACKUP_APP" ]]; then
         mv -- "$BACKUP_APP" "$TARGET_APP"

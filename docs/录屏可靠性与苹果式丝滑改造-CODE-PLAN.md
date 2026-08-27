@@ -1,4 +1,4 @@
-# 屏迹录屏可靠性与“苹果式丝滑”改造计划
+# Lens 录屏可靠性与“苹果式丝滑”改造计划
 
 > 文档版本：v0.1  
 > 日期：2026-08-12  
@@ -7,7 +7,7 @@
 
 ## 1. 结论先行
 
-屏迹最新工作区构建的自动运镜、光标重绘和点击波纹已经真正生效，核心方向是对的。当前不应继续堆大量入口和开关，而应先解决四个会直接损害信任的问题：
+Lens 最新工作区构建的自动运镜、光标重绘和点击波纹已经真正生效，核心方向是对的。当前不应继续堆大量入口和开关，而应先解决四个会直接损害信任的问题：
 
 1. `/Applications` 旧版与工作区新版同时存在，用户无法确认自己打开的是哪一版。
 2. UI 显示 60 FPS，但真实原始媒体只有约 29.97 FPS。
@@ -57,7 +57,7 @@ flowchart LR
 - 原始录屏是第一优先级；任何智能分析失败都不得损坏原始媒体。
 - 录制时展示“正在尝试什么”，录后只展示“实际完成了什么”。
 - 预览和导出使用同一份 `AutoEditPlan` 和同一组曲线，不允许两套视觉结果。
-- 新字段保持向后兼容；旧 `.screentrace` 项目即使没有诊断信息也能打开。
+- 新字段保持向后兼容；旧 `.lens` 项目即使没有诊断信息也能打开。
 
 ## 4. 代码实施计划
 
@@ -68,10 +68,10 @@ flowchart LR
 - `Scripts/build-app.sh`
 - 新增 `Scripts/install-local-app.sh`
 - 新增 `Scripts/verify-installed-app.sh`
-- 新增 `Sources/ScreenTraceMac/Support/BuildIdentity.swift`
-- 新增 `Sources/ScreenTraceMac/Support/ApplicationInstanceCoordinator.swift`
-- `Sources/ScreenTraceMac/AppDelegate.swift`
-- `Sources/ScreenTraceMac/UI/PermissionCenterView.swift`
+- 新增 `Sources/LensMac/Support/BuildIdentity.swift`
+- 新增 `Sources/LensMac/Support/ApplicationInstanceCoordinator.swift`
+- `Sources/LensMac/AppDelegate.swift`
+- `Sources/LensMac/UI/PermissionCenterView.swift`
 
 #### 代码逻辑
 
@@ -79,7 +79,7 @@ flowchart LR
 2. App 启动时检查相同 bundle ID 的正在运行实例：
    - 同一可执行路径：激活已有实例，当前进程正常退出。
    - 不同路径或 build：显示冲突信息，用户明确选择激活旧版或退出旧版后继续；不在后台直接强杀进程。
-3. 安装脚本只操作精确路径 `/Applications/ScreenTrace.app`，先复制到临时目录，验证签名/哈希/可启动性后再替换。
+3. 安装脚本只操作精确路径 `/Applications/Lens.app`，先复制到临时目录，验证签名/哈希/可启动性后再替换。
 4. 设置页固定显示当前运行路径和 build，让测试人员一眼确认版本。
 
 #### 新增核心类型
@@ -105,13 +105,13 @@ enum InstanceConflict {
 
 #### 修改文件
 
-- `Sources/ScreenTraceMac/Support/PermissionCenterModel.swift`
-- `Sources/ScreenTraceMac/UI/PermissionCenterView.swift`
-- `Sources/ScreenTraceMac/Capture/PointerEventRecorder.swift`
-- `Sources/ScreenTraceMac/Capture/ScreenRecordingService.swift`
-- `Sources/ScreenTraceMac/UI/RecordingControlView.swift`
-- `Sources/ScreenTraceMac/UI/RecordingControlWindowController.swift`
-- `Sources/ScreenTraceMac/AppDelegate.swift`
+- `Sources/LensMac/Support/PermissionCenterModel.swift`
+- `Sources/LensMac/UI/PermissionCenterView.swift`
+- `Sources/LensMac/Capture/PointerEventRecorder.swift`
+- `Sources/LensMac/Capture/ScreenRecordingService.swift`
+- `Sources/LensMac/UI/RecordingControlView.swift`
+- `Sources/LensMac/UI/RecordingControlWindowController.swift`
+- `Sources/LensMac/AppDelegate.swift`
 
 #### 代码逻辑
 
@@ -147,13 +147,13 @@ struct EventCaptureSnapshot: Equatable, Sendable {
 
 #### 修改文件
 
-- `Sources/ScreenTraceMac/Capture/ScreenRecordingService.swift`
-- 新增 `Sources/ScreenTraceMac/Capture/ScreenVideoTrackWriter.swift`
-- 新增 `Sources/ScreenTraceMac/Capture/CapturePerformanceMonitor.swift`
-- `Sources/ScreenTraceMac/Capture/RecordingSegmentAssembler.swift`
-- `Sources/ScreenTraceCore/TraceManifest.swift`
-- `Sources/ScreenTraceCore/TraceProjectStore.swift`
-- `Sources/ScreenTraceMac/UI/RecordingControlView.swift`
+- `Sources/LensMac/Capture/ScreenRecordingService.swift`
+- 新增 `Sources/LensMac/Capture/ScreenVideoTrackWriter.swift`
+- 新增 `Sources/LensMac/Capture/CapturePerformanceMonitor.swift`
+- `Sources/LensMac/Capture/RecordingSegmentAssembler.swift`
+- `Sources/LensCore/LensManifest.swift`
+- `Sources/LensCore/LensProjectStore.swift`
+- `Sources/LensMac/UI/RecordingControlView.swift`
 
 #### 代码逻辑
 
@@ -186,16 +186,16 @@ p95FrameInterval = percentile(frameIntervals, 0.95)
 
 #### 修改文件
 
-- `Sources/ScreenTraceCore/TraceManifest.swift`
-- `Sources/ScreenTraceCore/TraceProjectStore.swift`
-- 新增 `Sources/ScreenTraceMac/Capture/RecordingArtifactValidator.swift`
-- `Sources/ScreenTraceMac/AppDelegate.swift`
-- `Sources/ScreenTraceMac/UI/TraceLibraryView.swift`
-- `Sources/ScreenTraceMac/UI/VideoEditorModel.swift`
+- `Sources/LensCore/LensManifest.swift`
+- `Sources/LensCore/LensProjectStore.swift`
+- 新增 `Sources/LensMac/Capture/RecordingArtifactValidator.swift`
+- `Sources/LensMac/AppDelegate.swift`
+- `Sources/LensMac/UI/LensLibraryView.swift`
+- `Sources/LensMac/UI/VideoEditorModel.swift`
 
 #### 数据结构更改
 
-`TraceCaptureMetadata.framesPerSecond` 保留用于解码旧项目，新项目增加：
+`LensCaptureMetadata.framesPerSecond` 保留用于解码旧项目，新项目增加：
 
 ```swift
 public let requestedFramesPerSecond: Int?
@@ -204,13 +204,13 @@ public let p95FrameIntervalMilliseconds: Double?
 public let droppedFrameCount: Int?
 ```
 
-将 `TraceManifest.captureSource` 改为可更新字段，在媒体 finalize 后写回实测数据。Schema 版本从 `0.8` 升级，自定义 `Decodable` 规则为：
+将 `LensManifest.captureSource` 改为可更新字段，在媒体 finalize 后写回实测数据。Schema 版本从 `0.8` 升级，自定义 `Decodable` 规则为：
 
 - 旧 `framesPerSecond` 存在且新字段不存在：只当作 requested，不推断 measured。
 - 新字段缺失：编辑器正常打开，健康状态显示“未检测”。
 - 实测值不得覆写用户当时的 requested 设置。
 
-项目内新增 `diagnostics/recording-health.json`，并向 `TraceAsset.Role` 增加 `.recordingHealth`。
+项目内新增 `diagnostics/recording-health.json`，并向 `LensAsset.Role` 增加 `.recordingHealth`。
 
 ```swift
 struct RecordingHealthReport: Codable, Equatable, Sendable {
@@ -239,11 +239,11 @@ struct RecordingHealthReport: Codable, Equatable, Sendable {
 
 #### 修改文件
 
-- `Sources/ScreenTraceCore/AutoCameraPlanner.swift`
-- `Sources/ScreenTraceCore/EffectTimeline.swift`
-- `Sources/ScreenTraceCore/CaptureEvents.swift`
-- `Sources/ScreenTraceMac/Support/AppModel.swift`
-- `Sources/ScreenTraceMac/UI/VideoEditorModel.swift`
+- `Sources/LensCore/AutoCameraPlanner.swift`
+- `Sources/LensCore/EffectTimeline.swift`
+- `Sources/LensCore/CaptureEvents.swift`
+- `Sources/LensMac/Support/AppModel.swift`
+- `Sources/LensMac/UI/VideoEditorModel.swift`
 
 #### 默认参数
 
@@ -278,10 +278,10 @@ enum CameraEasing: String, Codable {
 
 #### 修改文件
 
-- `Sources/ScreenTraceMac/Capture/AutoPreviewRenderer.swift`
-- `Sources/ScreenTraceCore/CaptureEvents.swift`
-- `Sources/ScreenTraceMac/Support/AppModel.swift`
-- `Sources/ScreenTraceMac/UI/VideoEditorView.swift`
+- `Sources/LensMac/Capture/AutoPreviewRenderer.swift`
+- `Sources/LensCore/CaptureEvents.swift`
+- `Sources/LensMac/Support/AppModel.swift`
+- `Sources/LensMac/UI/VideoEditorView.swift`
 
 #### 代码逻辑
 
@@ -310,14 +310,14 @@ if zoomVelocity > panVelocity {
 
 #### 修改文件
 
-- `Sources/ScreenTraceMac/UI/RecordingWindowPickerModel.swift`
-- `Sources/ScreenTraceMac/UI/RecordingSetupView.swift`
-- `Sources/ScreenTraceMac/UI/RecordingControlWindowController.swift`
-- `Sources/ScreenTraceMac/UI/RecordingControlView.swift`
+- `Sources/LensMac/UI/RecordingWindowPickerModel.swift`
+- `Sources/LensMac/UI/RecordingSetupView.swift`
+- `Sources/LensMac/UI/RecordingControlWindowController.swift`
+- `Sources/LensMac/UI/RecordingControlView.swift`
 
 #### 代码逻辑
 
-- 窗口选择从仅排除当前 PID，改为排除同 bundle ID 的所有屏迹窗口。
+- 窗口选择从仅排除当前 PID，改为排除同 bundle ID 的所有 Lens 窗口。
 - 优先排序：前台普通 App > 当前 Space 可见窗口 > 后台普通 App > 系统辅助窗口。
 - 缩略图任务限流并取消已过期请求；窗口刷新不阻塞主线程。
 - 录制浮标的 `NSPanel` 使用 `.canJoinAllSpaces` 和 `.fullScreenAuxiliary`，窗口 level 统一由 controller 管理；用户点击隐藏前始终在线。
@@ -327,11 +327,11 @@ if zoomVelocity > panVelocity {
 
 #### 修改文件
 
-- `Sources/ScreenTraceMac/AppDelegate.swift`
-- `Sources/ScreenTraceMac/UI/VideoEditorPlaybackController.swift`
-- `Sources/ScreenTraceMac/UI/VideoEditorModel.swift`
-- `Sources/ScreenTraceMac/Capture/AutoPreviewRenderer.swift`
-- `Sources/ScreenTraceCore/DiagnosticEvent.swift`
+- `Sources/LensMac/AppDelegate.swift`
+- `Sources/LensMac/UI/VideoEditorPlaybackController.swift`
+- `Sources/LensMac/UI/VideoEditorModel.swift`
+- `Sources/LensMac/Capture/AutoPreviewRenderer.swift`
+- `Sources/LensCore/DiagnosticEvent.swift`
 - `Scripts/run-g0-baseline.sh`
 - `Scripts/summarize-capture-performance.swift`
 
@@ -414,7 +414,7 @@ if zoomVelocity > panVelocity {
 
 本轮 C01–C08 已完成并进入可用构建，macOS 当前里程碑的代码与自动化质量门已收尾：
 
-- 已安装并签名验证 `/Applications/ScreenTrace.app`：`0.1.0 (20260812070826)`。
+- 已安装并签名验证 `/Applications/Lens.app`：`0.1.0 (20260812070826)`。
 - 可执行文件 SHA-256：`5888162bfec4a2383403a0cdafd52f829d3702b219d83316a3f60e3fecaff935`。
 - 签名 CDHash：`95cee834c01e99a8a92be819f47f775ae3c4c6be`。
 - 全量测试：372 项，0 失败；Release 构建以 warnings-as-errors 通过。

@@ -3,15 +3,15 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-SOURCE_APP="${1:-$PROJECT_DIR/Build/ScreenTrace.app}"
-INSTALLED_APP="${2:-/Applications/ScreenTrace.app}"
+SOURCE_APP="${1:-$PROJECT_DIR/Build/Lens.app}"
+INSTALLED_APP="${2:-/Applications/Lens.app}"
 
 for app_path in "$SOURCE_APP" "$INSTALLED_APP"; do
     if [[ ! -d "$app_path" ]]; then
         echo "Missing app bundle: $app_path" >&2
         exit 66
     fi
-    if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist" 2>/dev/null || true)" != "app.screentrace.mac" ]]; then
+    if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist" 2>/dev/null || true)" != "app.lens.mac" ]]; then
         echo "Unexpected bundle identifier: $app_path" >&2
         exit 65
     fi
@@ -22,7 +22,7 @@ plist_value() {
     /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist"
 }
 
-for key in CFBundleShortVersionString CFBundleVersion ScreenTraceBuildChannel ScreenTraceBuiltAt ScreenTraceGitCommit; do
+for key in CFBundleShortVersionString CFBundleVersion LensBuildChannel LensBuiltAt LensGitCommit; do
     source_value="$(plist_value "$SOURCE_APP" "$key")"
     installed_value="$(plist_value "$INSTALLED_APP" "$key")"
     if [[ "$source_value" != "$installed_value" ]]; then
@@ -31,8 +31,8 @@ for key in CFBundleShortVersionString CFBundleVersion ScreenTraceBuildChannel Sc
     fi
 done
 
-SOURCE_EXECUTABLE="$SOURCE_APP/Contents/MacOS/ScreenTrace"
-INSTALLED_EXECUTABLE="$INSTALLED_APP/Contents/MacOS/ScreenTrace"
+SOURCE_EXECUTABLE="$SOURCE_APP/Contents/MacOS/Lens"
+INSTALLED_EXECUTABLE="$INSTALLED_APP/Contents/MacOS/Lens"
 SOURCE_SHA256="$(shasum -a 256 "$SOURCE_EXECUTABLE" | awk '{print $1}')"
 INSTALLED_SHA256="$(shasum -a 256 "$INSTALLED_EXECUTABLE" | awk '{print $1}')"
 if [[ "$SOURCE_SHA256" != "$INSTALLED_SHA256" ]]; then

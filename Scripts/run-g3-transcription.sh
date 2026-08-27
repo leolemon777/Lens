@@ -3,9 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-APP_PATH="${SCREENTRACE_APP_PATH:-/Applications/ScreenTrace.app}"
+APP_PATH="${LENS_APP_PATH:-/Applications/Lens.app}"
 REPORT_PATH="${1:-$PROJECT_DIR/Build/Quality/g3-transcription-controlled-installed.json}"
-TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ScreenTrace-g3-transcription.XXXXXX")"
+TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/Lens-g3-transcription.XXXXXX")"
 AUDIO_PATH="$TEMP_ROOT/controlled-speech.aiff"
 
 cleanup() {
@@ -32,7 +32,7 @@ fi
 
 mkdir -p "$(dirname "$REPORT_PATH")"
 say -v Tingting -r 165 -o "$AUDIO_PATH" \
-    '屏幕录制，自动字幕，光标点击。屏迹让演示视频更加清晰流畅。'
+    '屏幕录制，自动字幕，光标点击。 Lens 让演示视频更加清晰流畅。'
 
 # Speech privacy access must be initiated through LaunchServices. Invoking the
 # Mach-O directly bypasses the bundle's privacy metadata and macOS terminates it.

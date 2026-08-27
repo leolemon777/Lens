@@ -5,18 +5,18 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CLOSE_AFTER_SECONDS="${1:-8}"
 REPORT_PATH="${2:-$PROJECT_DIR/Build/Quality/g2-source-interruption-latest.json}"
-EXECUTABLE="/Applications/ScreenTrace.app/Contents/MacOS/ScreenTrace"
+EXECUTABLE="/Applications/Lens.app/Contents/MacOS/Lens"
 
 [[ "$CLOSE_AFTER_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] || {
     echo "Close-after seconds must be a number between 5 and 30." >&2
     exit 64
 }
 if [[ ! -x "$EXECUTABLE" ]]; then
-    echo "Missing installed ScreenTrace executable." >&2
+    echo "Missing installed Lens executable." >&2
     exit 66
 fi
-if pgrep -x ScreenTrace >/dev/null 2>&1; then
-    echo "ScreenTrace is already running." >&2
+if pgrep -x Lens >/dev/null 2>&1; then
+    echo "Lens is already running." >&2
     exit 73
 fi
 

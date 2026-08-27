@@ -24,7 +24,7 @@ done
 
 MANIFEST_DIR="$(cd "$(dirname "$1")" && pwd)"
 MANIFEST_PATH="$MANIFEST_DIR/$(basename "$1")"
-TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ScreenTrace-verify-release.XXXXXX")"
+TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/Lens-verify-release.XXXXXX")"
 APP_UNPACK_DIR="$TEMP_ROOT/app"
 DSYM_UNPACK_DIR="$TEMP_ROOT/dsym"
 MOUNT_DIR="$TEMP_ROOT/mount"
@@ -88,7 +88,7 @@ verify_recorded_artifact() {
 verify_app_bundle() {
     local app_path="$1"
     local plist="$app_path/Contents/Info.plist"
-    local executable="$app_path/Contents/MacOS/ScreenTrace"
+    local executable="$app_path/Contents/MacOS/Lens"
     local icon="$app_path/Contents/Resources/AppIcon.icns"
     local uuid
     [[ -f "$plist" ]] || fail "missing Info.plist in $app_path"
@@ -116,7 +116,7 @@ verify_app_bundle() {
 }
 
 expect_value "release manifest schema" "$(manifest_value schemaVersion)" "1"
-expect_value "release product" "$(manifest_value product)" "ScreenTrace"
+expect_value "release product" "$(manifest_value product)" "Lens"
 BUNDLE_IDENTIFIER="$(manifest_value bundleIdentifier)"
 APP_VERSION="$(manifest_value version)"
 BUILD_NUMBER="$(manifest_value buildNumber)"
@@ -133,7 +133,7 @@ APP_NOTARY_STATUS="$(manifest_value notarization.app.status)"
 DMG_NOTARY_ID="$(manifest_value notarization.dmg.requestID)"
 DMG_NOTARY_STATUS="$(manifest_value notarization.dmg.status)"
 
-expect_value "bundle identifier" "$BUNDLE_IDENTIFIER" "app.screentrace.mac"
+expect_value "bundle identifier" "$BUNDLE_IDENTIFIER" "app.lens.mac"
 [[ "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || fail "invalid version: $APP_VERSION"
 [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || fail "invalid build number: $BUILD_NUMBER"
 case "$RELEASE_CHANNEL" in
@@ -169,7 +169,7 @@ else
     fi
 fi
 
-ARTIFACT_NAME="ScreenTrace-$APP_VERSION-$BUILD_NUMBER"
+ARTIFACT_NAME="Lens-$APP_VERSION-$BUILD_NUMBER"
 expect_value "release manifest filename" "$(basename "$MANIFEST_PATH")" \
     "$ARTIFACT_NAME-release.json"
 DMG_FILENAME="$ARTIFACT_NAME.dmg"
@@ -259,7 +259,7 @@ unzip -tq "$DSYM_ARCHIVE_PATH"
 mkdir -p "$APP_UNPACK_DIR" "$DSYM_UNPACK_DIR" "$MOUNT_DIR"
 ditto -x -k "$APP_ARCHIVE_PATH" "$APP_UNPACK_DIR"
 ditto -x -k "$DSYM_ARCHIVE_PATH" "$DSYM_UNPACK_DIR"
-ARCHIVED_APP="$APP_UNPACK_DIR/ScreenTrace.app"
+ARCHIVED_APP="$APP_UNPACK_DIR/Lens.app"
 ARCHIVED_DSYM="$DSYM_UNPACK_DIR/$ARTIFACT_NAME.dSYM"
 [[ -d "$ARCHIVED_APP" ]] || fail "App archive has an unexpected root layout"
 [[ -d "$ARCHIVED_DSYM" ]] || fail "dSYM archive has an unexpected root layout"
@@ -270,7 +270,7 @@ expect_value "dSYM UUID" "$DSYM_UUID" "$MACHO_UUID"
 hdiutil verify "$DMG_PATH"
 hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT_DIR" "$DMG_PATH" >/dev/null
 MOUNTED=1
-MOUNTED_APP="$MOUNT_DIR/ScreenTrace.app"
+MOUNTED_APP="$MOUNT_DIR/Lens.app"
 verify_app_bundle "$MOUNTED_APP"
 if [[ ! -L "$MOUNT_DIR/Applications" || "$(readlink "$MOUNT_DIR/Applications")" != "/Applications" ]]; then
     fail "DMG Applications link is missing or invalid"

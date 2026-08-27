@@ -3,9 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-APP_DIR="$PROJECT_DIR/Build/ScreenTrace.app"
+APP_DIR="$PROJECT_DIR/Build/Lens.app"
 PLIST_PATH="$APP_DIR/Contents/Info.plist"
-BINARY_PATH="$APP_DIR/Contents/MacOS/ScreenTrace"
+BINARY_PATH="$APP_DIR/Contents/MacOS/Lens"
 
 "$SCRIPT_DIR/build-app.sh" release
 plutil -lint "$PLIST_PATH"
@@ -13,7 +13,7 @@ codesign --verify --deep --strict "$APP_DIR"
 
 APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST_PATH")"
 BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST_PATH")"
-ARTIFACT_NAME="ScreenTrace-$APP_VERSION-$BUILD_VERSION"
+ARTIFACT_NAME="Lens-$APP_VERSION-$BUILD_VERSION"
 SYMBOLS_DIR="$PROJECT_DIR/Build/Symbols"
 DSYM_PATH="$SYMBOLS_DIR/$ARTIFACT_NAME.dSYM"
 ARCHIVE_PATH="$SYMBOLS_DIR/$ARTIFACT_NAME.dSYM.zip"

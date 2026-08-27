@@ -47,7 +47,7 @@ jobs:
       - name: 源码快照摘要自测
         run: bash Scripts/test-source-snapshot-digest.sh
 
-  # 全量单元测试。ScreenTraceCoreTests 与 ScreenTraceMacTests 都是纯逻辑测试，
+  # 全量单元测试。 LensCoreTests 与 LensMacTests 都是纯逻辑测试，
   # 不触碰 ScreenCaptureKit / AVCaptureDevice / NSScreen，因此无需 TCC 授权即可在
   # 无人值守运行器上执行。
   test:
@@ -106,16 +106,16 @@ jobs:
 
       - name: 构建 App Bundle（warnings-as-errors）
         env:
-          SCREENTRACE_BUILD_CHANNEL: development
-          SCREENTRACE_GIT_COMMIT: ${{ github.sha }}
+          LENS_BUILD_CHANNEL: development
+          LENS_GIT_COMMIT: ${{ github.sha }}
         run: bash Scripts/build-app.sh release
 
       - name: 校验签名与 bundle 结构
-        run: codesign --verify --deep --strict --verbose=2 Build/ScreenTrace.app
+        run: codesign --verify --deep --strict --verbose=2 Build/Lens.app
 
       - name: 核对构建身份写入 Info.plist
         run: |
-          plist="Build/ScreenTrace.app/Contents/Info.plist"
+          plist="Build/Lens.app/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist"
           /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$plist"
-          /usr/libexec/PlistBuddy -c "Print :ScreenTraceGitCommit" "$plist"
+          /usr/libexec/PlistBuddy -c "Print :LensGitCommit" "$plist"

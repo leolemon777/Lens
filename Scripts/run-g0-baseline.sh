@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPORT_DIR="${1:-$PROJECT_DIR/Build/Quality}"
-TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ScreenTrace-g0.XXXXXX")"
+TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/Lens-g0.XXXXXX")"
 TEST_LOG="$TEMP_ROOT/swift-test.log"
 BUILD_LOG="$TEMP_ROOT/swift-build.log"
 REPORT_PATH="$REPORT_DIR/g0-baseline-latest.json"
@@ -21,10 +21,10 @@ SOURCE_SNAPSHOT_BEFORE="$(bash Scripts/source-snapshot-digest.sh "$PROJECT_DIR")
 
 set -o pipefail
 swift test 2>&1 | tee "$TEST_LOG"
-swift build -c release --product ScreenTrace -Xswiftc -warnings-as-errors 2>&1 \
+swift build -c release --product Lens -Xswiftc -warnings-as-errors 2>&1 \
     | tee "$BUILD_LOG"
 bash Scripts/build-app.sh release
-codesign --verify --deep --strict --verbose=2 Build/ScreenTrace.app
+codesign --verify --deep --strict --verbose=2 Build/Lens.app
 bash Scripts/audit-public-source.sh
 bash Scripts/test-source-snapshot-digest.sh
 swift Scripts/summarize-capture-performance.swift "$PERFORMANCE_PATH"

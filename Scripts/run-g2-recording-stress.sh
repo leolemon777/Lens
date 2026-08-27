@@ -6,7 +6,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DURATION_SECONDS="${1:-60}"
 FPS="${2:-60}"
 REPORT_PATH="${3:-$PROJECT_DIR/Build/Quality/g2-recording-stress-latest.json}"
-APP_PATH="$PROJECT_DIR/Build/ScreenTrace.app"
+APP_PATH="$PROJECT_DIR/Build/Lens.app"
 
 [[ "$DURATION_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] || {
     echo "Duration must be a number between 5 and 7200 seconds." >&2
@@ -19,7 +19,7 @@ APP_PATH="$PROJECT_DIR/Build/ScreenTrace.app"
 
 cd "$PROJECT_DIR"
 bash Scripts/build-app.sh release
-"$APP_PATH/Contents/MacOS/ScreenTrace" \
+"$APP_PATH/Contents/MacOS/Lens" \
     --g2-recording-stress \
     --duration-seconds "$DURATION_SECONDS" \
     --fps "$FPS" \

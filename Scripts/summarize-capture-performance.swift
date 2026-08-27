@@ -75,7 +75,7 @@ let applicationSupport = FileManager.default.urls(
     in: .userDomainMask
 )[0]
 let diagnosticsURL = applicationSupport
-    .appendingPathComponent("ScreenTrace/diagnostics/events.jsonl")
+    .appendingPathComponent("Lens/diagnostics/events.jsonl")
 let outputURL = URL(fileURLWithPath: arguments[1])
 
 let data = (try? Data(contentsOf: diagnosticsURL)) ?? Data()

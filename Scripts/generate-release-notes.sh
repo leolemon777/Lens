@@ -39,7 +39,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[[ "$PRODUCT" == "ScreenTrace" ]] || { echo "Unexpected product: $PRODUCT" >&2; exit 65; }
+[[ "$PRODUCT" == "Lens" ]] || { echo "Unexpected product: $PRODUCT" >&2; exit 65; }
 [[ "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] \
     || { echo "Invalid version: $APP_VERSION" >&2; exit 65; }
 [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || { echo "Invalid build number: $BUILD_NUMBER" >&2; exit 65; }
@@ -87,7 +87,7 @@ else
 fi
 
 {
-    printf '# 屏迹 ScreenTrace %s (%s) · %s\n\n' "$APP_VERSION" "$BUILD_NUMBER" "$CHANNEL_LABEL"
+    printf '# Lens %s (%s) · %s\n\n' "$APP_VERSION" "$BUILD_NUMBER" "$CHANNEL_LABEL"
     printf '本文件由发布脚本根据不可变制品清单生成。\n\n'
     printf '## 发布身份\n\n'
     printf -- '- 发布级别: %s\n' "$RELEASE_CHANNEL"
@@ -103,8 +103,8 @@ fi
     printf -- '- 默认本地处理，不包含帐号、分析埋点、广告 SDK、云上传或自动更新客户端。\n\n'
     printf '## 权限与数据\n\n'
     printf -- '- 截图和录屏需要“屏幕与系统音频录制”；可选讲解、人像和设备端转写分别需要麦克风、摄像头和语音识别权限。\n'
-    printf -- '- 项目默认位于 `~/Pictures/ScreenTrace/`；升级或卸载 App 不应删除该目录。\n'
-    printf -- '- `.screentrace` 是开放项目包；0.1 录屏/截图黄金样本和旧偏好键已通过向后兼容测试。\n\n'
+    printf -- '- 项目默认位于 `~/Pictures/Lens/`；升级或卸载 App 不应删除该目录。\n'
+    printf -- '- `.lens` 是开放项目包；0.1 录屏/截图黄金样本和旧偏好键已通过向后兼容测试。\n\n'
     printf '## 已知限制\n\n'
     printf -- '- 物理 Fn 键盘矩阵、多显示器混合缩放、浏览器/普通 App 长截图矩阵、1 小时录制、设备拔出和 VoiceOver 仍需专项真机验收。\n'
     printf -- '- 当前版本不包含生成式云模型、语义聚类、批量整理或自动更新。\n'

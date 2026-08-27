@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ITERATIONS="${1:-100}"
 REPORT_PATH="${2:-$PROJECT_DIR/Build/Quality/g1-screenshot-stress-latest.json}"
-APP_PATH="$PROJECT_DIR/Build/ScreenTrace.app"
+APP_PATH="$PROJECT_DIR/Build/Lens.app"
 
 [[ "$ITERATIONS" =~ ^[0-9]+$ ]] && (( ITERATIONS >= 1 && ITERATIONS <= 1000 )) || {
     echo "Iterations must be an integer between 1 and 1000." >&2
@@ -14,7 +14,7 @@ APP_PATH="$PROJECT_DIR/Build/ScreenTrace.app"
 
 cd "$PROJECT_DIR"
 bash Scripts/build-app.sh release
-"$APP_PATH/Contents/MacOS/ScreenTrace" \
+"$APP_PATH/Contents/MacOS/Lens" \
     --g1-screenshot-stress \
     --iterations "$ITERATIONS" \
     --report "$REPORT_PATH"

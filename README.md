@@ -1,6 +1,6 @@
-# 屏迹 ScreenTrace
+# Lens
 
-屏迹是一款本地优先、计划开源、AI 原生的截图与录屏工作台：一按即捕捉，停下即成品，之后永远找得到。
+Lens 是一款本地优先、计划开源、AI 原生的截图与录屏工作台：一按即捕捉，停下即成品，之后永远找得到。
 
 当前仓库是 macOS 原生 Beta 候选，已跑通从捕获、开放项目包、事件轨到自动成片、编辑和导出的完整技术链路；公开分发仍需 Developer ID 签名、公证与剩余真机矩阵。
 
@@ -11,7 +11,7 @@
 ## 已经跑通
 
 - 默认 `Fn + Control`：直接进入快速区域截图；可在设置中录入任意安全组合，内置 `Control + Option + 1` 无 Fn 备用；
-- 默认 `Fn + Space`：打开原生“迹光玻璃”操作中心，录制时切换为控制条；可自定义并内置 `Control + Option + 2` 备用；
+- 默认 `Fn + Space`：打开原生“Lens Glass”操作中心，录制时切换为控制条；可自定义并内置 `Control + Option + 2` 备用；
 - 区域、独立窗口、多窗口和当前显示器截图路径；区域拖动自动吸附显示器/普通窗口边缘并显示辅助线，Option 可暂停吸附，按住鼠标时方向键可精细调整；窗口模式支持真实层级悬停高亮，多窗口模式支持跨显示器点选/反选、Return 确认和按桌面层级透明合成；
 - PNG 写入、剪贴板、Quick Access 与贴图窗口；贴图悬停工具条支持复制、缩放、四档透明度、位置锁定和关闭，右键可在 Finder 定位项目，Esc/Command 快捷键可操作；
 - 选区 OCR：本地 Apple Vision 识别、文字立即复制，并保留 `analysis/ocr.json`；普通截图与长截图也会在复制完成后静默后台 OCR，不阻塞捕获；
@@ -20,7 +20,7 @@
 - 截图可选渐变/纯色背景、四组颜色预设、留白、圆角和阴影，支持自动、1:1、4:3、16:9、9:16 画布且不裁切原图；可单独导出 PNG 或 JPEG，样式与标注一起以非破坏计划保存；
 - 滚动长截图：选区后自动周期取帧，用户自然向下滚动即可去重、对齐并拼接；支持固定页头、安全上限、完成/取消玻璃控制条，并要求滚动后的画面连续稳定后才入列，避免持续动画被误拼成异常高度；
 - 长截图结果立即复制与保存，同时保留 `raw/scrolling/` 源帧和 `events/scrolling-capture.json` 拼接计划；
-- 原生屏迹库：按时间浏览截图与录屏，支持标题、标签、摘要、章节、OCR、转写的统一本地搜索，以及类型筛选、打开、复制、标注和 Finder 定位；
+- 原生 Lens 库：按时间浏览截图与录屏，支持标题、标签、摘要、章节、OCR、转写的统一本地搜索，以及类型筛选、打开、复制、标注和 Finder 定位；
 - ScreenCaptureKit 区域、独立窗口、当前显示器 H.264 原始录屏与系统声音；录制菜单可持久化选择 30 FPS 省空间或 60 FPS 更流畅，并将实际帧率写入项目元数据；
 - 录屏菜单可独立开关系统声音、麦克风与摄像头；讲解声写入 `raw/microphone.caf`，人像写入 `raw/camera.mov`，均不混进屏幕 MP4；
 - 录制控制条支持真实暂停/继续：每段屏幕、系统声、麦克风、摄像头和事件数据先独立安全写盘，停止时无重编码合并，暂停时间不会进入成片时间轴；“丢弃并重录”必须二次确认，先安全停止并标记可恢复状态，再移入系统废纸篓且成功后才按原来源重录；控制条持续显示项目磁盘可用空间，低于 5 GiB 警告、低于 1 GiB 自动安全停止并保留已写入分片；
@@ -30,7 +30,7 @@
 - 独立的指针、点击、快捷键和前台应用 JSONL 事件轨及中断恢复状态；键盘轨只保留 Command/Control 快捷键与非文本控制键，普通文字、密码和仅 Option 输入不记录，应用轨不保存窗口标题；
 - 自动运镜、光标平滑/替换、点击反馈、背景、圆角、阴影与人像画中画的非破坏性编辑计划；
 - 自动预览可合成圆形/圆角矩形摄像头人像，支持四角/自由定位、镜像、边距与阴影并保留系统声音；摄像头轨损坏时自动退回屏幕预览；
-- 屏迹库的录屏卡片可直接进入原生统一编辑器：视频预览、入/出点、分割、片段移出、0.5×–3× 速度、撤销/重做与未保存防护；
+- Lens 库的录屏卡片可直接进入原生统一编辑器：视频预览、入/出点、分割、片段移出、0.5×–3× 速度、撤销/重做与未保存防护；
 - 每个片段可对下一段设置直接切换、交叉叠化或淡入黑场；转场使用真实重叠时间线，并同步作用于屏幕、系统声、麦克风与摄像头轨，短片段会安全限幅；
 - 编辑器可在真实比例画布直接拖动/缩放摄像头，显示时间线菱形标记，并新增、更新、删除、跳转和选择五种源时间关键帧过渡；一次连续手势只产生一次撤销记录；
 - 摄像头会在点击聚焦与活动字幕前后平滑避让；字幕同步缩窄安全区，编辑器预览与最终导出共用同一放置规划器；
@@ -43,9 +43,9 @@
 - 本地智能整理会生成开放 `analysis/insights.json`：标题建议、抽取式摘要、标签、要点、录屏章节及邮箱/电话/卡号/证件号/凭据提示；命中的原值不会复制进整理文件；
 - 整理面板支持人工校正标题、摘要与标签；校正作为独立覆盖层保存，重新整理不会覆盖，OCR、转写和原始媒体始终不变；
 - 自动导出提供原画、平衡和轻量三档可复现预设；平衡/轻量分别限制最高 30/24 fps，轻量改用 HEVC 在保持源分辨率的前提下压缩体积，旧项目保持原画行为，失败时仍保留原始录制；
-- 开放 `.screentrace` 项目包；
+- 开放 `.lens` 项目包；
 - 版本化核心 worker 协议已定义 Swift/Rust/Windows 共用的能力握手、请求关联、稳定错误码和 1 MiB 上限的大端长度前缀 JSON 帧；支持分片与多帧输入，并提供请求/响应/错误的语言无关字节黄金文件；Swift stdio 运行时适配器已覆盖显式可执行文件、响应限额、超时/崩溃/不兼容回退，当前生产链仍使用 Swift；
-- 原生设置与权限中心，覆盖屏幕、麦克风、摄像头和辅助功能；标准应用菜单提供 `Command + Q` 退出；内置严格白名单的本地 JSONL 诊断日志、512 KiB 双文件轮转、异常退出/强退会话检测、ScreenTrace `.ips` 脱敏崩溃指纹与可复制诊断摘要，不记录媒体、正文、调用栈、窗口标题或项目路径；
+- 原生设置与权限中心，覆盖屏幕、麦克风、摄像头和辅助功能；标准应用菜单提供 `Command + Q` 退出；内置严格白名单的本地 JSONL 诊断日志、512 KiB 双文件轮转、异常退出/强退会话检测、 Lens `.ips` 脱敏崩溃指纹与可复制诊断摘要，不记录媒体、正文、调用栈、窗口标题或项目路径；
 - 351 项自动测试，覆盖单元、快捷键配置/冲突回退/持久化、旧偏好升级兼容、后台事件纯值桥接与停止代际失效、原生应用菜单、捕获几何、选区吸附/Option 绕过/方向键精调事件链、多窗口像素层级与项目来源往返、安装版真实截图及截图落盘/剪贴板/Quick Access 100 次交付回归、贴图缩放/透明度状态和悬停工具条渲染、录制帧率偏好与元数据兼容、转写语言偏好/设备端 locale 映射/后台授权回调隔离、录制控制条动态辅助功能语义、录制重录过渡防护、强退分片恢复与处理中项目续跑、可播未完成分片恢复/越界事件过滤/侧轨时长裁齐、只读/磁盘失败恢复、隐私收敛事件轨/本地诊断日志/会话异常退出检测/脱敏崩溃指纹、核心 worker 协议/黄金帧/帧编解码/进程回退、开放项目 schema/旧版黄金样本/未来版本读写拒绝、对象标注、截图画布样式与 PNG/JPEG 编码、长截图去重/拼接/动态画面稳定门控/源帧归档、非破坏性时间线、真实重叠转场、源时间视频标注、自动倍率实时重算、点击双波纹渲染、原生 AVPlayerView 播放分支、AppKit 60 Hz 实时运镜与播放头、播放时钟隔离、独立音轨、分片归档/合并、磁盘空间预警/安全停止、动态画中画、旁白检测/自动压低、K 加权响度、降噪与音频混合、项目兼容、持久索引、分段转写、字幕时码/分句编辑与烧录、三档导出、本地整理、隐私脱敏、搜索、深色高对比度、降低透明度、减少动态效果、G0 场景清单与常规 UI 快照、渲染及媒体集成测试。
 
 ## 尚未完成
@@ -60,34 +60,34 @@
 ```bash
 swift test
 bash Scripts/build-app.sh
-open Build/ScreenTrace.app
+open Build/Lens.app
 ```
 
 发布候选包应使用 `bash Scripts/build-release-artifacts.sh`；脚本会生成 Release App、严格校验签名结构，并在 `Build/Symbols/` 生成与 Mach-O UUID 一致的 dSYM 及 zip 归档。
 
 G1 真实截图压力门槛使用 `bash Scripts/run-g1-screenshot-stress.sh`；它以 Release App 连续验证真实截图、原子落盘、系统剪贴板和 Quick Access PNG 文件提供，输出聚合 P50/P95，运行后恢复原剪贴板并删除临时项目。
 
-本地可安装 DMG、App zip、dSYM、SHA-256 清单、机器可读 `release.json` 与发布说明使用 `bash Scripts/package-macos-release.sh`，输出到 `Build/Releases/`。发布清单记录版本、发布级别、最低系统、Git commit/工作区状态、完整源码快照 SHA-256（已跟踪文件和未跟踪但未忽略文件）、Mach-O UUID、签名身份、Team ID、公证 request ID，以及三类制品的尺寸和摘要；发布说明自动列出能力、已知限制、权限、数据路径、兼容性和四类核心文件摘要，其自身也进入校验和清单。默认发布级别为 `beta`、签名为 ad-hoc 且跳过公证；发布环境需通过 `SCREENTRACE_SIGNING_IDENTITY`、`SCREENTRACE_NOTARY_PROFILE`、`SCREENTRACE_VERSION`、`SCREENTRACE_BUILD_NUMBER` 和 `SCREENTRACE_RELEASE_CHANNEL` 显式提供签名、公证与发布身份。公证凭据只通过 `notarytool` 钥匙串 profile 读取，不写入仓库或命令行。
+本地可安装 DMG、App zip、dSYM、SHA-256 清单、机器可读 `release.json` 与发布说明使用 `bash Scripts/package-macos-release.sh`，输出到 `Build/Releases/`。发布清单记录版本、发布级别、最低系统、Git commit/工作区状态、完整源码快照 SHA-256（已跟踪文件和未跟踪但未忽略文件）、Mach-O UUID、签名身份、Team ID、公证 request ID，以及三类制品的尺寸和摘要；发布说明自动列出能力、已知限制、权限、数据路径、兼容性和四类核心文件摘要，其自身也进入校验和清单。默认发布级别为 `beta`、签名为 ad-hoc 且跳过公证；发布环境需通过 `LENS_SIGNING_IDENTITY`、`LENS_NOTARY_PROFILE`、`LENS_VERSION`、`LENS_BUILD_NUMBER` 和 `LENS_RELEASE_CHANNEL` 显式提供签名、公证与发布身份。公证凭据只通过 `notarytool` 钥匙串 profile 读取，不写入仓库或命令行。
 
-生成后用 `bash Scripts/verify-macos-release.sh --development Build/Releases/ScreenTrace-0.1.0-1-release.json` 独立反查开发包结构，并核对当前源码快照摘要；开发模式允许清单诚实记录 dirty，公开模式仍强制 clean commit。去掉 `--development` 即进入公开发布门槛，会额外要求根许可证、Developer ID、Team ID、App/DMG 公证 Accepted、Staple 和 Gatekeeper 全部通过；公开门槛会一次列出所有阻断项，避免修完一项后才看到下一项。
+生成后用 `bash Scripts/verify-macos-release.sh --development Build/Releases/Lens-0.1.0-1-release.json` 独立反查开发包结构，并核对当前源码快照摘要；开发模式允许清单诚实记录 dirty，公开模式仍强制 clean commit。去掉 `--development` 即进入公开发布门槛，会额外要求根许可证、Developer ID、Team ID、App/DMG 公证 Accepted、Staple 和 Gatekeeper 全部通过；公开门槛会一次列出所有阻断项，避免修完一项后才看到下一项。
 
 通过校验的候选可用 `bash Scripts/archive-macos-release.sh --development <release.json> Build/ReleaseArchives` 创建带 Git commit 前缀的不可覆盖档案，再用 `bash Scripts/verify-macos-release-archive.sh --development <archive-directory>` 独立复验。档案保留全部安装/符号/清单/说明文件、原始 SHA-256 清单、Git commit 和源码快照摘要；历史档案复验不依赖当前工作区仍停留在当时源码，但会核对归档元数据与受校验和保护的发布清单完全一致。公开档案必须移除 `--development` 并通过正式发布门槛。
 
 公开源码前执行 `bash Scripts/audit-public-source.sh`；它会拒绝被 Git 跟踪的媒体、项目包、崩溃报告、发布/签名文件、超大或非文本文件，以及常见私钥和访问令牌格式。
 
-离线崩溃符号化使用 `Scripts/symbolicate-screen-trace-crash.sh <ScreenTrace.ips> <ScreenTrace.dSYM>`。脚本会先校验 Bundle ID 和 UUID，不一致时拒绝继续；仅符号化故障线程中 ScreenTrace 自身镜像的帧。
+离线崩溃符号化使用 `Scripts/symbolicate-lens-crash.sh <Lens.ips> <Lens.dSYM>`。脚本会先校验 Bundle ID 和 UUID，不一致时拒绝继续；仅符号化故障线程中 Lens 自身镜像的帧。
 
-首次真实截图或录屏时，需要在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”中授权 ScreenTrace。自动化工具无法代替用户授予该系统隐私权限；物理 `Fn` 组合键也需要手动验收。
+首次真实截图或录屏时，需要在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”中授权 Lens。自动化工具无法代替用户授予该系统隐私权限；物理 `Fn` 组合键也需要手动验收。
 
 ## 项目资料
 
-- [顶级品质产品 SPEC PLAN](docs/屏迹-1.0-顶级品质产品-SPEC-PLAN.md)
-- [产品与研发总计划](docs/屏迹-1.0-产品与研发总计划.md)
-- [竞品能力吸收矩阵](docs/屏迹-竞品能力吸收矩阵.md)
-- [迹光玻璃 UI 规范](docs/屏迹-迹光玻璃UI规范.md)
+- [顶级品质产品 SPEC PLAN](docs/Lens-1.0-顶级品质产品-SPEC-PLAN.md)
+- [产品与研发总计划](docs/Lens-1.0-产品与研发总计划.md)
+- [竞品能力吸收矩阵](docs/Lens-竞品能力吸收矩阵.md)
+- [Lens Glass UI 规范](docs/Lens-Glass-UI规范.md)
 - [当前测试记录](docs/测试记录-2026-08-09.md)
-- [核心工作进程协议 v0.1](docs/屏迹核心工作进程协议-v0.1.md)
-- [开放项目格式 v0.1](docs/屏迹开放项目格式-v0.1.md)
+- [核心工作进程协议 v0.1](docs/Lens 核心工作进程协议-v0.1.md)
+- [开放项目格式 v0.1](docs/Lens 开放项目格式-v0.1.md)
 - [macOS 发布检查清单](docs/发布检查清单.md)
 - [发布撤回与回滚手册](docs/发布撤回与回滚手册.md)
 - [第三方依赖与素材清单](docs/第三方依赖与素材清单.md)

@@ -5,7 +5,7 @@
 *.xcuserstate
 xcuserdata/
 DerivedData/
-*.screentrace
+*.lens
 *.mp4
 *.mov
 

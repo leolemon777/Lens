@@ -5,11 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TRACE_PACKAGE="${1:-}"
 REPORT_PATH="${2:-$PROJECT_DIR/Build/Quality/g3-project-roundtrip-installed-source.json}"
-APP_PATH="${SCREENTRACE_APP_PATH:-/Applications/ScreenTrace.app}"
-EXECUTABLE="$APP_PATH/Contents/MacOS/ScreenTrace"
+APP_PATH="${LENS_APP_PATH:-/Applications/Lens.app}"
+EXECUTABLE="$APP_PATH/Contents/MacOS/Lens"
 
 if [[ -z "$TRACE_PACKAGE" ]]; then
-    echo "Usage: $0 <recording.screentrace> [report.json]" >&2
+    echo "Usage: $0 <recording.lens> [report.json]" >&2
     exit 64
 fi
 if [[ ! -d "$TRACE_PACKAGE" ]]; then
@@ -17,7 +17,7 @@ if [[ ! -d "$TRACE_PACKAGE" ]]; then
     exit 66
 fi
 if [[ ! -x "$EXECUTABLE" ]]; then
-    echo "Missing installed ScreenTrace executable: $EXECUTABLE" >&2
+    echo "Missing installed Lens executable: $EXECUTABLE" >&2
     exit 66
 fi
 

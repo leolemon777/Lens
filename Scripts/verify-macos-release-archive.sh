@@ -27,16 +27,16 @@ safe_filename() {
     [[ -n "$filename" && "$filename" != */* && "$filename" != "." && "$filename" != ".." ]]
 }
 
-metadata_count="$(find "$ARCHIVE_DIR" -mindepth 1 -maxdepth 1 -type f -name 'ScreenTrace-*-archive.json' | wc -l | tr -d ' ')"
+metadata_count="$(find "$ARCHIVE_DIR" -mindepth 1 -maxdepth 1 -type f -name 'Lens-*-archive.json' | wc -l | tr -d ' ')"
 [[ "$metadata_count" -eq 1 ]] || fail "expected exactly one archive metadata file"
-METADATA_PATH="$(find "$ARCHIVE_DIR" -mindepth 1 -maxdepth 1 -type f -name 'ScreenTrace-*-archive.json' -print -quit)"
+METADATA_PATH="$(find "$ARCHIVE_DIR" -mindepth 1 -maxdepth 1 -type f -name 'Lens-*-archive.json' -print -quit)"
 
 metadata_value() {
     plutil -extract "$1" raw "$METADATA_PATH"
 }
 
 [[ "$(metadata_value schemaVersion)" == "1" ]] || fail "unsupported archive metadata schema"
-[[ "$(metadata_value product)" == "ScreenTrace" ]] || fail "unexpected archived product"
+[[ "$(metadata_value product)" == "Lens" ]] || fail "unexpected archived product"
 APP_VERSION="$(metadata_value version)"
 BUILD_NUMBER="$(metadata_value buildNumber)"
 RELEASE_CHANNEL="$(metadata_value releaseChannel)"
@@ -44,7 +44,7 @@ GIT_COMMIT="$(metadata_value gitCommit)"
 SOURCE_SNAPSHOT_SHA256="$(metadata_value sourceSnapshotSHA256)"
 MACHO_UUID="$(metadata_value machOUUID)"
 RELEASE_MANIFEST_FILENAME="$(metadata_value releaseManifest)"
-ARTIFACT_NAME="ScreenTrace-$APP_VERSION-$BUILD_NUMBER"
+ARTIFACT_NAME="Lens-$APP_VERSION-$BUILD_NUMBER"
 ARCHIVE_METADATA_FILENAME="$ARTIFACT_NAME-archive.json"
 ARCHIVE_CHECKSUMS_FILENAME="$ARTIFACT_NAME-ARCHIVE_SHA256SUMS.txt"
 RELEASE_CHECKSUMS_FILENAME="$ARTIFACT_NAME-SHA256SUMS.txt"

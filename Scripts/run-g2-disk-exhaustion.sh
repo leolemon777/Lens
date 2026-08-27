@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CAPTURE_SECONDS="${1:-30}"
 REPORT_PATH="${2:-$PROJECT_DIR/Build/Quality/g2-recording-disk-exhaustion-latest.json}"
-EXECUTABLE="/Applications/ScreenTrace.app/Contents/MacOS/ScreenTrace"
-MOUNT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ScreenTrace-g2-disk.XXXXXX")"
+EXECUTABLE="/Applications/Lens.app/Contents/MacOS/Lens"
+MOUNT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/Lens-g2-disk.XXXXXX")"
 IMAGE_WORK_DIR="$(mktemp -d "$PROJECT_DIR/Build/Quality/g2-disk-image.XXXXXX")"
 IMAGE_PATH="$IMAGE_WORK_DIR/fault.dmg"
 FILLER_PATH="$MOUNT_DIR/reserved-space.bin"
@@ -31,11 +31,11 @@ trap cleanup EXIT
     exit 64
 }
 if [[ ! -x "$EXECUTABLE" ]]; then
-    echo "Missing installed ScreenTrace executable." >&2
+    echo "Missing installed Lens executable." >&2
     exit 66
 fi
-if pgrep -x ScreenTrace >/dev/null 2>&1; then
-    echo "ScreenTrace is already running." >&2
+if pgrep -x Lens >/dev/null 2>&1; then
+    echo "Lens is already running." >&2
     exit 73
 fi
 case "$REPORT_PATH" in
@@ -48,7 +48,7 @@ mkdir -p "$(dirname "$REPORT_PATH")"
 # consuming the user's real project volume. Keep a removable reservation:
 # after the writer fails, releasing it gives recovery enough room to remux.
 hdiutil create -quiet -size 256m -fs HFS+J \
-    -volname ScreenTraceG2DiskFault "$IMAGE_PATH"
+    -volname LensG2DiskFault "$IMAGE_PATH"
 hdiutil attach -quiet -nobrowse -mountpoint "$MOUNT_DIR" "$IMAGE_PATH"
 IS_MOUNTED=1
 

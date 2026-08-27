@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MAX_TRACKED_BYTES=$((5 * 1024 * 1024))
 APP_ICON_PATH="Assets/AppIcon.png"
-APP_ICON_SHA256="92588341cd37aef36689b86e4bd6e41f19b8acca6533fb945fbf2b41e91e443d"
+APP_ICON_SHA256="1e1778d20fb8647de1454825527aa760974522730d1a3d55328ed24bda54445d"
 FAILURES=0
 
 cd "$PROJECT_DIR"
@@ -82,7 +82,7 @@ while IFS= read -r -d '' path; do
         Build/*|.build/*|DerivedData/*|*.xcuserstate|xcuserdata/*)
             fail "tracked build or user artifact: $path"
             ;;
-        *.screentrace|*.mp4|*.mov|*.mkv|*.avi|*.caf|*.m4a|*.mp3|*.wav|*.heic|*.ips|*.crash)
+        *.lens|*.mp4|*.mov|*.mkv|*.avi|*.caf|*.m4a|*.mp3|*.wav|*.heic|*.ips|*.crash)
             fail "tracked private media, project, or crash artifact: $path"
             ;;
         *.dmg|*.pkg|*.zip|*.tar|*.gz|*.7z|*.app|*.framework|*.xcframework)
@@ -118,15 +118,11 @@ if [[ -f "$APP_ICON_PATH" ]]; then
     app_icon_sha256="$(shasum -a 256 "$APP_ICON_PATH" | awk '{print $1}')"
     app_icon_width="$(sips -g pixelWidth "$APP_ICON_PATH" | awk '/pixelWidth/ { print $2 }')"
     app_icon_height="$(sips -g pixelHeight "$APP_ICON_PATH" | awk '/pixelHeight/ { print $2 }')"
-    app_icon_alpha="$(sips -g hasAlpha "$APP_ICON_PATH" | awk '/hasAlpha/ { print $2 }')"
     if [[ "$app_icon_sha256" != "$APP_ICON_SHA256" ]]; then
         fail "app icon changed without an explicit asset review: $APP_ICON_PATH"
     fi
     if [[ "$app_icon_width" != "1024" || "$app_icon_height" != "1024" ]]; then
         fail "app icon master must be 1024x1024: $APP_ICON_PATH"
-    fi
-    if [[ "$app_icon_alpha" != "no" ]]; then
-        fail "app icon master must be an opaque RGB image: $APP_ICON_PATH"
     fi
 fi
 

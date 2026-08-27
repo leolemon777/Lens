@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CAPTURE_SECONDS="${1:-17}"
 REPORT_PATH="${2:-$PROJECT_DIR/Build/Quality/g2-recording-crash-recovery-latest.json}"
-EXECUTABLE="/Applications/ScreenTrace.app/Contents/MacOS/ScreenTrace"
+EXECUTABLE="/Applications/Lens.app/Contents/MacOS/Lens"
 WORK_ROOT="$(mktemp -d "$PROJECT_DIR/Build/Quality/g2-crash-work.XXXXXX")"
 READY_MARKER="$WORK_ROOT/ready.marker"
 SEED_REPORT="$WORK_ROOT/seed-should-not-complete.json"
@@ -43,11 +43,11 @@ trap cleanup EXIT
     exit 64
 }
 if [[ ! -x "$EXECUTABLE" ]]; then
-    echo "Missing installed ScreenTrace executable." >&2
+    echo "Missing installed Lens executable." >&2
     exit 66
 fi
-if pgrep -x ScreenTrace >/dev/null 2>&1; then
-    echo "ScreenTrace is already running." >&2
+if pgrep -x Lens >/dev/null 2>&1; then
+    echo "Lens is already running." >&2
     exit 73
 fi
 

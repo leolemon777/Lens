@@ -1,6 +1,6 @@
-# 参与贡献 ScreenTrace
+# 参与贡献 Lens
 
-感谢你帮助改进屏迹。当前项目处于 macOS Alpha 验收前阶段，优先级是捕获可靠性、原始素材安全、本地隐私、可恢复性和可编辑的非破坏计划。
+感谢你帮助改进 Lens。当前项目处于 macOS Alpha 验收前阶段，优先级是捕获可靠性、原始素材安全、可恢复性和可编辑的非破坏计划。
 
 > 许可：本项目采用 [MIT 许可证](LICENSE)。提交 PR 即表示你同意以相同许可证授权你贡献的代码。
 
@@ -15,24 +15,24 @@
 ```bash
 swift test
 bash Scripts/build-app.sh
-open Build/ScreenTrace.app
+open Build/Lens.app
 ```
 
 Release 严格编译和本地候选包：
 
 ```bash
-swift build -c release --product ScreenTrace -Xswiftc -warnings-as-errors
+swift build -c release --product Lens -Xswiftc -warnings-as-errors
 bash Scripts/build-release-artifacts.sh
 ```
 
-本地脚本会优先使用钥匙串中的 `ScreenTrace Local Code Signing` 或
+本地脚本会优先使用钥匙串中的 `Lens Local Code Signing` 或
 `PathShot Local Code Signing` 稳定开发身份，避免每次重建后 macOS TCC 权限失配；
 找不到时才退回 ad-hoc 签名。两者都不能代替 Developer ID 签名和 Apple 公证。
 
 ## 代码结构
 
-- `Sources/ScreenTraceCore/`：平台无关的开放项目格式、编辑/运镜规划、索引、转写与整理数据结构。
-- `Sources/ScreenTraceMac/`：macOS 捕获、权限、媒体渲染与 AppKit/SwiftUI 界面。
+- `Sources/LensCore/`：平台无关的开放项目格式、编辑/运镜规划、索引、转写与整理数据结构。
+- `Sources/LensMac/`：macOS 捕获、权限、媒体渲染与 AppKit/SwiftUI 界面。
 - `Tests/`：纯逻辑、AppKit 事件、像素、真实媒体导出和 UI 快照验证。
 - `docs/`：产品总计划、格式边界、测试记录与发布门槛。
 

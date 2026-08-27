@@ -3,11 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-APP_DIR="$PROJECT_DIR/Build/ScreenTrace.app"
+APP_DIR="$PROJECT_DIR/Build/Lens.app"
 PLIST_PATH="$APP_DIR/Contents/Info.plist"
-SIGNING_IDENTITY="${SCREENTRACE_SIGNING_IDENTITY:--}"
-NOTARY_PROFILE="${SCREENTRACE_NOTARY_PROFILE:-}"
-RELEASE_CHANNEL="${SCREENTRACE_RELEASE_CHANNEL:-beta}"
+SIGNING_IDENTITY="${LENS_SIGNING_IDENTITY:--}"
+NOTARY_PROFILE="${LENS_NOTARY_PROFILE:-}"
+RELEASE_CHANNEL="${LENS_RELEASE_CHANNEL:-beta}"
 APP_NOTARY_REQUEST_ID="not-submitted"
 APP_NOTARY_STATUS="not-submitted"
 DMG_NOTARY_REQUEST_ID="not-submitted"
@@ -15,19 +15,19 @@ DMG_NOTARY_STATUS="not-submitted"
 SOURCE_SNAPSHOT_BEFORE="$("$SCRIPT_DIR/source-snapshot-digest.sh" "$PROJECT_DIR")"
 
 if [[ -n "$NOTARY_PROFILE" && "$SIGNING_IDENTITY" == "-" ]]; then
-    echo "SCREENTRACE_NOTARY_PROFILE requires a Developer ID signing identity." >&2
+    echo "LENS_NOTARY_PROFILE requires a Developer ID signing identity." >&2
     exit 64
 fi
 case "$RELEASE_CHANNEL" in
     alpha|beta|stable) ;;
-    *) echo "SCREENTRACE_RELEASE_CHANNEL must be alpha, beta, or stable." >&2; exit 64 ;;
+    *) echo "LENS_RELEASE_CHANNEL must be alpha, beta, or stable." >&2; exit 64 ;;
 esac
 
 "$SCRIPT_DIR/build-release-artifacts.sh"
 
 APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST_PATH")"
 BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST_PATH")"
-ARTIFACT_NAME="ScreenTrace-$APP_VERSION-$BUILD_VERSION"
+ARTIFACT_NAME="Lens-$APP_VERSION-$BUILD_VERSION"
 RELEASES_DIR="$PROJECT_DIR/Build/Releases"
 SYMBOL_ARCHIVE="$PROJECT_DIR/Build/Symbols/$ARTIFACT_NAME.dSYM.zip"
 APP_ARCHIVE="$RELEASES_DIR/$ARTIFACT_NAME.app.zip"
@@ -36,7 +36,7 @@ RELEASE_SYMBOLS="$RELEASES_DIR/$ARTIFACT_NAME.dSYM.zip"
 CHECKSUMS_PATH="$RELEASES_DIR/$ARTIFACT_NAME-SHA256SUMS.txt"
 RELEASE_MANIFEST_PATH="$RELEASES_DIR/$ARTIFACT_NAME-release.json"
 RELEASE_NOTES_PATH="$RELEASES_DIR/$ARTIFACT_NAME-RELEASE_NOTES.md"
-TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ScreenTrace-release.XXXXXX")"
+TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/Lens-release.XXXXXX")"
 STAGING_DIR="$TEMP_ROOT/staging"
 MOUNT_DIR="$TEMP_ROOT/mount"
 TEMP_DMG="$TEMP_ROOT/$ARTIFACT_NAME.dmg"
@@ -75,10 +75,10 @@ if [[ -n "$NOTARY_PROFILE" ]]; then
     codesign --verify --deep --strict --verbose=2 "$APP_DIR"
     spctl --assess --type execute --verbose=4 "$APP_DIR"
 else
-    echo "Notarization skipped: SCREENTRACE_NOTARY_PROFILE is not set." >&2
+    echo "Notarization skipped: LENS_NOTARY_PROFILE is not set." >&2
 fi
 
-ditto "$APP_DIR" "$STAGING_DIR/ScreenTrace.app"
+ditto "$APP_DIR" "$STAGING_DIR/Lens.app"
 ln -s /Applications "$STAGING_DIR/Applications"
 
 ditto -c -k --keepParent "$APP_DIR" "$APP_ARCHIVE"
@@ -86,7 +86,7 @@ unzip -tq "$APP_ARCHIVE"
 ditto "$SYMBOL_ARCHIVE" "$RELEASE_SYMBOLS"
 
 hdiutil create \
-    -volname "ScreenTrace" \
+    -volname "Lens" \
     -srcfolder "$STAGING_DIR" \
     -format UDZO \
     -imagekey zlib-level=9 \
@@ -130,11 +130,11 @@ hdiutil attach \
     "$DMG_PATH" >/dev/null
 MOUNTED=1
 
-codesign --verify --deep --strict "$MOUNT_DIR/ScreenTrace.app"
-plutil -lint "$MOUNT_DIR/ScreenTrace.app/Contents/Info.plist"
+codesign --verify --deep --strict "$MOUNT_DIR/Lens.app"
+plutil -lint "$MOUNT_DIR/Lens.app/Contents/Info.plist"
 if [[ -n "$NOTARY_PROFILE" ]]; then
-    xcrun stapler validate "$MOUNT_DIR/ScreenTrace.app"
-    spctl --assess --type execute --verbose=4 "$MOUNT_DIR/ScreenTrace.app"
+    xcrun stapler validate "$MOUNT_DIR/Lens.app"
+    spctl --assess --type execute --verbose=4 "$MOUNT_DIR/Lens.app"
 fi
 if [[ ! -L "$MOUNT_DIR/Applications" || "$(readlink "$MOUNT_DIR/Applications")" != "/Applications" ]]; then
     echo "DMG Applications link is missing or invalid." >&2
@@ -146,7 +146,7 @@ MOUNTED=0
 
 APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST_PATH")"
 MINIMUM_MACOS="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$PLIST_PATH")"
-MACHO_UUID="$(xcrun dwarfdump --uuid "$APP_DIR/Contents/MacOS/ScreenTrace" | awk 'NR == 1 { print $2 }')"
+MACHO_UUID="$(xcrun dwarfdump --uuid "$APP_DIR/Contents/MacOS/Lens" | awk 'NR == 1 { print $2 }')"
 GIT_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
 SOURCE_SNAPSHOT_SHA256="$("$SCRIPT_DIR/source-snapshot-digest.sh" "$PROJECT_DIR")"
 if [[ "$SOURCE_SNAPSHOT_SHA256" != "$SOURCE_SNAPSHOT_BEFORE" ]]; then
@@ -189,7 +189,7 @@ DSYM_ARCHIVE_SIZE="$(stat -f '%z' "$RELEASE_SYMBOLS")"
 
 plutil -create xml1 "$RELEASE_MANIFEST_PLIST"
 plutil -insert schemaVersion -integer 1 "$RELEASE_MANIFEST_PLIST"
-plutil -insert product -string "ScreenTrace" "$RELEASE_MANIFEST_PLIST"
+plutil -insert product -string "Lens" "$RELEASE_MANIFEST_PLIST"
 plutil -insert bundleIdentifier -string "$APP_BUNDLE_ID" "$RELEASE_MANIFEST_PLIST"
 plutil -insert version -string "$APP_VERSION" "$RELEASE_MANIFEST_PLIST"
 plutil -insert buildNumber -string "$BUILD_VERSION" "$RELEASE_MANIFEST_PLIST"

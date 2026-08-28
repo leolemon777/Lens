@@ -6,6 +6,8 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MAX_TRACKED_BYTES=$((5 * 1024 * 1024))
 APP_ICON_PATH="Assets/AppIcon.png"
 APP_ICON_SHA256="1e1778d20fb8647de1454825527aa760974522730d1a3d55328ed24bda54445d"
+APP_ICON_SOURCE_PATH="Assets/Lens-AppIcon-Source.png"
+APP_ICON_SOURCE_SHA256="46ba184af5f7df023f935e49f73228984041fc4ec8e39fdbe419a431d387e2d1"
 FAILURES=0
 
 cd "$PROJECT_DIR"
@@ -21,6 +23,7 @@ required_files=(
     "SECURITY.md"
     "CONTRIBUTING.md"
     "$APP_ICON_PATH"
+    "$APP_ICON_SOURCE_PATH"
     "docs/第三方依赖与素材清单.md"
     "docs/品牌资产说明.md"
     "docs/发布检查清单.md"
@@ -103,7 +106,7 @@ while IFS= read -r -d '' path; do
         text/*|application/json|application/xml|application/x-empty|application/x-shellscript|inode/x-empty)
             ;;
         image/png)
-            if [[ "$path" != "$APP_ICON_PATH" ]]; then
+            if [[ "$path" != "$APP_ICON_PATH" && "$path" != "$APP_ICON_SOURCE_PATH" ]]; then
                 fail "tracked image is not an explicitly audited brand asset: $path"
             fi
             ;;
@@ -123,6 +126,18 @@ if [[ -f "$APP_ICON_PATH" ]]; then
     fi
     if [[ "$app_icon_width" != "1024" || "$app_icon_height" != "1024" ]]; then
         fail "app icon master must be 1024x1024: $APP_ICON_PATH"
+    fi
+fi
+
+if [[ -f "$APP_ICON_SOURCE_PATH" ]]; then
+    app_icon_source_sha256="$(shasum -a 256 "$APP_ICON_SOURCE_PATH" | awk '{print $1}')"
+    app_icon_source_width="$(sips -g pixelWidth "$APP_ICON_SOURCE_PATH" | awk '/pixelWidth/ { print $2 }')"
+    app_icon_source_height="$(sips -g pixelHeight "$APP_ICON_SOURCE_PATH" | awk '/pixelHeight/ { print $2 }')"
+    if [[ "$app_icon_source_sha256" != "$APP_ICON_SOURCE_SHA256" ]]; then
+        fail "app icon source changed without an explicit asset review: $APP_ICON_SOURCE_PATH"
+    fi
+    if [[ "$app_icon_source_width" != "1254" || "$app_icon_source_height" != "1254" ]]; then
+        fail "app icon source must remain 1254x1254: $APP_ICON_SOURCE_PATH"
     fi
 fi
 

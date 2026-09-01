@@ -53,10 +53,14 @@ final class CaptionOverlayRenderer: @unchecked Sendable {
         guard extent.width > 1, extent.height > 1 else { return requestedFrame }
         let frame = requestedFrame.cropped(to: extent)
         let placement = placement(in: extent, at: time)
+        let spokenWordIndex = configuration.highlightsSpokenWords
+            ? cue.spokenWordIndex(at: time)
+            : nil
         guard let rendered = renderedCaption(
             text: cue.text,
             outputSize: extent.size,
-            maximumWidth: placement.maximumWidth
+            maximumWidth: placement.maximumWidth,
+            spokenWordIndex: spokenWordIndex
         ) else { return frame }
 
         let originX = min(max(
@@ -178,7 +182,8 @@ final class CaptionOverlayRenderer: @unchecked Sendable {
     private func renderedCaption(
         text: String,
         outputSize: CGSize,
-        maximumWidth: CGFloat
+        maximumWidth: CGFloat,
+        spokenWordIndex: Int?
     ) -> RenderedCaption? {
         let key = NSString(string: [
             text,
@@ -186,13 +191,15 @@ final class CaptionOverlayRenderer: @unchecked Sendable {
             String(Int(outputSize.height.rounded())),
             String(Int(maximumWidth.rounded())),
             configuration.style.rawValue,
-            String(format: "%.3f", configuration.fontScale)
+            String(format: "%.3f", configuration.fontScale),
+            spokenWordIndex.map(String.init) ?? "-"
         ].joined(separator: "|"))
         if let cached = cache.object(forKey: key) { return cached }
         guard let rendered = Self.drawCaption(
             text: text,
             outputSize: outputSize,
             maximumWidth: maximumWidth,
+            spokenWordIndex: spokenWordIndex,
             configuration: configuration
         ) else { return nil }
         let cost = max(Int(rendered.size.width * rendered.size.height * 4), 1)
@@ -204,6 +211,7 @@ final class CaptionOverlayRenderer: @unchecked Sendable {
         text: String,
         outputSize: CGSize,
         maximumWidth: CGFloat,
+        spokenWordIndex: Int?,
         configuration: AutoEditPlan.Captions
     ) -> RenderedCaption? {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -234,7 +242,37 @@ final class CaptionOverlayRenderer: @unchecked Sendable {
             ),
             NSAttributedString.Key(kCTParagraphStyleAttributeName as String): paragraph
         ]
-        let attributed = NSAttributedString(string: text, attributes: attributes)
+        let attributed: NSAttributedString
+        if let spokenWordIndex {
+            let words = CaptionWordSegmenter.words(in: text)
+            let mutable = NSMutableAttributedString(string: text, attributes: attributes)
+            if words.indices.contains(spokenWordIndex) {
+                let word = words[spokenWordIndex]
+                // Word offsets count Characters; convert to String.Index before
+                // bridging into the UTF-16 ranges NSAttributedString expects.
+                let characterCount = text.count
+                if word.offset + word.text.count <= characterCount,
+                   let start = text.index(
+                       text.startIndex,
+                       offsetBy: word.offset,
+                       limitedBy: text.endIndex
+                   ),
+                   let end = text.index(
+                       start,
+                       offsetBy: word.text.count,
+                       limitedBy: text.endIndex
+                   ) {
+                    mutable.addAttribute(
+                        NSAttributedString.Key(kCTForegroundColorAttributeName as String),
+                        value: CGColor(srgbRed: 0.05, green: 0.87, blue: 1, alpha: 1),
+                        range: NSRange(start..<end, in: text)
+                    )
+                }
+            }
+            attributed = mutable
+        } else {
+            attributed = NSAttributedString(string: text, attributes: attributes)
+        }
         let framesetter = CTFramesetterCreateWithAttributedString(attributed)
         let horizontalPadding = fontSize * 0.72
         let verticalPadding = fontSize * 0.46

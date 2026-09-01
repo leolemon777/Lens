@@ -30,6 +30,88 @@ public struct CaptionCue: Codable, Equatable, Sendable {
         self.endSeconds = end
         self.text = text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// Character progress through the cue at `seconds`, clamped to the cue
+    /// span. Word timings are interpolated linearly because transcripts only
+    /// carry segment-level timestamps.
+    public func spokenCharacterFraction(at seconds: Double) -> Double {
+        guard endSeconds > startSeconds else { return 0 }
+        let clamped = min(max(seconds, startSeconds), endSeconds)
+        return (clamped - startSeconds) / (endSeconds - startSeconds)
+    }
+
+    /// Index into `CaptionWordSegmenter.words(in:)` for the word being spoken
+    /// at `seconds`. Returns nil when the cue carries no words.
+    public func spokenWordIndex(at seconds: Double) -> Int? {
+        let words = CaptionWordSegmenter.words(in: text)
+        guard !words.isEmpty else { return nil }
+        let characters = Array(text)
+        let progress = spokenCharacterFraction(at: seconds)
+            * Double(characters.count)
+        for (index, word) in words.enumerated() {
+            let end = Double(word.offset + word.text.count)
+            if progress < end || index == words.count - 1 {
+                return index
+            }
+        }
+        return nil
+    }
+}
+
+/// Splits caption text into highlightable words: one CJK character per word
+/// (matching how karaoke captions behave in Chinese) and whole latin words.
+public enum CaptionWordSegmenter {
+    public struct Word: Equatable, Sendable {
+        public let text: String
+        public let offset: Int
+
+        public init(text: String, offset: Int) {
+            self.text = text
+            self.offset = offset
+        }
+    }
+
+    public static func words(in text: String) -> [Word] {
+        let characters = Array(text)
+        var result: [Word] = []
+        var index = 0
+        while index < characters.count {
+            let character = characters[index]
+            if character.isCJKTextCharacter {
+                result.append(Word(text: String(character), offset: index))
+                index += 1
+            } else if character.isLetter {
+                var word = ""
+                let offset = index
+                while index < characters.count,
+                      characters[index].isLetter,
+                      characters[index].isCJKTextCharacter == false {
+                    word.append(characters[index])
+                    index += 1
+                }
+                result.append(Word(text: word, offset: offset))
+            } else {
+                index += 1
+            }
+        }
+        return result
+    }
+}
+
+extension Character {
+    /// CJK ideographs and the CJK-adjacent symbol ranges, shared by the
+    /// filler-word planner and the caption word segmenter.
+    var isCJKTextCharacter: Bool {
+        unicodeScalars.contains { scalar in
+            switch scalar.value {
+            case 0x2E80...0x2EFF, 0x3000...0x303F, 0x31C0...0x31EF,
+                 0x3400...0x4DBF, 0x4E00...0x9FFF, 0xF900...0xFAFF:
+                true
+            default:
+                false
+            }
+        }
+    }
 }
 
 public enum CaptionCuePlanner {

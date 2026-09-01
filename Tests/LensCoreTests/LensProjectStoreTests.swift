@@ -683,8 +683,21 @@ final class LensProjectStoreTests: XCTestCase {
 
         XCTAssertEqual(migrated.schemaVersion, "1.0")
         XCTAssertEqual(focusFrames.count, 2)
-        XCTAssertGreaterThan(focusFrames[0].time, 1.82)
-        XCTAssertGreaterThan(focusFrames[1].time, 4.5)
+        // The responsive budget completes sooner than the legacy fixed 0.82 s
+        // transitions ever did. Lock the deterministic values instead: the
+        // first shot is zoom-budget driven, the second one's longer duration
+        // is the distance-aware pan budget across the screen.
+        XCTAssertEqual(
+            focusFrames[0].time,
+            1 + log2(1.6) * 1.875 / 1.70,
+            accuracy: 0.000_1
+        )
+        XCTAssertEqual(
+            focusFrames[1].time,
+            3 + 0.375 / 0.40,
+            accuracy: 0.000_1
+        )
+        XCTAssertGreaterThan(focusFrames[1].time - 3, focusFrames[0].time - 1)
         XCTAssertTrue(
             CameraMotionComfortAnalyzer.analyze(
                 camera: migrated.camera,

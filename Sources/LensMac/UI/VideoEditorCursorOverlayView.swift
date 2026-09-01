@@ -24,6 +24,8 @@ final class VideoEditorCursorOverlayNSView: NSView {
     private let haloLayer = CAShapeLayer()
     private let dragLayer = CAShapeLayer()
     private let cursorLayer = CALayer()
+    /// Laser-pointer ring for `.ring`; a soft glow halo for `.glowDot`.
+    private let styleOverlayLayer = CAShapeLayer()
     private let trailLayers = (0..<4).map { _ in CALayer() }
     private let clickLayers = (0..<4).map { _ in CAShapeLayer() }
 
@@ -60,6 +62,9 @@ final class VideoEditorCursorOverlayNSView: NSView {
             layer?.addSublayer(item)
         }
         layer?.addSublayer(dragLayer)
+        styleOverlayLayer.isHidden = true
+        styleOverlayLayer.fillColor = NSColor.clear.cgColor
+        layer?.addSublayer(styleOverlayLayer)
         cursorLayer.isHidden = true
         cursorLayer.contentsGravity = .resizeAspect
         cursorLayer.shadowColor = NSColor.black.cgColor
@@ -163,6 +168,13 @@ final class VideoEditorCursorOverlayNSView: NSView {
             cursorLayer.cornerRadius = min(width, height) / 2
         }
 
+        updateStyleOverlay(
+            cursor: cursor,
+            at: point,
+            cursorWidth: width,
+            opacity: opacity
+        )
+
         let isDragging = EffectTimeline.cursorKind(
             at: sourceTime,
             keyframes: cursor.keyframes
@@ -178,6 +190,59 @@ final class VideoEditorCursorOverlayNSView: NSView {
             cameraState: cameraState,
             isDragging: isDragging
         )
+    }
+
+    /// Mirrors AutoPreviewRenderer's procedural ring/glow overlays so picking
+    /// a style is visible in the live preview without a re-render.
+    private func updateStyleOverlay(
+        cursor: AutoEditPlan.Cursor,
+        at point: CGPoint,
+        cursorWidth: CGFloat,
+        opacity: Double
+    ) {
+        let accent = color(hex: cursor.accentColorHex, fallback: .systemCyan)
+        switch cursor.appearance {
+        case .ring:
+            let radius = max(cursorWidth * 0.62, 6)
+            styleOverlayLayer.isHidden = false
+            styleOverlayLayer.opacity = Float(opacity)
+            styleOverlayLayer.path = CGPath(
+                ellipseIn: CGRect(
+                    x: point.x - radius,
+                    y: point.y - radius,
+                    width: radius * 2,
+                    height: radius * 2
+                ),
+                transform: nil
+            )
+            styleOverlayLayer.fillColor = accent.withAlphaComponent(0.10).cgColor
+            styleOverlayLayer.strokeColor = accent.withAlphaComponent(0.95).cgColor
+            styleOverlayLayer.lineWidth = max(2, cursorWidth * 0.085)
+            styleOverlayLayer.shadowColor = accent.cgColor
+            styleOverlayLayer.shadowOpacity = 0.4
+            styleOverlayLayer.shadowRadius = radius * 0.22
+        case .glowDot:
+            let radius = max(cursorWidth * 0.34, 5)
+            styleOverlayLayer.isHidden = false
+            styleOverlayLayer.opacity = Float(opacity)
+            styleOverlayLayer.path = CGPath(
+                ellipseIn: CGRect(
+                    x: point.x - radius,
+                    y: point.y - radius,
+                    width: radius * 2,
+                    height: radius * 2
+                ),
+                transform: nil
+            )
+            styleOverlayLayer.fillColor = accent.withAlphaComponent(0.96).cgColor
+            styleOverlayLayer.strokeColor = NSColor.clear.cgColor
+            styleOverlayLayer.lineWidth = 0
+            styleOverlayLayer.shadowColor = accent.cgColor
+            styleOverlayLayer.shadowOpacity = 0.55
+            styleOverlayLayer.shadowRadius = radius * 1.1
+        case .recorded, .macOS, .highContrast, .minimalDot:
+            styleOverlayLayer.isHidden = true
+        }
     }
 
     private func updateMotionLayers(
@@ -379,6 +444,10 @@ final class VideoEditorCursorOverlayNSView: NSView {
             return highContrastAsset ?? fallbackAsset()
         case .minimalDot:
             return minimalDotAsset ?? fallbackAsset()
+        case .ring, .glowDot:
+            // The live editor approximates the procedural final-render
+            // overlays with the closest bitmap glyph.
+            return minimalDotAsset ?? fallbackAsset()
         case .recorded:
             let shape = cursor.shapeKeyframes.last { $0.time <= sourceTime }?.shape
                 ?? .arrow
@@ -390,6 +459,7 @@ final class VideoEditorCursorOverlayNSView: NSView {
         cursorLayer.isHidden = true
         haloLayer.isHidden = true
         dragLayer.isHidden = true
+        styleOverlayLayer.isHidden = true
         trailLayers.forEach { $0.isHidden = true }
     }
 

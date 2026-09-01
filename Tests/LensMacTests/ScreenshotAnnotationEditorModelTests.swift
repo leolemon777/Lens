@@ -291,6 +291,36 @@ final class ScreenshotAnnotationEditorModelTests: XCTestCase {
         XCTAssertEqual(model.clipboardFeedback, .failed)
     }
 
+    func testSuggestedRedactionsCanBeReviewedIndividuallyAndUndoAppliedOne() {
+        let first = ScreenshotAnnotation(
+            id: UUID(),
+            kind: .pixelate,
+            bounds: LensRect(x: 0.1, y: 0.2, width: 0.2, height: 0.04)
+        )
+        let second = ScreenshotAnnotation(
+            id: UUID(),
+            kind: .pixelate,
+            bounds: LensRect(x: 0.6, y: 0.7, width: 0.25, height: 0.04)
+        )
+        let model = ScreenshotAnnotationEditorModel(
+            sourceDimensions: LensDimensions(width: 1_000, height: 600),
+            suggestedRedactions: [first, second]
+        )
+
+        model.applySuggestedRedaction(first.id)
+        XCTAssertEqual(model.annotations.map(\.id), [first.id])
+        XCTAssertEqual(model.pendingRedactionSuggestions.map(\.id), [second.id])
+        model.undo()
+        XCTAssertTrue(model.annotations.isEmpty)
+        XCTAssertEqual(
+            model.pendingRedactionSuggestions.map(\.id),
+            [second.id]
+        )
+
+        model.dismissSuggestedRedaction(second.id)
+        XCTAssertTrue(model.pendingRedactionSuggestions.isEmpty)
+    }
+
     private func makeModel() -> ScreenshotAnnotationEditorModel {
         ScreenshotAnnotationEditorModel(
             sourceDimensions: LensDimensions(width: 1_000, height: 600)

@@ -118,6 +118,20 @@ final class RecordingControlViewTests: XCTestCase {
         XCTAssertTrue(model.storageAccessibilityValue.contains("不足 1 GB"))
     }
 
+    func testRecordingDetailsNamesOptionalCameraTrackForAccessibility() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/RecordingControlView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".accessibilityLabel(\"摄像头\")"))
+        XCTAssertTrue(source.contains(".accessibilityValue(\"单独分轨录制中\")"))
+    }
+
     func testStorageStatusWarnsBeforeItRequiresASafeStop() throws {
         let gibibyte: Int64 = 1_024 * 1_024 * 1_024
         XCTAssertEqual(RecordingControlModel.storageLevel(for: nil), .unknown)

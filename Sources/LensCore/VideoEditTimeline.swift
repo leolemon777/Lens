@@ -458,6 +458,81 @@ public struct VideoEditTimeline: Codable, Equatable, Sendable {
         )
     }
 
+    /// Removes a source-time range from playback by disabling the covered
+    /// slices while keeping them in the segment list, so the removal stays
+    /// undoable. Sub-minimum remainders at the edges are dropped, mirroring
+    /// normalization. Returns false when nothing changed or when the removal
+    /// would leave the timeline without any enabled segment.
+    @discardableResult
+    public mutating func removeSourceRange(
+        startSeconds: Double,
+        endSeconds: Double
+    ) -> Bool {
+        let rangeStart = min(max(startSeconds.isFinite ? startSeconds : 0, 0), sourceDurationSeconds)
+        let rangeEnd = min(
+            max(endSeconds.isFinite ? endSeconds : rangeStart, rangeStart),
+            sourceDurationSeconds
+        )
+        let minimum = Self.minimumSegmentDurationSeconds
+        guard rangeEnd - rangeStart >= minimum else { return false }
+
+        var rebuilt: [VideoEditSegment] = []
+        var changed = false
+        for segment in segments {
+            let overlapStart = max(rangeStart, segment.sourceStartSeconds)
+            let overlapEnd = min(rangeEnd, segment.sourceEndSeconds)
+            guard segment.isEnabled, overlapEnd > overlapStart else {
+                rebuilt.append(segment)
+                continue
+            }
+            changed = true
+            var pieces: [VideoEditSegment] = []
+            // The first surviving piece inherits the original identity so
+            // selections and references stay valid.
+            var inheritedID = segment.id
+            if overlapStart - segment.sourceStartSeconds >= minimum {
+                pieces.append(VideoEditSegment(
+                    id: inheritedID,
+                    sourceStartSeconds: segment.sourceStartSeconds,
+                    sourceEndSeconds: overlapStart,
+                    playbackRate: segment.playbackRate,
+                    isEnabled: true
+                ))
+            } else {
+                inheritedID = UUID()
+            }
+            pieces.append(VideoEditSegment(
+                id: inheritedID,
+                sourceStartSeconds: overlapStart,
+                sourceEndSeconds: overlapEnd,
+                playbackRate: segment.playbackRate,
+                isEnabled: false
+            ))
+            if segment.sourceEndSeconds - overlapEnd >= minimum {
+                pieces.append(VideoEditSegment(
+                    sourceStartSeconds: overlapEnd,
+                    sourceEndSeconds: segment.sourceEndSeconds,
+                    playbackRate: segment.playbackRate,
+                    isEnabled: true
+                ))
+            }
+            // The trailing piece owns the transition into whatever follows,
+            // matching how `split` redistributes segment ownership.
+            var last = pieces.indices.last
+            if last == nil || pieces[last!].isEnabled == false,
+               let enabledIndex = pieces.lastIndex(where: \.isEnabled) {
+                last = enabledIndex
+            }
+            if let last {
+                pieces[last].transitionToNext = segment.transitionToNext
+            }
+            rebuilt.append(contentsOf: pieces)
+        }
+        guard changed, rebuilt.contains(where: \.isEnabled) else { return false }
+        segments = rebuilt
+        return true
+    }
+
     private init(
         uncheckedSourceDurationSeconds: Double,
         segments: [VideoEditSegment]

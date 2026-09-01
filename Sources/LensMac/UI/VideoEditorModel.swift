@@ -15,6 +15,10 @@ final class VideoEditorModel: ObservableObject {
     @Published private(set) var plan: AutoEditPlan
     @Published private(set) var selectedSegmentID: UUID?
     @Published private(set) var isDirty = false
+    /// True once the latest edit plan has reached disk. This is intentionally
+    /// separate from `isDirty`: a plan can be persisted while its renderer is
+    /// still producing the matching preview.
+    @Published private(set) var isPlanPersisted = true
     @Published private(set) var isProcessing = false
     @Published private(set) var isRegeneratingCamera = false
     @Published private(set) var presenterThumbnail: NSImage?
@@ -35,13 +39,19 @@ final class VideoEditorModel: ObservableObject {
     let hasCameraTrack: Bool
     let hasMicrophoneTrack: Bool
     let transcript: TranscriptDocument?
+    let microphoneURL: URL?
+    let keyboardEventsURL: URL?
     var onTimelineChanged: ((VideoEditTimeline) -> Void)?
 
     private let initialPlan: AutoEditPlan
     private var savedPlan: AutoEditPlan
+    private var persistedPlan: AutoEditPlan
     private let automaticCaptionSourceCues: [CaptionSourceCue]
     private var undoHistory: [AutoEditPlan] = []
     private var redoHistory: [AutoEditPlan] = []
+    /// Slider drags update the live preview on every tick, but should be one
+    /// undoable edit rather than dozens of full-plan snapshots.
+    private var continuousEditBaseline: AutoEditPlan?
     private var presenterInteractionStartPlan: AutoEditPlan?
     private var videoAnnotationDraftID = UUID()
     private var videoAnnotationDraftPath: [LensPoint] = []
@@ -70,7 +80,9 @@ final class VideoEditorModel: ObservableObject {
         sourceDurationSeconds: Double,
         hasCameraTrack: Bool,
         hasMicrophoneTrack: Bool = false,
-        transcript: TranscriptDocument? = nil
+        transcript: TranscriptDocument? = nil,
+        microphoneURL: URL? = nil,
+        keyboardEventsURL: URL? = nil
     ) {
         let duration = max(sourceDurationSeconds.isFinite ? sourceDurationSeconds : 0, 0)
         var plan = requestedPlan
@@ -98,12 +110,17 @@ final class VideoEditorModel: ObservableObject {
         self.plan = plan
         initialPlan = plan
         savedPlan = plan
+        persistedPlan = plan
         self.automaticCaptionSourceCues = automaticCaptionSourceCues
         self.sourceDurationSeconds = duration
         self.hasCameraTrack = hasCameraTrack
         self.hasMicrophoneTrack = hasMicrophoneTrack
         self.transcript = transcript
+        self.microphoneURL = microphoneURL
+        self.keyboardEventsURL = keyboardEventsURL
         selectedSegmentID = plan.timeline?.activeSegments.first?.id
+        startNarrationTrimDetectionIfNeeded()
+        hydrateKeystrokesIfNeeded()
     }
 
     var timeline: VideoEditTimeline {
@@ -235,6 +252,157 @@ final class VideoEditorModel: ObservableObject {
     func selectSegment(_ id: UUID) {
         guard timeline.segments.contains(where: { $0.id == id }) else { return }
         selectedSegmentID = id
+    }
+
+    // MARK: - 旁白清理
+
+    enum NarrationTrimDetectionState {
+        case detecting
+        case ready
+    }
+
+    @Published private(set) var narrationTrimDetectionState: NarrationTrimDetectionState = .ready
+    private var narrationTrimDetectionRevision = 0
+
+    var narrationTrimSuggestions: [NarrationTrimSuggestion] {
+        plan.narrationTrims ?? []
+    }
+
+    var pendingNarrationTrims: [NarrationTrimSuggestion] {
+        narrationTrimSuggestions.filter { $0.status == .pending }
+    }
+
+    /// Total source time the accepted (and pending) suggestions would remove.
+    var narrationTrimCandidateSeconds: Double {
+        narrationTrimSuggestions
+            .filter { $0.status != .rejected }
+            .reduce(0) { $0 + $1.durationSeconds }
+    }
+
+    /// Output times a suggestion maps to under the current timeline, used to
+    /// seek the playhead when a row is inspected.
+    func outputTimes(forNarrationTrim suggestion: NarrationTrimSuggestion) -> [Double] {
+        timeline.outputTimes(forSourceTime: suggestion.startSeconds)
+    }
+
+    func acceptNarrationTrim(_ id: UUID) {
+        guard let suggestion = narrationTrimSuggestions.first(where: { $0.id == id }),
+              suggestion.status == .pending else { return }
+        mutate(timelineChanged: true) { plan in
+            guard var timeline = plan.timeline,
+                  timeline.removeSourceRange(
+                    startSeconds: suggestion.startSeconds,
+                    endSeconds: suggestion.endSeconds
+                  ) else { return }
+            plan.timeline = timeline
+            plan.narrationTrims = Self.updating(
+                plan.narrationTrims ?? [],
+                id: id,
+                status: .accepted
+            )
+        }
+    }
+
+    func acceptAllPendingNarrationTrims() {
+        let pending = pendingNarrationTrims
+        guard !pending.isEmpty else { return }
+        mutate(timelineChanged: true) { plan in
+            guard var timeline = plan.timeline else { return }
+            var acceptedIDs = Set<UUID>()
+            for suggestion in pending
+            where timeline.removeSourceRange(
+                startSeconds: suggestion.startSeconds,
+                endSeconds: suggestion.endSeconds
+            ) {
+                acceptedIDs.insert(suggestion.id)
+            }
+            guard !acceptedIDs.isEmpty else { return }
+            plan.timeline = timeline
+            plan.narrationTrims = (plan.narrationTrims ?? []).map { item in
+                guard acceptedIDs.contains(item.id) else { return item }
+                var updated = item
+                updated.status = .accepted
+                return updated
+            }
+        }
+    }
+
+    func rejectNarrationTrim(_ id: UUID) {
+        setNarrationTrimStatus(id, .rejected)
+    }
+
+    /// Brings a previously rejected suggestion back into the review list.
+    func restoreNarrationTrim(_ id: UUID) {
+        setNarrationTrimStatus(id, .pending)
+    }
+
+    private func setNarrationTrimStatus(
+        _ id: UUID,
+        _ status: NarrationTrimSuggestion.Status
+    ) {
+        mutate { plan in
+            let current = plan.narrationTrims ?? []
+            guard current.contains(where: { $0.id == id && $0.status != status }) else {
+                return
+            }
+            plan.narrationTrims = Self.updating(current, id: id, status: status)
+        }
+    }
+
+    private static func updating(
+        _ suggestions: [NarrationTrimSuggestion],
+        id: UUID,
+        status: NarrationTrimSuggestion.Status
+    ) -> [NarrationTrimSuggestion] {
+        suggestions.map { item in
+            guard item.id == id else { return item }
+            var updated = item
+            updated.status = status
+            return updated
+        }
+    }
+
+    /// Detects silence, filler words, and buffer dead air once per project.
+    /// Results land in the plan without marking it dirty: pending suggestions
+    /// never change rendering, so there is nothing to re-render or save until
+    /// the user accepts one.
+    private func startNarrationTrimDetectionIfNeeded() {
+        guard plan.narrationTrims == nil else { return }
+        guard let microphoneURL else { return }
+        narrationTrimDetectionState = .detecting
+        narrationTrimDetectionRevision &+= 1
+        let revision = narrationTrimDetectionRevision
+        let thresholdDecibels = plan.audio?.narrationThresholdDecibels ?? -42
+        Task { [weak self] in
+            let spans = await Task.detached(priority: .utility) { () -> [NarrationTrimPlanner.Span]? in
+                let ranges = try? NarrationActivityAnalyzer().analyze(
+                    url: microphoneURL,
+                    thresholdDecibels: thresholdDecibels
+                )
+                return ranges?.map {
+                    NarrationTrimPlanner.Span(
+                        startSeconds: $0.startSeconds,
+                        endSeconds: $0.endSeconds
+                    )
+                }
+            }.value
+            guard let self, self.narrationTrimDetectionRevision == revision else { return }
+            var updated = self.plan
+            // A failed analysis still records an empty list: the recording is
+            // treated as "reviewed, nothing to suggest" rather than retried
+            // on every editor open.
+            updated.narrationTrims = NarrationTrimPlanner().suggestions(
+                narrationRanges: spans ?? [],
+                transcript: self.transcript,
+                durationSeconds: self.sourceDurationSeconds
+            )
+            self.plan = updated
+            var baseline = self.savedPlan
+            baseline.narrationTrims = updated.narrationTrims
+            self.savedPlan = baseline
+            self.syncChangeState()
+            self.narrationTrimDetectionState = .ready
+        }
     }
 
     func split(atOutputTime outputTime: Double) {
@@ -802,7 +970,7 @@ final class VideoEditorModel: ObservableObject {
         updated.presenterCamera = presenter
         guard updated != plan else { return }
         plan = updated
-        isDirty = plan != savedPlan
+        syncChangeState()
     }
 
     func endPresenterInteraction() {
@@ -812,7 +980,28 @@ final class VideoEditorModel: ObservableObject {
         undoHistory.append(start)
         if undoHistory.count > 80 { undoHistory.removeFirst() }
         redoHistory.removeAll()
-        isDirty = plan != savedPlan
+        syncChangeState()
+    }
+
+    /// Begins a continuous inspector edit such as a slider drag. The plan can
+    /// still change on every tick so the raw preview remains responsive; the
+    /// undo stack is committed once when the gesture ends.
+    func beginContinuousEdit() {
+        guard continuousEditBaseline == nil else { return }
+        continuousEditBaseline = plan
+    }
+
+    /// Commits the baseline captured by ``beginContinuousEdit`` as one undo
+    /// entry. Calling this more than once is harmless and keeps keyboard
+    /// accessibility interactions well-defined.
+    func endContinuousEdit() {
+        guard let baseline = continuousEditBaseline else { return }
+        continuousEditBaseline = nil
+        guard baseline != plan else { return }
+        undoHistory.append(baseline)
+        if undoHistory.count > 80 { undoHistory.removeFirst() }
+        redoHistory.removeAll()
+        syncChangeState()
     }
 
     func activateVideoAnnotationSelection() {
@@ -1025,7 +1214,7 @@ final class VideoEditorModel: ObservableObject {
         updated.videoAnnotations?[index].annotation = annotation
         guard updated != plan else { return }
         plan = updated
-        isDirty = plan != savedPlan
+        syncChangeState()
     }
 
     func endVideoAnnotationInteraction() {
@@ -1037,7 +1226,7 @@ final class VideoEditorModel: ObservableObject {
         undoHistory.append(activeVideoAnnotationTransform.baseline)
         if undoHistory.count > 80 { undoHistory.removeFirst() }
         redoHistory.removeAll()
-        isDirty = plan != savedPlan
+        syncChangeState()
     }
 
     func cancelVideoAnnotationInteraction() {
@@ -1045,7 +1234,7 @@ final class VideoEditorModel: ObservableObject {
         guard let activeVideoAnnotationTransform else { return }
         plan = activeVideoAnnotationTransform.baseline
         self.activeVideoAnnotationTransform = nil
-        isDirty = plan != savedPlan
+        syncChangeState()
     }
 
     func deleteSelectedVideoAnnotation() {
@@ -1190,6 +1379,127 @@ final class VideoEditorModel: ObservableObject {
         mutate { plan in
             if plan.audio == nil { plan.audio = .init() }
             plan.audio?.ducksSystemUnderNarration = enabled
+        }
+    }
+
+    func setCursorFollowStyle(_ style: AutoEditPlan.Cursor.FollowStyle) {
+        mutate { plan in
+            plan.cursor.followStyle = style
+        }
+    }
+
+    func setCaptionsWordHighlight(_ enabled: Bool) {
+        mutate { plan in
+            if plan.captions == nil { plan.captions = .init() }
+            plan.captions?.highlightsSpokenWords = enabled
+        }
+    }
+
+    func setExportAspectRatio(_ aspectRatio: AutoEditPlan.Export.AspectRatio?) {
+        mutate { plan in
+            if plan.export == nil { plan.export = .init() }
+            plan.export?.aspectRatio = aspectRatio
+        }
+    }
+
+    // MARK: - 击键胶囊
+
+    func setKeystrokesEnabled(_ enabled: Bool) {
+        mutate { plan in
+            if plan.interaction == nil { plan.interaction = .init() }
+            plan.interaction?.showsKeystrokes = enabled
+        }
+    }
+
+    /// Legacy projects predate keystroke data; regenerate it once from the
+    /// recorded event file so the toggle works everywhere.
+    private func hydrateKeystrokesIfNeeded() {
+        guard (plan.interaction?.keystrokes ?? []).isEmpty,
+              let keyboardEventsURL,
+              FileManager.default.fileExists(atPath: keyboardEventsURL.path) else {
+            return
+        }
+        Task { [weak self] in
+            let sourceDuration = self?.sourceDurationSeconds ?? 0
+            let displays = await Task.detached(priority: .utility) { () -> [AutoEditPlan.KeystrokeDisplay] in
+                let events = (try? LensEventReader.read(
+                    KeyboardEvent.self,
+                    from: keyboardEventsURL
+                )) ?? []
+                return KeystrokePlanner().displays(
+                    events: events,
+                    durationSeconds: sourceDuration
+                )
+            }.value
+            guard let self, !displays.isEmpty else { return }
+            var updated = self.plan
+            if updated.interaction == nil { updated.interaction = .init() }
+            updated.interaction?.keystrokes = displays
+            self.plan = updated
+            var baseline = self.savedPlan
+            if baseline.interaction == nil { baseline.interaction = .init() }
+            baseline.interaction?.keystrokes = displays
+            self.savedPlan = baseline
+            self.syncChangeState()
+        }
+    }
+
+    // MARK: - 一键人声增强
+
+    /// The applied preset when all three narration-polish switches are on;
+    /// nil means enhancement is off (or the knobs were tuned by hand).
+    var appliedVoiceEnhancementLevel: AutoEditPlan.Audio.VoiceEnhancementLevel? {
+        guard let audio = plan.audio,
+              audio.reducesMicrophoneNoise,
+              audio.normalizesLoudness,
+              audio.ducksSystemUnderNarration else { return nil }
+        return AutoEditPlan.Audio.VoiceEnhancementLevel.allCases
+            .min { lhs, rhs in
+                abs(lhs.noiseReductionAmount - audio.noiseReductionAmount)
+                    < abs(rhs.noiseReductionAmount - audio.noiseReductionAmount)
+            }
+    }
+
+    func setVoiceEnhancement(
+        _ level: AutoEditPlan.Audio.VoiceEnhancementLevel?
+    ) {
+        mutate { plan in
+            if plan.audio == nil { plan.audio = .init() }
+            guard let level else {
+                plan.audio?.reducesMicrophoneNoise = false
+                plan.audio?.normalizesLoudness = false
+                plan.audio?.ducksSystemUnderNarration = false
+                return
+            }
+            plan.audio?.reducesMicrophoneNoise = true
+            plan.audio?.normalizesLoudness = true
+            plan.audio?.ducksSystemUnderNarration = true
+            plan.audio?.noiseReductionAmount = level.noiseReductionAmount
+            plan.audio?.targetLoudnessLUFS = level.targetLoudnessLUFS
+        }
+    }
+
+    private var preAuditionAudio: AutoEditPlan.Audio?
+
+    var isAuditioningUnprocessedAudio: Bool { preAuditionAudio != nil }
+
+    /// Temporarily bypasses narration processing so the user can hear the
+    /// before/after difference against the same preview pipeline.
+    func setUnprocessedAudition(_ enabled: Bool) {
+        if enabled {
+            guard preAuditionAudio == nil, let audio = plan.audio else { return }
+            mutate { plan in
+                plan.audio?.reducesMicrophoneNoise = false
+                plan.audio?.normalizesLoudness = false
+                plan.audio?.ducksSystemUnderNarration = false
+            }
+            preAuditionAudio = audio
+        } else {
+            guard let original = preAuditionAudio else { return }
+            mutate { plan in
+                plan.audio = original
+            }
+            preAuditionAudio = nil
         }
     }
 
@@ -1351,11 +1661,12 @@ final class VideoEditorModel: ObservableObject {
         cancelManualCameraFocusEditing()
         endPresenterInteraction()
         endVideoAnnotationInteraction()
+        endContinuousEdit()
         guard let previous = undoHistory.popLast() else { return }
         redoHistory.append(plan)
         plan = previous
         normalizeSelection()
-        isDirty = plan != savedPlan
+        syncChangeState()
         onTimelineChanged?(timeline)
     }
 
@@ -1363,11 +1674,12 @@ final class VideoEditorModel: ObservableObject {
         cancelManualCameraFocusEditing()
         endPresenterInteraction()
         endVideoAnnotationInteraction()
+        endContinuousEdit()
         guard let next = redoHistory.popLast() else { return }
         undoHistory.append(plan)
         plan = next
         normalizeSelection()
-        isDirty = plan != savedPlan
+        syncChangeState()
         onTimelineChanged?(timeline)
     }
 
@@ -1375,13 +1687,14 @@ final class VideoEditorModel: ObservableObject {
         cancelManualCameraFocusEditing()
         endPresenterInteraction()
         endVideoAnnotationInteraction()
+        endContinuousEdit()
         cancelVideoAnnotationDraft()
         guard plan != initialPlan else { return }
         undoHistory.append(plan)
         redoHistory.removeAll()
         plan = initialPlan
         normalizeSelection()
-        isDirty = plan != savedPlan
+        syncChangeState()
         onTimelineChanged?(timeline)
     }
 
@@ -1393,9 +1706,19 @@ final class VideoEditorModel: ObservableObject {
         cancelManualCameraFocusEditing()
         endPresenterInteraction()
         endVideoAnnotationInteraction()
-        let persistedPlan = persistedPlan ?? plan
-        savedPlan = persistedPlan
-        isDirty = plan != persistedPlan
+        endContinuousEdit()
+        let completedPlan = persistedPlan ?? plan
+        self.persistedPlan = completedPlan
+        savedPlan = completedPlan
+        syncChangeState()
+    }
+
+    /// Marks a plan as safely written before its preview finishes rendering.
+    /// Closing the editor after this point cannot lose the user's changes,
+    /// even though `isDirty` remains true until the matching preview arrives.
+    func markPlanPersisted(_ persistedPlan: AutoEditPlan) {
+        self.persistedPlan = persistedPlan
+        syncChangeState()
     }
 
     func beginProcessing() {
@@ -1425,13 +1748,20 @@ final class VideoEditorModel: ObservableObject {
         var updated = plan
         mutation(&updated)
         guard updated != plan else { return }
-        undoHistory.append(plan)
-        if undoHistory.count > 80 { undoHistory.removeFirst() }
+        if continuousEditBaseline == nil {
+            undoHistory.append(plan)
+            if undoHistory.count > 80 { undoHistory.removeFirst() }
+        }
         redoHistory.removeAll()
         plan = updated
         normalizeSelection()
-        isDirty = plan != savedPlan
+        syncChangeState()
         if timelineChanged { onTimelineChanged?(timeline) }
+    }
+
+    private func syncChangeState() {
+        isDirty = plan != savedPlan
+        isPlanPersisted = plan == persistedPlan
     }
 
     private static func cameraReasonPriority(

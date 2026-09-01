@@ -155,8 +155,14 @@ final class VideoEditorPlaybackController: ObservableObject {
     /// The generated movie reflects the last saved plan. Once the plan changes,
     /// keeping that movie selectable would make inspector controls appear broken.
     func invalidateRenderedPreview() {
-        canShowRenderedPreview = false
-        showRawPreview()
+        if canShowRenderedPreview {
+            canShowRenderedPreview = false
+        }
+        // When the raw preview is already active, changing a slider should not
+        // pause or reload it. This makes repeated plan ticks effectively free.
+        if isShowingRenderedPreview {
+            showRawPreview()
+        }
     }
 
     func togglePlayback() {

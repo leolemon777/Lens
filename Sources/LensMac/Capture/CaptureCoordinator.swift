@@ -32,6 +32,8 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private let onScrollingCaptureFailed: (Error) -> Void
     private let onConversationInboxSaved: (ConversationInboxSnapshot, Bool) -> Void
     private let onPerformanceMeasured: (String, [String: String]) -> Void
+    private let onCaptureFailed: (String) -> Void
+    private let onMagnifierHexCopied: (String) -> Void
     private let captureService = ScreenCaptureService()
     private let ocrService = VisionOCRService()
     private let scrollingCapture = ScrollingCaptureSessionController()
@@ -66,7 +68,9 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         onScrollingCaptureCompleted: @escaping (Int, Int, Error?) -> Void,
         onScrollingCaptureFailed: @escaping (Error) -> Void,
         onConversationInboxSaved: @escaping (ConversationInboxSnapshot, Bool) -> Void,
-        onPerformanceMeasured: @escaping (String, [String: String]) -> Void
+        onPerformanceMeasured: @escaping (String, [String: String]) -> Void,
+        onCaptureFailed: @escaping (String) -> Void,
+        onMagnifierHexCopied: @escaping (String) -> Void
     ) {
         self.store = store
         self.model = model
@@ -81,6 +85,8 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         self.onScrollingCaptureFailed = onScrollingCaptureFailed
         self.onConversationInboxSaved = onConversationInboxSaved
         self.onPerformanceMeasured = onPerformanceMeasured
+        self.onCaptureFailed = onCaptureFailed
+        self.onMagnifierHexCopied = onMagnifierHexCopied
 
         // Window enumeration can occasionally take several hundred milliseconds.
         // Warm it at utility priority so the first overlay can still snap instantly.
@@ -324,9 +330,17 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             return generation
         }
 
+        // Capture fires from a global hot key while another app owns the
+        // keyboard: without activating, the overlay never receives keyDown
+        // and Escape cannot cancel.
+        NSApp.activate(ignoringOtherApps: true)
+        // Deliberately no LensPanelPresenter here: the selection overlay must
+        // appear on the exact frame the hot key was pressed, or the capture
+        // itself starts to feel slow. This is the one glass surface that is
+        // never allowed to fade or pop in.
         overlayWindows.forEach { $0.orderFrontRegardless() }
         if let pointerWindow = windowUnderPointer() ?? overlayWindows.first {
-            pointerWindow.makeKey()
+            pointerWindow.makeKeyAndOrderFront(nil)
             pointerWindow.makeFirstResponder(pointerWindow.contentView)
         }
         return generation
@@ -468,6 +482,20 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                 )
             ]
         )
+    }
+
+    /// Runs on the magnifier's own throttled loop, never from the drag hot
+    /// path — a slow or failed sample only ever affects the magnifier's own
+    /// freshness, never the measured drag-update performance.
+    func captureOverlay(
+        _ view: CaptureOverlayView,
+        didRequestMagnifierSample globalRect: CGRect
+    ) async -> CGImage? {
+        try? await captureService.capture(globalDisplayRect: globalRect)
+    }
+
+    func captureOverlay(_ view: CaptureOverlayView, didCopyMagnifierHex hex: String) {
+        onMagnifierHexCopied(hex)
     }
 
     private static func performanceMilliseconds(since startedAt: TimeInterval) -> String {
@@ -738,12 +766,11 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     }
 
     private func showError(message: String) {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Lens 无法完成截图"
-        alert.informativeText = message
-        alert.addButton(withTitle: "好")
-        alert.runModal()
+        // Capture failures happen while the user is mid-flow on other apps; a
+        // modal alert (plus the activation it requires) interrupts exactly the
+        // work they were doing, so surface the failure through the toast
+        // channel instead.
+        onCaptureFailed(message)
     }
 
     private func showError(_ error: Error) {
@@ -751,7 +778,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     }
 }
 
-private extension NSScreen {
+extension NSScreen {
     var displayID: CGDirectDisplayID? {
         let key = NSDeviceDescriptionKey("NSScreenNumber")
         return (deviceDescription[key] as? NSNumber)?.uint32Value

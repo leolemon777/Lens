@@ -53,7 +53,9 @@ final class AutoPreviewRenderer {
         cameraURL: URL? = nil,
         outputURL: URL,
         plan: AutoEditPlan,
-        transcript: TranscriptDocument? = nil
+        transcript: TranscriptDocument? = nil,
+        mixedAudioURL: URL? = nil,
+        progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> URL {
         lastPresenterCameraError = nil
         let availableCameraURL = cameraURL.flatMap {
@@ -124,7 +126,9 @@ final class AutoPreviewRenderer {
                 plan: plan,
                 captionRenderer: captionRenderer,
                 videoAnnotationRenderer: videoAnnotationRenderer,
-                appliesTimeline: transitionedInputURL == nil
+                appliesTimeline: transitionedInputURL == nil,
+                mixedAudioURL: mixedAudioURL,
+                progress: progress
             )
         }
 
@@ -132,13 +136,17 @@ final class AutoPreviewRenderer {
             ".screen-effects-\(UUID().uuidString).mp4"
         )
         defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        // Presenter-camera compositing is a second full encode pass; split
+        // the caller's 0...1 in half instead of each pass restarting at 0.
         _ = try await renderScreenEffects(
             inputURL: effectsInputURL,
             outputURL: temporaryURL,
             plan: plan,
             captionRenderer: captionRenderer,
             videoAnnotationRenderer: videoAnnotationRenderer,
-            appliesTimeline: transitionedInputURL == nil
+            appliesTimeline: transitionedInputURL == nil,
+            mixedAudioURL: mixedAudioURL,
+            progress: progress.map { Self.scaledProgress($0, offset: 0, scale: 0.5) }
         )
         do {
             return try await PresenterCameraRenderer().render(
@@ -150,7 +158,9 @@ final class AutoPreviewRenderer {
                 timeline: plan.timeline,
                 cameraKeyframes: presenterAvoidanceKeyframes,
                 captions: captionRenderer == nil ? nil : plan.captions,
-                captionCues: captionCues
+                captionCues: captionCues,
+                mixedAudioURL: mixedAudioURL,
+                progress: progress.map { Self.scaledProgress($0, offset: 0.5, scale: 0.5) }
             )
         } catch {
             lastPresenterCameraError = error
@@ -226,11 +236,13 @@ final class AutoPreviewRenderer {
         plan: AutoEditPlan,
         captionRenderer: CaptionOverlayRenderer?,
         videoAnnotationRenderer: VideoAnnotationRenderer?,
-        appliesTimeline: Bool
+        appliesTimeline: Bool,
+        mixedAudioURL: URL? = nil,
+        progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> URL {
-        let asset: AVAsset
+        let sourceAsset: AVAsset
         if appliesTimeline, let timeline = plan.timeline {
-            asset = try await VideoTimelineCompositionBuilder().build(
+            sourceAsset = try await VideoTimelineCompositionBuilder().build(
                 inputURL: inputURL,
                 timeline: timeline,
                 includesVideo: true,
@@ -238,7 +250,20 @@ final class AutoPreviewRenderer {
                 requiresVideo: true
             )
         } else {
-            asset = AVURLAsset(url: inputURL)
+            sourceAsset = AVURLAsset(url: inputURL)
+        }
+        // A prepared audio sidecar replaces the source audio in the same
+        // encode that applies the visual effects, so narration mixing costs
+        // no second video generation. The wrap is a plain composition: the
+        // filter compositor and frame-timing logic below treat it exactly
+        // like the timeline composition they already handle.
+        let asset: AVAsset = if let mixedAudioURL {
+            try await Self.assetByReplacingAudio(
+                of: sourceAsset,
+                withAudioAt: mixedAudioURL
+            )
+        } else {
+            sourceAsset
         }
         let cursorAssets = try reusableCursorAssets()
         let clickRingImage = try reusableClickRingImage()
@@ -264,6 +289,19 @@ final class AutoPreviewRenderer {
             CMTime(value: 1, timescale: 30)
         }
         let cameraSampleInterval = sourceFrameDuration.seconds
+        let orientedSourceSize: CGSize = await {
+            guard let track = sourceVideoTracks.first else { return .zero }
+            let naturalSize = (try? await track.load(.naturalSize)) ?? .zero
+            let transform = (try? await track.load(.preferredTransform))
+                ?? CGAffineTransform.identity
+            let oriented = naturalSize.applying(transform)
+            return CGSize(width: abs(oriented.width), height: abs(oriented.height))
+        }()
+        let deliverySize = Self.deliverySize(
+            source: orientedSourceSize,
+            aspectRatio: plan.export?.aspectRatio
+        )
+        let outputExtent = CGRect(origin: .zero, size: deliverySize)
         let composition = try await withCheckedThrowingContinuation {
             (continuation: CheckedContinuation<AVMutableVideoComposition, Error>) in
             AVMutableVideoComposition.videoComposition(
@@ -278,7 +316,8 @@ final class AutoPreviewRenderer {
                     clickRingImage: clickRingImage,
                     captionRenderer: captionRenderer,
                     videoAnnotationRenderer: videoAnnotationRenderer,
-                    cameraSampleInterval: cameraSampleInterval
+                    cameraSampleInterval: cameraSampleInterval,
+                    outputExtent: outputExtent
                 )
                 request.finish(with: result, context: nil)
                 },
@@ -292,6 +331,12 @@ final class AutoPreviewRenderer {
                     }
                 }
             )
+        }
+        // Social reframe: the filter convenience constructor inherits the
+        // source's natural size, so an explicit renderSize is how the delivery
+        // aspect reaches the exported file.
+        if composition.renderSize != deliverySize {
+            composition.renderSize = deliverySize
         }
         // AVFoundation's filter convenience composition defaults to 30 FPS,
         // even when its source is a real 60 FPS capture. Derive timing from the
@@ -328,8 +373,88 @@ final class AutoPreviewRenderer {
             at: outputURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try await exporter.export(to: outputURL, as: .mp4)
+        try await Self.runExport(exporter, to: outputURL, as: .mp4, progress: progress)
         return outputURL
+    }
+
+    /// Polls export progress via a concurrent child task and cancels it once
+    /// the export call returns; `states` only stops on its own once the
+    /// session reaches a terminal state, so an explicit teardown is needed
+    /// whether or not the caller wants updates. Shared with
+    /// `PresenterCameraRenderer`'s own passthrough remux export.
+    nonisolated static func runExport(
+        _ exporter: AVAssetExportSession,
+        to outputURL: URL,
+        as fileType: AVFileType,
+        progress: (@Sendable (Double) -> Void)?
+    ) async throws {
+        guard let progress else {
+            try await exporter.export(to: outputURL, as: fileType)
+            return
+        }
+        // Concurrent progress polling alongside the export call is the
+        // documented use of `states(updateInterval:)`; the session type
+        // predates Sendable, so the capture is annotated rather than
+        // provably checked by the compiler.
+        nonisolated(unsafe) let exporter = exporter
+        let progressTask = Task {
+            for try await state in exporter.states(updateInterval: 0.1) {
+                if case .exporting(let fraction) = state {
+                    progress(fraction.fractionCompleted)
+                }
+            }
+        }
+        defer { progressTask.cancel() }
+        try await exporter.export(to: outputURL, as: fileType)
+        progress(1)
+    }
+
+    /// Rescales a sub-pass's own 0...1 progress into its slice of the
+    /// overall 0...1 reported to the caller, so a second encode pass
+    /// continues from where the first left off instead of restarting at 0.
+    nonisolated static func scaledProgress(
+        _ report: @escaping @Sendable (Double) -> Void,
+        offset: Double,
+        scale: Double
+    ) -> @Sendable (Double) -> Void {
+        { fraction in report(offset + fraction * scale) }
+    }
+
+    /// Combines the source's video with the sidecar's audio in one mutable
+    /// composition. Full-range insertion preserves the (already timeline-
+    /// mapped) presentation of both sides; the sidecar is authored against
+    /// the same output duration the effects render produces.
+    nonisolated private static func assetByReplacingAudio(
+        of asset: AVAsset,
+        withAudioAt audioURL: URL
+    ) async throws -> AVAsset {
+        let composition = AVMutableComposition()
+        guard let sourceVideo = try await asset.loadTracks(withMediaType: .video).first,
+              let outputVideo = composition.addMutableTrack(
+                  withMediaType: .video,
+                  preferredTrackID: kCMPersistentTrackID_Invalid
+              ) else {
+            throw AutoPreviewRendererError.exportSessionUnavailable
+        }
+        let videoRange = try await sourceVideo.load(.timeRange)
+        try outputVideo.insertTimeRange(videoRange, of: sourceVideo, at: .zero)
+        outputVideo.preferredTransform = try await sourceVideo.load(.preferredTransform)
+        // The sidecar asset must outlive the insertion below: a track whose
+        // owning AVURLAsset was deallocated makes insertTimeRange fail with
+        // AVFoundation -11800/-12780.
+        let sidecarAsset = AVURLAsset(url: audioURL)
+        if let sidecarAudio = try await sidecarAsset
+            .loadTracks(withMediaType: .audio).first,
+           let outputAudio = composition.addMutableTrack(
+               withMediaType: .audio,
+               preferredTrackID: kCMPersistentTrackID_Invalid
+           ) {
+            let audioRange = try await sidecarAudio.load(.timeRange)
+            if audioRange.duration.isNumeric, audioRange.duration > .zero {
+                try outputAudio.insertTimeRange(audioRange, of: sidecarAudio, at: .zero)
+            }
+        }
+        return composition
     }
 
     private func cursorAsset(
@@ -494,6 +619,51 @@ final class AutoPreviewRenderer {
         return CIImage(cgImage: cgImage)
     }
 
+    /// Letterbox fill for contain-layout reframes: the midpoint of the canvas
+    /// gradient (or a near-black default) so bars blend into the packaging.
+    nonisolated private static func canvasBackdrop(
+        plan: AutoEditPlan,
+        extent: CGRect
+    ) -> CIImage {
+        let base = CIColor(red: 0.06, green: 0.06, blue: 0.06, alpha: 1)
+        guard let canvas = plan.canvas else {
+            return CIImage(color: base).cropped(to: extent)
+        }
+        let top = color(hex: canvas.backgroundTopHex, fallback: base)
+        let bottom = color(hex: canvas.backgroundBottomHex, fallback: base)
+        return CIImage(color: CIColor(
+            red: (top.red + bottom.red) / 2,
+            green: (top.green + bottom.green) / 2,
+            blue: (top.blue + bottom.blue) / 2,
+            alpha: 1
+        )).cropped(to: extent)
+    }
+
+    /// Output canvas for a delivery aspect. Vertical/square reframes keep the
+    /// source height and derive the width, snapped to even pixels; nil (or a
+    /// matching aspect) returns the source size unchanged.
+    nonisolated static func deliverySize(
+        source: CGSize,
+        aspectRatio: AutoEditPlan.Export.AspectRatio?
+    ) -> CGSize {
+        guard let aspectRatio,
+              source.width > 1,
+              source.height > 1 else { return source }
+        let width: CGFloat
+        switch aspectRatio {
+        case .vertical9x16:
+            width = source.height * 9 / 16
+        case .square1x1:
+            width = source.height
+        }
+        guard abs(width - source.width) > 1 else { return source }
+        func even(_ value: CGFloat) -> CGFloat {
+            let rounded = value.rounded(.down)
+            return rounded - (rounded.truncatingRemainder(dividingBy: 2))
+        }
+        return CGSize(width: even(width), height: even(source.height))
+    }
+
     nonisolated private static func renderFrame(
         _ source: CIImage,
         time: Double,
@@ -502,9 +672,14 @@ final class AutoPreviewRenderer {
         clickRingImage: CIImage,
         captionRenderer: CaptionOverlayRenderer?,
         videoAnnotationRenderer: VideoAnnotationRenderer?,
-        cameraSampleInterval: Double
+        cameraSampleInterval: Double,
+        outputExtent: CGRect? = nil
     ) -> CIImage {
-        let extent = source.extent
+        let sourceExtent = source.extent
+        let extent = CGRect(
+            origin: .zero,
+            size: outputExtent?.size ?? sourceExtent.size
+        )
         let sourceTime = plan.timeline?.position(atOutputTime: time)?.sourceTimeSeconds
             ?? time
         let sourceFrame = videoAnnotationRenderer?.apply(
@@ -516,36 +691,81 @@ final class AutoPreviewRenderer {
             at: sourceTime,
             camera: plan.camera
         )
-        let scale = max(camera.scale, 1)
+        // Reframed deliveries contain-fit the source at zoom 1 (letterbox with
+        // the canvas backdrop) and let camera zoom crop into it; same-aspect
+        // deliveries degenerate to the legacy viewport math exactly.
+        let baseScale = min(
+            extent.width / max(sourceExtent.width, 1),
+            extent.height / max(sourceExtent.height, 1)
+        )
+        let scale = max(camera.scale, 1) * max(baseScale, 0.001)
         let viewportSize = CGSize(
-            width: extent.width / scale,
-            height: extent.height / scale
+            width: min(extent.width / scale, sourceExtent.width),
+            height: min(extent.height / scale, sourceExtent.height)
         )
         let requestedCenter = CGPoint(
-            x: extent.minX + camera.center.x * extent.width,
-            y: extent.minY + (1 - camera.center.y) * extent.height
+            x: sourceExtent.minX + camera.center.x * sourceExtent.width,
+            y: sourceExtent.minY + (1 - camera.center.y) * sourceExtent.height
         )
+        func clampedAxis(
+            requested: CGFloat,
+            viewportLength: CGFloat,
+            sourceMin: CGFloat,
+            sourceLength: CGFloat
+        ) -> CGFloat {
+            guard viewportLength < sourceLength else {
+                return sourceMin + (sourceLength - viewportLength) / 2
+            }
+            return min(
+                max(requested - viewportLength / 2, sourceMin),
+                sourceMin + sourceLength - viewportLength
+            )
+        }
         let viewport = CGRect(
-            x: min(
-                max(requestedCenter.x - viewportSize.width / 2, extent.minX),
-                extent.maxX - viewportSize.width
+            x: clampedAxis(
+                requested: requestedCenter.x,
+                viewportLength: viewportSize.width,
+                sourceMin: sourceExtent.minX,
+                sourceLength: sourceExtent.width
             ),
-            y: min(
-                max(requestedCenter.y - viewportSize.height / 2, extent.minY),
-                extent.maxY - viewportSize.height
+            y: clampedAxis(
+                requested: requestedCenter.y,
+                viewportLength: viewportSize.height,
+                sourceMin: sourceExtent.minY,
+                sourceLength: sourceExtent.height
             ),
             width: viewportSize.width,
             height: viewportSize.height
         )
 
-        var frame = sourceFrame
+        let contentSize = CGSize(
+            width: viewport.width * scale,
+            height: viewport.height * scale
+        )
+        let content = sourceFrame
             .cropped(to: viewport)
             .transformed(by: CGAffineTransform(
                 translationX: -viewport.minX,
                 y: -viewport.minY
             ))
             .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-            .cropped(to: CGRect(origin: .zero, size: extent.size))
+        var frame: CIImage
+        if contentSize.width < extent.width - 0.5
+            || contentSize.height < extent.height - 0.5 {
+            // Contain layout: center the content and fill the letterbox with
+            // the canvas backdrop color so the reframe reads as packaging,
+            // not as dead black bars.
+            let backdrop = canvasBackdrop(plan: plan, extent: extent)
+            frame = content
+                .transformed(by: CGAffineTransform(
+                    translationX: (extent.width - contentSize.width) / 2,
+                    y: (extent.height - contentSize.height) / 2
+                ))
+                .composited(over: backdrop)
+                .cropped(to: extent)
+        } else {
+            frame = content.cropped(to: extent)
+        }
 
         frame = applyCameraMotionBlur(
             to: frame,
@@ -567,13 +787,14 @@ final class AutoPreviewRenderer {
             )
         }
 
+        let followParameters = plan.cursor.resolvedSmoothingParameters
         let cursorPosition = plan.cursor.isEnabled == false
             ? nil
             : EffectTimeline.cursorPosition(
                 at: sourceTime,
                 keyframes: plan.cursor.keyframes,
-                smoothing: plan.cursor.smoothing,
-                smoothingWindowMilliseconds: plan.cursor.smoothingWindowMilliseconds
+                smoothing: followParameters.smoothing,
+                smoothingWindowMilliseconds: followParameters.windowMilliseconds
             )
         let cursorOpacity: Double = {
             guard plan.cursor.hidesWhenIdle,
@@ -658,12 +879,48 @@ final class AutoPreviewRenderer {
                 )
             }
             frame = positionedCursor.composited(over: frame)
+            switch plan.cursor.appearance {
+            case .ring:
+                frame = proceduralCursorOverlay(
+                    appearance: .ring,
+                    at: outputPoint,
+                    width: targetCursorWidth,
+                    accent: color(
+                        hex: plan.cursor.accentColorHex,
+                        fallback: CIColor(red: 0.36, green: 0.84, blue: 1)
+                    ),
+                    opacity: cursorOpacity
+                ).composited(over: frame)
+            case .glowDot:
+                frame = proceduralCursorOverlay(
+                    appearance: .glowDot,
+                    at: outputPoint,
+                    width: targetCursorWidth,
+                    accent: color(
+                        hex: plan.cursor.accentColorHex,
+                        fallback: CIColor(red: 0.36, green: 0.84, blue: 1)
+                    ),
+                    opacity: cursorOpacity
+                ).composited(over: frame)
+            case .recorded, .macOS, .highContrast, .minimalDot:
+                break
+            }
         }
         frame = frame.cropped(to: CGRect(origin: .zero, size: extent.size))
         if let canvas = plan.canvas, canvas.isEnabled {
             frame = applyCanvas(
                 canvas,
                 to: frame,
+                extent: CGRect(origin: .zero, size: extent.size)
+            )
+        }
+        if let interaction = plan.interaction,
+           interaction.showsKeystrokes,
+           interaction.keystrokes.isEmpty == false {
+            frame = applyKeystrokes(
+                to: frame,
+                at: sourceTime,
+                interaction: interaction,
                 extent: CGRect(origin: .zero, size: extent.size)
             )
         }
@@ -682,6 +939,9 @@ final class AutoPreviewRenderer {
             return assets.highContrast
         case .minimalDot:
             return assets.minimalDot
+        case .ring, .glowDot:
+            // Procedural overlays stack on top of the recorded glyph.
+            return assets.arrow
         case .recorded:
             let shape = cursor.shapeKeyframes.last {
                 $0.time <= sourceTime
@@ -759,12 +1019,13 @@ final class AutoPreviewRenderer {
             let samples: [(offset: Double, alpha: Double)] = [
                 (0.025, 0.30), (0.055, 0.21), (0.09, 0.13), (0.13, 0.07)
             ]
+            let followParameters = cursor.resolvedSmoothingParameters
             for sample in samples.reversed() {
                 guard let position = EffectTimeline.cursorPosition(
                     at: max(sourceTime - sample.offset, 0),
                     keyframes: cursor.keyframes,
-                    smoothing: cursor.smoothing,
-                    smoothingWindowMilliseconds: cursor.smoothingWindowMilliseconds
+                    smoothing: followParameters.smoothing,
+                    smoothingWindowMilliseconds: followParameters.windowMilliseconds
                 ) else { continue }
                 let movement = hypot(
                     position.x - currentPosition.x,
@@ -795,6 +1056,165 @@ final class AutoPreviewRenderer {
 
     /// Burns an impact glow and two expanding rings into the final frame. The
     /// click stays legible even when the pointer itself is small or hidden.
+    private final class CachedKeystrokeCapsule: NSObject {
+        let image: CIImage
+
+        init(image: CIImage) {
+            self.image = image
+        }
+    }
+
+    /// Draws the currently held keystroke capsules onto the finished canvas.
+    /// Capsules live above the canvas (like captions) so they never scale with
+    /// camera zoom, and only shortcuts/control keys recorded by the privacy
+    /// filter can ever appear here.
+    nonisolated static func applyKeystrokes(
+        to frame: CIImage,
+        at sourceTime: Double,
+        interaction: AutoEditPlan.Interaction,
+        extent: CGRect
+    ) -> CIImage {
+        let active = interaction.keystrokes
+            .filter { keystroke in
+                sourceTime >= keystroke.time
+                    && sourceTime < keystroke.time + keystroke.holdSeconds
+            }
+            .suffix(3)
+        guard !active.isEmpty else { return frame }
+        let opacity = active
+            .map { keystroke -> Double in
+                let elapsed = sourceTime - keystroke.time
+                let remaining = keystroke.time + keystroke.holdSeconds - sourceTime
+                return min(elapsed / 0.08, 1) * min(remaining / 0.30, 1)
+            }
+            .min() ?? 1
+        guard opacity > 0.01 else { return frame }
+
+        let fontSize = max(
+            14,
+            min(extent.width * 0.018, extent.height * 0.038)
+        )
+        let text = active.map(\.text).joined(separator: "\u{2009}\u{2009}")
+        let image = keystrokeCapsuleImage(text: text, fontSize: fontSize)
+        let scale = min(
+            extent.width * 0.42 / max(image.extent.width, 1),
+            1
+        )
+        let margin = min(extent.width, extent.height) * 0.042
+        let target = CGRect(
+            x: extent.maxX - image.extent.width * scale - margin,
+            y: extent.minY + extent.height * 0.055,
+            width: image.extent.width * scale,
+            height: image.extent.height * scale
+        ).integral
+        let positioned = image
+            .transformed(by: CGAffineTransform(
+                translationX: target.minX - image.extent.minX,
+                y: target.minY - image.extent.minY
+            ))
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+            .applyingFilter("CIColorMatrix", parameters: [
+                "inputAVector": CIVector(
+                    x: 0,
+                    y: 0,
+                    z: 0,
+                    w: CGFloat(min(max(opacity, 0), 1))
+                )
+            ])
+            .cropped(to: extent)
+        return positioned.composited(over: frame).cropped(to: extent)
+    }
+
+    /// Pure CoreGraphics capsule so rendering stays safe on the compositor's
+    /// background queue (no AppKit drawing).
+    nonisolated private static func keystrokeCapsuleImage(
+        text: String,
+        fontSize: CGFloat
+    ) -> CIImage {
+        let key = NSString(string: "\(text)|\(Int(fontSize.rounded()))")
+        if let cached = Self.keystrokeCapsuleCache.object(forKey: key) {
+            return cached.image
+        }
+        let font = CTFontCreateUIFontForLanguage(.system, fontSize, nil)
+            ?? CTFontCreateWithName("Helvetica Neue" as CFString, fontSize, nil)
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(
+                red: 1,
+                green: 1,
+                blue: 1,
+                alpha: 0.97
+            )
+        ]
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: text, attributes: attributes)
+        )
+        let typographicWidth = CTLineGetTypographicBounds(line, nil, nil, nil)
+        let horizontalPadding = fontSize * 0.78
+        let verticalPadding = fontSize * 0.44
+        let width = max(Int(ceil(typographicWidth) + horizontalPadding * 2), 1)
+        let height = max(Int(fontSize + verticalPadding * 2), 1)
+        let capsule: CIImage
+        if let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) {
+            context.setAllowsAntialiasing(true)
+            context.setShouldAntialias(true)
+            context.clear(CGRect(x: 0, y: 0, width: width, height: height))
+            let bounds = CGRect(
+                x: 0.5,
+                y: 0.5,
+                width: CGFloat(width) - 1,
+                height: CGFloat(height) - 1
+            )
+            let path = CGPath(
+                roundedRect: bounds,
+                cornerWidth: CGFloat(height) * 0.34,
+                cornerHeight: CGFloat(height) * 0.34,
+                transform: nil
+            )
+            context.saveGState()
+            context.setShadow(
+                offset: CGSize(width: 0, height: -fontSize * 0.08),
+                blur: fontSize * 0.3,
+                color: CGColor(gray: 0, alpha: 0.4)
+            )
+            context.addPath(path)
+            context.setFillColor(CGColor(gray: 0.06, alpha: 0.86))
+            context.fillPath()
+            context.restoreGState()
+            context.addPath(path)
+            context.setStrokeColor(CGColor(gray: 1, alpha: 0.22))
+            context.setLineWidth(max(1, fontSize * 0.03))
+            context.strokePath()
+            context.textPosition = CGPoint(
+                x: horizontalPadding,
+                y: verticalPadding + fontSize * 0.18
+            )
+            CTLineDraw(line, context)
+            capsule = context.makeImage().map { CIImage(cgImage: $0) }
+                ?? CIImage.empty()
+        } else {
+            capsule = CIImage.empty()
+        }
+        Self.keystrokeCapsuleCache.setObject(
+            CachedKeystrokeCapsule(image: capsule),
+            forKey: key
+        )
+        return capsule
+    }
+
+    /// NSCache is thread-safe; the `nonisolated(unsafe)` marker is required
+    /// because frame rendering runs off the main actor.
+    nonisolated(unsafe) private static let keystrokeCapsuleCache =
+        NSCache<NSString, CachedKeystrokeCapsule>()
+
     nonisolated static func applyClickFeedback(
         to frame: CIImage,
         at sourceTime: Double,
@@ -940,6 +1360,87 @@ final class AutoPreviewRenderer {
             "inputBVector": CIVector(x: 0, y: 0, z: 0, w: color.blue),
             "inputAVector": CIVector(x: 0, y: 0, z: 0, w: opacity)
         ])
+    }
+
+    /// Laser-pointer ring and glowing dot cursors, drawn procedurally so
+    /// they follow the accent color and scale without bitmap assets. Centered
+    /// on the hotspot; the underlying recorded glyph stays visible beneath.
+    nonisolated private static func proceduralCursorOverlay(
+        appearance: AutoEditPlan.Cursor.Appearance,
+        at point: CGPoint,
+        width: CGFloat,
+        accent: CIColor,
+        opacity: Double
+    ) -> CIImage {
+        let safeOpacity = min(max(opacity, 0), 1)
+        switch appearance {
+        case .ring:
+            let radius = max(width * 0.62, 6)
+            // Soft inner fill plus a bright edge band fading outward reads as
+            // a laser-pointer ring without any mask passes.
+            let fillFilter = CIFilter.radialGradient()
+            fillFilter.center = point
+            fillFilter.radius0 = 0
+            fillFilter.radius1 = Float(radius)
+            fillFilter.color0 = CIColor(
+                red: accent.red,
+                green: accent.green,
+                blue: accent.blue,
+                alpha: 0.10 * safeOpacity
+            )
+            fillFilter.color1 = CIColor(
+                red: accent.red,
+                green: accent.green,
+                blue: accent.blue,
+                alpha: 0
+            )
+            let fill = fillFilter.outputImage ?? CIImage.empty()
+            let ringFilter = CIFilter.radialGradient()
+            ringFilter.center = point
+            ringFilter.radius0 = Float(radius * 0.80)
+            ringFilter.radius1 = Float(radius)
+            ringFilter.color0 = CIColor(
+                red: accent.red,
+                green: accent.green,
+                blue: accent.blue,
+                alpha: 0.95 * safeOpacity
+            )
+            ringFilter.color1 = CIColor(
+                red: accent.red,
+                green: accent.green,
+                blue: accent.blue,
+                alpha: 0
+            )
+            let ring = ringFilter.outputImage ?? CIImage.empty()
+            return ring.composited(over: fill).cropped(to: CGRect(
+                x: point.x - radius,
+                y: point.y - radius,
+                width: radius * 2,
+                height: radius * 2
+            ))
+        case .glowDot:
+            let radius = max(width * 0.34, 5)
+            let dot = radialGlowLayer(
+                center: point,
+                radius: radius,
+                color: accent,
+                opacity: 0.98 * safeOpacity
+            )
+            let halo = radialGlowLayer(
+                center: point,
+                radius: radius * 2.1,
+                color: accent,
+                opacity: 0.30 * safeOpacity
+            )
+            return dot.composited(over: halo).cropped(to: CGRect(
+                x: point.x - radius * 2.1,
+                y: point.y - radius * 2.1,
+                width: radius * 4.2,
+                height: radius * 4.2
+            ))
+        case .recorded, .macOS, .highContrast, .minimalDot:
+            return CIImage.empty()
+        }
     }
 
     nonisolated private static func radialGlowLayer(

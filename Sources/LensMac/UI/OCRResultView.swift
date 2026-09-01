@@ -95,12 +95,12 @@ struct OCRResultView: View {
                 }
                 Spacer()
                 Button("复制", action: onCopy)
-                    .buttonStyle(LensGlassButtonStyle(tint: .cyan, cornerRadius: 12))
+                    .buttonStyle(LensGlassButtonStyle(tint: LensGlassPalette.neutral, cornerRadius: 12))
                     .disabled(!model.hasText)
                     .accessibilityLabel("复制识别文字")
                 Button("复制并关闭", action: onCopyAndClose)
                     .keyboardShortcut(.return, modifiers: .command)
-                    .buttonStyle(LensGlassButtonStyle(tint: .indigo, cornerRadius: 12))
+                    .buttonStyle(LensGlassButtonStyle(tint: LensGlassPalette.accent, cornerRadius: 12))
                     .disabled(!model.hasText)
                     .accessibilityLabel("复制并关闭")
                     .help("Command-Return")
@@ -112,7 +112,7 @@ struct OCRResultView: View {
         }
         .padding(14)
         .frame(width: 420, height: model.thumbnail == nil ? 320 : 408)
-        .lensGlassSurface(role: .panel, cornerRadius: LensGlassMetrics.panelCornerRadius)
+        .lensGlassSurface(role: .panel, cornerRadius: LensGlassMetrics.panelCornerRadius, tint: LensGlassPalette.ice)
         .padding(22)
         .onAppear { focusEditorIfReady() }
         .onChange(of: model.phase) { _, _ in focusEditorIfReady() }
@@ -150,9 +150,9 @@ struct OCRResultView: View {
         HStack(spacing: 10) {
             Image(systemName: "text.viewfinder")
                 .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.indigo)
+                .foregroundStyle(LensGlassPalette.accent)
                 .frame(width: 32, height: 32)
-                .background(.indigo.opacity(0.14), in: Circle())
+                .background(LensGlassPalette.accent.opacity(0.14), in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.phase == .recognizing ? "正在识别" : "OCR 识别")
                     .font(.system(size: 14, weight: .semibold))

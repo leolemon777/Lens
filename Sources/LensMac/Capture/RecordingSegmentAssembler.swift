@@ -23,8 +23,12 @@ enum RecordingSegmentAssemblerError: LocalizedError {
     }
 }
 
-@MainActor
-final class RecordingSegmentAssembler {
+/// Assembly is I/O heavy (whole-file copies, PCM concatenation, passthrough
+/// exports) and sits directly on the recording stop path, so it runs on an
+/// actor instead of the main actor. The static helpers execute within the
+/// actor-isolated methods that call them, keeping the main thread free while
+/// a long recording's segments are joined.
+actor RecordingSegmentAssembler {
     func assembleVideoSegments(
         _ segmentURLs: [URL],
         outputURL: URL,
@@ -251,6 +255,17 @@ final class RecordingSegmentAssembler {
         try Self.validateNonemptyFile(at: temporaryURL)
         try Self.replace(videoURL, with: temporaryURL)
         return videoURL
+    }
+
+    /// Whole-file archival copies for the first segment run here so the stop
+    /// path never blocks the main thread on multi-gigabyte media.
+    func copyFileIfNeeded(_ sourceURL: URL, to destinationURL: URL) throws {
+        guard sourceURL.standardizedFileURL != destinationURL.standardizedFileURL else { return }
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try Self.validateNonemptyFile(at: destinationURL)
+            return
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
     }
 
     private static func concatenateAudio(

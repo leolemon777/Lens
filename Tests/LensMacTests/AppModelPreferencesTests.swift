@@ -44,6 +44,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertFalse(initial.capturesMicrophone)
         XCTAssertFalse(initial.capturesCamera)
         XCTAssertEqual(initial.recordingFrameRate, .fps60)
+        XCTAssertTrue(initial.showsRecordingCountdown)
         XCTAssertEqual(initial.recordingExperiencePreset, .natural)
         XCTAssertTrue(initial.automaticallyTranscribesRecordings)
         XCTAssertEqual(initial.transcriptionLanguage, .automatic)
@@ -59,6 +60,7 @@ final class AppModelPreferencesTests: XCTestCase {
         initial.capturesMicrophone = true
         initial.capturesCamera = true
         initial.recordingFrameRate = .fps30
+        initial.showsRecordingCountdown = false
         initial.recordingExperiencePreset = .teaching
         initial.automaticallyTranscribesRecordings = false
         initial.transcriptionLanguage = .simplifiedChinese
@@ -83,6 +85,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertTrue(restored.capturesMicrophone)
         XCTAssertFalse(restored.capturesCamera)
         XCTAssertEqual(restored.recordingFrameRate, .fps30)
+        XCTAssertFalse(restored.showsRecordingCountdown)
         XCTAssertEqual(restored.recordingExperiencePreset, .teaching)
         XCTAssertFalse(restored.automaticallyTranscribesRecordings)
         XCTAssertEqual(restored.transcriptionLanguage, .simplifiedChinese)
@@ -143,11 +146,12 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(natural.camera.zoomIntensity, 0.42, accuracy: 0.001)
         XCTAssertEqual(natural.camera.zoomScale, 1.60)
         XCTAssertEqual(natural.camera.generationStrength, .restrained)
-        XCTAssertEqual(natural.camera.motionBlurStrength, 0.12, accuracy: 0.001)
-        XCTAssertEqual(natural.cursor.smoothingWindowMilliseconds, 42)
+        XCTAssertEqual(natural.camera.motionBlurStrength, 0, accuracy: 0.001)
+        XCTAssertNil(natural.cursor.smoothingWindowMilliseconds)
+        XCTAssertEqual(natural.cursor.followStyle, .faithful)
+        XCTAssertEqual(natural.cursor.resolvedSmoothingParameters.smoothing, 0)
         XCTAssertEqual(natural.cursor.appearance, .recorded)
-        XCTAssertEqual(natural.cursor.motionEffect, .halo)
-        XCTAssertEqual(natural.cursor.motionEffectStrength, 0.50)
+        XCTAssertEqual(natural.cursor.motionEffect, .none)
         XCTAssertFalse(natural.cursor.hidesWhenIdle)
         XCTAssertEqual(natural.interaction?.clickEffect, .ripple)
         XCTAssertEqual(natural.interaction?.clickPulseScale, 1.25)
@@ -167,13 +171,11 @@ final class AppModelPreferencesTests: XCTestCase {
         )
         XCTAssertEqual(presentation.camera.zoomScale, 1.60)
         XCTAssertEqual(presentation.camera.generationStrength, .active)
-        XCTAssertGreaterThan(
-            presentation.camera.motionBlurStrength,
-            natural.camera.motionBlurStrength
-        )
-        XCTAssertEqual(presentation.cursor.smoothingWindowMilliseconds, 52)
+        XCTAssertEqual(presentation.camera.motionBlurStrength, 0, accuracy: 0.001)
+        XCTAssertEqual(presentation.cursor.smoothingWindowMilliseconds, 30)
         XCTAssertEqual(presentation.cursor.appearance, .highContrast)
-        XCTAssertEqual(presentation.cursor.motionEffect, .trail)
+        XCTAssertEqual(presentation.cursor.motionEffect, .halo)
+        XCTAssertEqual(presentation.cursor.motionEffectStrength, 0.28)
         XCTAssertEqual(presentation.interaction?.clickEffect, .pulse)
         XCTAssertEqual(presentation.interaction?.clickPulseDuration, 0.58)
         XCTAssertFalse(presentation.cursor.hidesWhenIdle)
@@ -187,7 +189,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(teaching.camera.generationStrength, .balanced)
         XCTAssertFalse(teaching.cursor.hidesWhenIdle)
         XCTAssertEqual(teaching.cursor.appearance, .recorded)
-        XCTAssertEqual(teaching.cursor.motionEffect, .spotlight)
+        XCTAssertEqual(teaching.cursor.motionEffect, .halo)
         XCTAssertEqual(teaching.interaction?.clickEffect, .spotlight)
         XCTAssertTrue(teaching.audio?.ducksSystemUnderNarration == true)
         XCTAssertEqual(teaching.captions?.style, .glass)

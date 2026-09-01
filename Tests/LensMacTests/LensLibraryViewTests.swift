@@ -67,7 +67,8 @@ final class LensLibraryViewTests: XCTestCase {
             onRepair: { _ in },
             onDeleteAll: {},
             onOpenFolder: {},
-            onClose: {}
+            onClose: {},
+            onStartCapture: {}
         )
         let hostingView = NSHostingView(rootView: rootView)
         hostingView.frame = CGRect(x: 0, y: 0, width: 1_020, height: 690)
@@ -101,6 +102,133 @@ final class LensLibraryViewTests: XCTestCase {
         XCTAssertTrue(source.contains("onShowOCR"))
         XCTAssertTrue(source.contains("cardButton(\"文字\""))
         XCTAssertTrue(source.contains("entry.ocrText?.isEmpty == false"))
+    }
+
+    func testEmptyLibraryOffersCaptureAndFilteredStateOffersClearAction() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/LensLibraryView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("开始一次捕获"))
+        XCTAssertTrue(source.contains("清除筛选"))
+        XCTAssertTrue(source.contains("onStartCapture"))
+        XCTAssertTrue(source.contains("搜索 Lens 库"))
+        XCTAssertTrue(source.contains("结果会优先显示相关标题"))
+        XCTAssertTrue(source.contains("本地智能匹配"))
+        XCTAssertTrue(source.contains("不会上传素材内容"))
+    }
+
+    func testLibraryCardsOfferCrossAppDragDelivery() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/LensLibraryView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("QuickAccessFileTransfer.bestFileURL(for: entry)"))
+        XCTAssertTrue(source.contains("onDrag"))
+        XCTAssertTrue(source.contains("拖到 Finder、聊天或文档中发送 PNG"))
+        XCTAssertTrue(source.contains("拖到 Finder、聊天或文档中发送视频"))
+    }
+
+    func testCardSecondaryActionsRevealOnHoverOrKeyboardFocusNotOnlyHover() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/LensLibraryView.swift"),
+            encoding: .utf8
+        )
+        // Primary action is unconditional; secondary actions live in a
+        // separate group gated by opacity (never removed from the tree)
+        // so Tab/VoiceOver can still reach them when the pointer never
+        // hovers the card.
+        XCTAssertTrue(source.contains("var showsSecondaryActions: Bool"))
+        XCTAssertTrue(source.contains("isHovering || focusedSecondaryAction != nil"))
+        XCTAssertTrue(source.contains(".opacity(showsSecondaryActions ? 1 : 0)"))
+        XCTAssertFalse(
+            source.contains("if showsSecondaryActions {"),
+            "Secondary actions must be opacity-hidden, not removed with `if`, " +
+            "or keyboard/VoiceOver users could never reach them."
+        )
+        // Every secondary action must bind to the shared FocusState so
+        // keyboard focus alone (no pointer) reveals the same set.
+        XCTAssertTrue(source.contains(".focused($focusedSecondaryAction, equals: .copy)"))
+        XCTAssertTrue(source.contains(".focused($focusedSecondaryAction, equals: .share)"))
+        XCTAssertTrue(source.contains(".focused($focusedSecondaryAction, equals: .annotate)"))
+        XCTAssertTrue(source.contains(".focused($focusedSecondaryAction, equals: .ocr)"))
+        XCTAssertTrue(source.contains(".focused($focusedSecondaryAction, equals: .transcribe)"))
+        // Delete keeps its existing misclick guard and organize/reveal stay
+        // compact icon affordances — none of the three enter the
+        // primary/secondary tiering.
+        XCTAssertTrue(source.contains(".disabled(!canDelete)"))
+    }
+
+    func testRecordingCardsOfferFileCopyAction() throws {
+        let viewSource = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/LensLibraryView.swift"),
+            encoding: .utf8
+        )
+        let controllerSource = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/LensLibraryWindowController.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(viewSource.contains("cardButton(\"复制文件\", symbol: \"doc.on.doc\", action: onCopy)"))
+        XCTAssertTrue(controllerSource.contains("FileURLPasteboard.copy(fileURL)"))
+    }
+
+    func testRecordingCardsOfferNativeShareAction() throws {
+        let viewSource = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/LensLibraryView.swift"),
+            encoding: .utf8
+        )
+        let sharingSource = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/LensFileSharing.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(viewSource.contains("cardButton(\"分享\", symbol: \"square.and.arrow.up\")"))
+        XCTAssertTrue(viewSource.contains("LensFileSharing.present(fileURL: fileURL)"))
+        XCTAssertTrue(viewSource.contains("不会自动上传"))
+        XCTAssertTrue(sharingSource.contains("NSSharingServicePicker"))
+        XCTAssertTrue(sharingSource.contains("NSApp.activate(ignoringOtherApps: true)"))
+        XCTAssertTrue(sharingSource.contains("chooses one"))
+    }
+
+    func testScreenshotCardsOfferNativeShareAction() throws {
+        let viewSource = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/LensLibraryView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(viewSource.contains("entry.manifest.kind == .screenshot"))
+        XCTAssertTrue(viewSource.contains("LensFileSharing.present(fileURL: fileURL)"))
+        XCTAssertTrue(viewSource.contains("发送当前 PNG，不会自动上传"))
     }
 
     func testInsightsPopoverRendersWrappedTagsChaptersAndPrivacyWarnings() throws {

@@ -23,16 +23,22 @@ struct ShortcutRecorderButton: View {
                         .lineLimit(1)
                     Spacer(minLength: 4)
                 }
-                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                .font(.system(size: LensType.caption, weight: .semibold, design: .rounded))
                 .padding(.horizontal, 10)
                 .frame(height: 30)
                 .background(
-                    (isCapturing ? Color.cyan : Color.primary).opacity(0.08),
-                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    (isCapturing ? LensGlassPalette.accent : Color.primary).opacity(0.08),
+                    in: RoundedRectangle(
+                        cornerRadius: LensGlassMetrics.controlCornerRadius,
+                        style: .continuous
+                    )
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .stroke(isCapturing ? .cyan.opacity(0.55) : .white.opacity(0.12), lineWidth: 1)
+                    RoundedRectangle(
+                        cornerRadius: LensGlassMetrics.controlCornerRadius,
+                        style: .continuous
+                    )
+                    .stroke(isCapturing ? LensGlassPalette.accent.opacity(0.55) : .white.opacity(0.12), lineWidth: 1)
                 )
             }
             .buttonStyle(.plain)
@@ -50,7 +56,7 @@ struct ShortcutRecorderButton: View {
             )
             if let validationMessage {
                 Text(validationMessage)
-                    .font(.system(size: 9.5, weight: .medium))
+                    .font(.system(size: LensType.micro, weight: .medium))
                     .foregroundStyle(.red)
             }
         }

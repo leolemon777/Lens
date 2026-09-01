@@ -53,6 +53,7 @@ struct RecordingSetupView: View {
 
     @StateObject private var windowPicker: RecordingWindowPickerModel
     @State private var source: RecordingSourceChoice
+    @State private var showsAdvancedSettings = false
 
     init(
         model: AppModel,
@@ -76,11 +77,8 @@ struct RecordingSetupView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     sourceSection
                     presetSection
-                    HStack(alignment: .top, spacing: 14) {
-                        trackSection
-                        qualityAndAutomationSection
-                    }
-                    capabilitySection
+                    quickOptionsSection
+                    advancedSettingsDisclosure
                 }
                 .padding(20)
             }
@@ -88,7 +86,7 @@ struct RecordingSetupView: View {
             footer
         }
         .frame(width: 780, height: 660)
-        .lensGlassSurface(role: .window, cornerRadius: 22)
+        .lensGlassSurface(role: .window, cornerRadius: LensGlassMetrics.windowCornerRadius)
         .task(id: source) {
             guard source == .window else { return }
             await windowPicker.refresh()
@@ -107,9 +105,9 @@ struct RecordingSetupView: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("录屏工作台")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: LensType.title, weight: .semibold))
                 Text("先选择来源和成片方式，停止后自动生成可编辑预览")
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: LensType.caption, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -147,7 +145,7 @@ struct RecordingSetupView: View {
                                 Text(item.title)
                                     .font(.system(size: 12, weight: .semibold))
                                 Text(item.subtitle)
-                                    .font(.system(size: 9.5, weight: .medium))
+                                    .font(.system(size: LensType.micro, weight: .medium))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
@@ -158,6 +156,9 @@ struct RecordingSetupView: View {
                             tint: .red,
                             isSelected: source == item
                         ))
+                        .accessibilityLabel("\(item.title)：\(item.subtitle)")
+                        .accessibilityValue(source == item ? "已选择" : "未选择")
+                        .accessibilityHint("选择\(item.title)作为录制来源")
                         .accessibilityAddTraits(source == item ? .isSelected : [])
                     }
                 }
@@ -173,9 +174,9 @@ struct RecordingSetupView: View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("当前桌面可录制窗口")
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.system(size: LensType.caption, weight: .semibold))
                     Text("可以选择后台被遮挡的浏览器或 App 窗口")
-                        .font(.system(size: 9.2, weight: .medium))
+                        .font(.system(size: LensType.micro, weight: .medium))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -199,14 +200,14 @@ struct RecordingSetupView: View {
                     Image(systemName: windowPicker.isRefreshing
                           ? "rectangle.on.rectangle.angled"
                           : "macwindow.badge.exclamationmark")
-                        .font(.system(size: 18, weight: .semibold))
+                        .font(.system(size: LensIcon.large, weight: .semibold))
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(windowPicker.isRefreshing ? "正在读取打开的窗口…" : "暂时没有可录制窗口")
-                            .font(.system(size: 10.5, weight: .semibold))
+                            .font(.system(size: LensType.caption, weight: .semibold))
                         if let errorMessage = windowPicker.errorMessage {
                             Text(errorMessage)
-                                .font(.system(size: 9, weight: .medium))
+                                .font(.system(size: LensType.micro, weight: .medium))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
                         }
@@ -235,10 +236,10 @@ struct RecordingSetupView: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
-            in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+            in: RoundedRectangle(cornerRadius: LensGlassMetrics.cardCornerRadius, style: .continuous)
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
+            RoundedRectangle(cornerRadius: LensGlassMetrics.cardCornerRadius, style: .continuous)
                 .strokeBorder(.white.opacity(0.12), lineWidth: 0.7)
         }
     }
@@ -250,7 +251,7 @@ struct RecordingSetupView: View {
         } label: {
             VStack(alignment: .leading, spacing: 7) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    RoundedRectangle(cornerRadius: LensGlassMetrics.thumbnailCornerRadius, style: .continuous)
                         .fill(.black.opacity(0.13))
                     if let thumbnail = option.thumbnail {
                         Image(nsImage: thumbnail)
@@ -259,7 +260,7 @@ struct RecordingSetupView: View {
                             .padding(4)
                     } else {
                         Image(systemName: "macwindow")
-                            .font(.system(size: 25, weight: .medium))
+                            .font(.system(size: LensIcon.xlarge, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
                     if isSelected {
@@ -289,10 +290,10 @@ struct RecordingSetupView: View {
                     }
                     VStack(alignment: .leading, spacing: 1) {
                         Text(option.applicationName)
-                            .font(.system(size: 9.8, weight: .semibold))
+                            .font(.system(size: LensType.micro, weight: .semibold))
                             .lineLimit(1)
                         Text(option.windowTitle)
-                            .font(.system(size: 8.7, weight: .medium))
+                            .font(.system(size: LensType.micro, weight: .medium))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -325,35 +326,112 @@ struct RecordingSetupView: View {
                     } label: {
                         HStack(spacing: 10) {
                             Image(systemName: preset.symbol)
-                                .font(.system(size: 15, weight: .semibold))
+                                .font(.system(size: LensIcon.large, weight: .semibold))
                                 .foregroundStyle(
-                                    model.recordingExperiencePreset == preset ? .cyan : .secondary
+                                    model.recordingExperiencePreset == preset
+                                        ? LensGlassPalette.accent
+                                        : LensGlassPalette.neutral
                                 )
                                 .frame(width: 24)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(preset.title)
-                                    .font(.system(size: 11.5, weight: .semibold))
+                                    .font(.system(size: LensType.caption, weight: .semibold))
                                 Text(preset.subtitle)
-                                    .font(.system(size: 9.2, weight: .medium))
+                                    .font(.system(size: LensType.micro, weight: .medium))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                             }
                             Spacer(minLength: 4)
                             if model.recordingExperiencePreset == preset {
                                 Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(.cyan)
+                                    .foregroundStyle(LensGlassPalette.accent)
                             }
                         }
                         .padding(11)
                     }
                     .buttonStyle(LensGlassButtonStyle(
-                        tint: .cyan,
+                        tint: LensGlassPalette.accent,
                         isSelected: model.recordingExperiencePreset == preset
                     ))
+                    .accessibilityLabel("\(preset.title)：\(preset.subtitle)")
+                    .accessibilityValue(
+                        model.recordingExperiencePreset == preset ? "已选择" : "未选择"
+                    )
+                    .accessibilityHint("选择\(preset.title)成片模式")
                     .accessibilityAddTraits(
                         model.recordingExperiencePreset == preset ? .isSelected : []
                     )
                 }
+            }
+        }
+    }
+
+    /// Keep the first decision surface focused on the two options most people
+    /// need to confirm before recording. The rest stays available, but does
+    /// not compete with the primary Start action on every session.
+    private var quickOptionsSection: some View {
+        setupSection("开始前确认", symbol: "checkmark.circle") {
+            HStack(spacing: 18) {
+                compactToggle(
+                    "系统声音",
+                    symbol: "speaker.wave.2",
+                    isOn: $model.capturesSystemAudio
+                )
+                compactToggle(
+                    "麦克风",
+                    symbol: "mic",
+                    isOn: $model.capturesMicrophone
+                )
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("停止后自动生成可发送预览")
+                        .font(.system(size: LensType.caption, weight: .semibold))
+                    Text("原始录屏会独立保留，不会被覆盖")
+                        .font(.system(size: LensType.micro, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .toggleStyle(.switch)
+        }
+    }
+
+    private var advancedSettingsDisclosure: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(LensMotionPolicy.panelAnimation(reduceMotion: false)) {
+                    showsAdvancedSettings.toggle()
+                }
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: showsAdvancedSettings ? "slider.horizontal.3" : "ellipsis.circle")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(showsAdvancedSettings ? "收起高级设置" : "更多录制设置")
+                            .font(.system(size: LensType.caption, weight: .semibold))
+                        Text(advancedSummary)
+                            .font(.system(size: LensType.micro, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: showsAdvancedSettings ? "chevron.up" : "chevron.down")
+                        .font(.system(size: LensIcon.small, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 13))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(showsAdvancedSettings ? "收起高级录制设置" : "展开更多录制设置")
+            .accessibilityValue(showsAdvancedSettings ? "已展开" : "已收起")
+
+            if showsAdvancedSettings {
+                HStack(alignment: .top, spacing: 14) {
+                    trackSection
+                    qualityAndAutomationSection
+                }
+                capabilitySection
             }
         }
     }
@@ -367,12 +445,12 @@ struct RecordingSetupView: View {
                     VStack(alignment: .leading, spacing: 1) {
                         Text("前置摄像头")
                         Text("默认关闭 · 本次录制单独开启")
-                            .font(.system(size: 8.8, weight: .medium))
+                            .font(.system(size: LensType.micro, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
                 }
                 Text("屏幕、声音、麦克风和摄像头分别保存，原始轨不会被后期覆盖。")
-                    .font(.system(size: 9, weight: .medium))
+                    .font(.system(size: LensType.micro, weight: .medium))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -389,6 +467,8 @@ struct RecordingSetupView: View {
                     Text("60 FPS · 更流畅").tag(RecordingFrameRate.fps60)
                 }
                 .pickerStyle(.segmented)
+                Toggle("开始前三秒倒计时", isOn: $model.showsRecordingCountdown)
+                    .toggleStyle(.switch)
                 Toggle("录完自动转写与整理", isOn: $model.automaticallyTranscribesRecordings)
                     .toggleStyle(.switch)
                 Picker("转写语言", selection: $model.transcriptionLanguage) {
@@ -426,7 +506,7 @@ struct RecordingSetupView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .lineLimit(1)
                 Text(trackSummary)
-                    .font(.system(size: 9.5, weight: .medium))
+                    .font(.system(size: LensType.micro, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -441,6 +521,9 @@ struct RecordingSetupView: View {
             .tint(.red)
             .keyboardShortcut(.defaultAction)
             .disabled(source == .window && windowPicker.selectedSource == nil)
+            .accessibilityLabel(startButtonTitle)
+            .accessibilityValue(trackSummary)
+            .accessibilityHint(startButtonHint)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
@@ -457,10 +540,22 @@ struct RecordingSetupView: View {
         return "\(source.title) · \(model.recordingExperiencePreset.title) · \(model.recordingFrameRate.rawValue) FPS"
     }
 
+    private var advancedSummary: String {
+        let camera = model.capturesCamera ? "摄像头" : "不录摄像头"
+        let transcription = model.automaticallyTranscribesRecordings ? "自动转写" : "不自动转写"
+        return "\(model.recordingFrameRate.rawValue) FPS · \(camera) · \(transcription)"
+    }
+
     private var startButtonTitle: String {
         source == .window && windowPicker.selectedSource == nil
             ? "请先选择窗口"
             : "开始录制\(source.title)"
+    }
+
+    private var startButtonHint: String {
+        source == .window && windowPicker.selectedSource == nil
+            ? "先在上方选择一个窗口"
+            : "按下后以当前来源和音轨设置开始录制"
     }
 
     private func startSelectedSource() {
@@ -482,10 +577,22 @@ struct RecordingSetupView: View {
 
     private func capability(_ title: String, symbol: String) -> some View {
         Label(title, systemImage: symbol)
-            .font(.system(size: 9.5, weight: .semibold))
+            .font(.system(size: LensType.micro, weight: .semibold))
             .padding(.horizontal, 9)
             .padding(.vertical, 6)
             .background(.primary.opacity(0.055), in: Capsule())
+    }
+
+    private func compactToggle(
+        _ title: String,
+        symbol: String,
+        isOn: Binding<Bool>
+    ) -> some View {
+        Toggle(isOn: isOn) {
+            Label(title, systemImage: symbol)
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .accessibilityLabel(title)
     }
 
     private func setupSection<Content: View>(

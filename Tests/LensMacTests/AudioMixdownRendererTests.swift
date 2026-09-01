@@ -198,6 +198,116 @@ final class AudioMixdownRendererTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(nominalFrameRate, 58)
     }
 
+    /// The single-pass path must not resurrect the 30 FPS trap the two-pass
+    /// mix once had: the effects render embeds the prepared audio sidecar in
+    /// its only video encode and keeps source-timing fidelity.
+    func testSinglePassSidecarEmbedsMicrophoneMixDuringTheOnlyVideoEncode() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "LensSinglePassMixTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rawURL = directory.appendingPathComponent("raw-60.mp4")
+        let microphoneURL = directory.appendingPathComponent("microphone.caf")
+        let sidecarURL = directory.appendingPathComponent("mix.caf")
+        let outputURL = directory.appendingPathComponent("preview.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: rawURL,
+            frameCount: 120,
+            framesPerSecond: 60,
+            allowsFrameReordering: true
+        )
+        try makeTone(at: microphoneURL, frameCount: 96_000) { frame in
+            frame < 48_000 ? 0.16 : 0
+        }
+        let audioPlan = AutoEditPlan.Audio(
+            reducesMicrophoneNoise: false,
+            normalizesLoudness: false,
+            ducksSystemUnderNarration: false
+        )
+
+        let report = try await AudioMixdownRenderer().prepareMixedAudioSidecar(
+            sourceURL: rawURL,
+            microphoneURL: microphoneURL,
+            outputURL: sidecarURL,
+            plan: audioPlan
+        )
+        let sidecar = AVURLAsset(url: sidecarURL)
+        let sidecarAudioTracks = try await sidecar.loadTracks(withMediaType: .audio)
+        let sidecarVideoTracks = try await sidecar.loadTracks(withMediaType: .video)
+        XCTAssertFalse(sidecarAudioTracks.isEmpty)
+        XCTAssertTrue(sidecarVideoTracks.isEmpty)
+        XCTAssertNil(report.voiceProcessingResult)
+        XCTAssertNil(report.voiceProcessingErrorDescription)
+
+        var editPlan = AutoEditPlan()
+        editPlan.camera.mode = "off"
+        editPlan.cursor.isEnabled = false
+        editPlan.canvas?.isEnabled = false
+        editPlan.presenterCamera?.isEnabled = false
+        editPlan.captions?.isEnabled = false
+        editPlan.export = .init(preset: .source)
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: rawURL,
+            outputURL: outputURL,
+            plan: editPlan,
+            mixedAudioURL: sidecarURL
+        )
+
+        let output = AVURLAsset(url: outputURL)
+        let outputVideoTracks = try await output.loadTracks(withMediaType: .video)
+        let outputAudioTracks = try await output.loadTracks(withMediaType: .audio)
+        let videoTrack = try XCTUnwrap(outputVideoTracks.first)
+        let nominalFrameRate = try await videoTrack.load(.nominalFrameRate)
+        XCTAssertGreaterThanOrEqual(nominalFrameRate, 58)
+        XCTAssertFalse(outputAudioTracks.isEmpty)
+        let analyzer = VoiceAudioProcessor()
+        let metrics = try await analyzer.analyze(url: outputURL)
+        XCTAssertEqual(
+            metrics.peakAmplitude,
+            0.16,
+            accuracy: 0.05,
+            "成片音轨应携带麦克风混音电平。"
+        )
+    }
+
+    func testSidecarProgressIsMonotonicAndEndsAtOne() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "LensSidecarProgressTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rawURL = directory.appendingPathComponent("raw.mp4")
+        let microphoneURL = directory.appendingPathComponent("microphone.caf")
+        let sidecarURL = directory.appendingPathComponent("mix.caf")
+        try await SyntheticVideoFactory.makeVideo(at: rawURL, frameCount: 96, framesPerSecond: 24)
+        try makeTone(at: microphoneURL, frameCount: 96_000) { _ in 0.16 }
+        let audioPlan = AutoEditPlan.Audio(
+            reducesMicrophoneNoise: false,
+            normalizesLoudness: false,
+            ducksSystemUnderNarration: false
+        )
+
+        let collector = ProgressCollectorBox()
+        _ = try await AudioMixdownRenderer().prepareMixedAudioSidecar(
+            sourceURL: rawURL,
+            microphoneURL: microphoneURL,
+            outputURL: sidecarURL,
+            plan: audioPlan,
+            progress: { collector.append($0) }
+        )
+
+        let values = collector.recorded
+        XCTAssertFalse(values.isEmpty)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(values.first), 0)
+        XCTAssertEqual(try XCTUnwrap(values.last), 1)
+        XCTAssertEqual(values, values.sorted(), "progress must never move backwards")
+    }
+
     @MainActor
     func testSystemVolumeAppliesWithoutMicrophoneTrack() async throws {
         let directory = FileManager.default.temporaryDirectory

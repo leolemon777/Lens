@@ -444,7 +444,7 @@ final class ScreenRecordingService: NSObject {
             guard !completedSegments.isEmpty else {
                 throw ScreenRecordingError.recordingDidNotFinalize
             }
-            completedSegments = try archiveFirstSegmentsIfNeeded(
+            completedSegments = try await archiveFirstSegmentsIfNeeded(
                 completedSegments,
                 session: session
             )
@@ -570,7 +570,7 @@ final class ScreenRecordingService: NSObject {
             throw ScreenRecordingError.recordingDidNotFinalize
         }
 
-        completedSegments = try archiveFirstSegmentsIfNeeded(
+        completedSegments = try await archiveFirstSegmentsIfNeeded(
             completedSegments,
             session: session
         )
@@ -843,7 +843,15 @@ final class ScreenRecordingService: NSObject {
             }
         }
         if let systemAudioWriter {
-            try await systemAudioWriter.finish()
+            do {
+                try await systemAudioWriter.finish()
+            } catch SystemAudioTrackWriterError.noSamples {
+                // A session whose audio output delivers no samples (for
+                // example no output device is present) still has an intact
+                // screen track. Degrade to a missing system-audio track — the
+                // requested-track integrity warning already reports that —
+                // instead of failing the whole stop and forcing recovery.
+            }
             lastSystemAudioCaptureSnapshot = systemAudioWriter.captureSnapshot
         }
         lastRawSystemAudioCallbackCount = captureOutputRouter?.audioCallbackCount ?? 0
@@ -995,39 +1003,47 @@ final class ScreenRecordingService: NSObject {
     func archiveFirstSegmentsIfNeeded(
         _ segments: [RecordingSegment],
         session: RecordingLensSession
-    ) throws -> [RecordingSegment] {
+    ) async throws -> [RecordingSegment] {
         guard segments.count > 1,
               let firstPosition = segments.firstIndex(where: { $0.index == 0 }) else {
             return segments
         }
         let directory = session.packageURL.appendingPathComponent("raw/segments", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        var archived = segments[firstPosition]
+        let archived = segments[firstPosition]
         let archivedScreenURL = directory.appendingPathComponent("screen-000.mp4")
-        try copyIfNeeded(session.videoURL, to: archivedScreenURL)
-        archived = RecordingSegment(
+        try await segmentAssembler.copyFileIfNeeded(session.videoURL, to: archivedScreenURL)
+        let microphoneRelativePath: String?
+        if archived.microphoneRelativePath != nil,
+           let microphoneURL = session.microphoneURL,
+           microphoneURL.isNonemptyFile {
+            let destination = directory.appendingPathComponent("microphone-000.caf")
+            try await segmentAssembler.copyFileIfNeeded(microphoneURL, to: destination)
+            microphoneRelativePath = relativePath(destination, in: session.packageURL)
+        } else {
+            microphoneRelativePath = nil
+        }
+        let cameraRelativePath: String?
+        if archived.cameraRelativePath != nil,
+           let cameraURL = session.cameraURL,
+           cameraURL.isNonemptyFile {
+            let destination = directory.appendingPathComponent("camera-000.mov")
+            try await segmentAssembler.copyFileIfNeeded(cameraURL, to: destination)
+            cameraRelativePath = relativePath(destination, in: session.packageURL)
+        } else {
+            cameraRelativePath = nil
+        }
+        let archivedSegment = RecordingSegment(
             index: archived.index,
             timelineStartSeconds: archived.timelineStartSeconds,
             durationSeconds: archived.durationSeconds,
             screenRelativePath: relativePath(archivedScreenURL, in: session.packageURL),
-            microphoneRelativePath: try archived.microphoneRelativePath.flatMap { _ in
-                guard let microphoneURL = session.microphoneURL, microphoneURL.isNonemptyFile else {
-                    return nil
-                }
-                let destination = directory.appendingPathComponent("microphone-000.caf")
-                try copyIfNeeded(microphoneURL, to: destination)
-                return relativePath(destination, in: session.packageURL)
-            },
-            cameraRelativePath: try archived.cameraRelativePath.flatMap { _ in
-                guard let cameraURL = session.cameraURL, cameraURL.isNonemptyFile else { return nil }
-                let destination = directory.appendingPathComponent("camera-000.mov")
-                try copyIfNeeded(cameraURL, to: destination)
-                return relativePath(destination, in: session.packageURL)
-            }
+            microphoneRelativePath: microphoneRelativePath,
+            cameraRelativePath: cameraRelativePath
         )
-        try store.appendRecordingSegment(archived, to: session)
+        try store.appendRecordingSegment(archivedSegment, to: session)
         var result = segments
-        result[firstPosition] = archived
+        result[firstPosition] = archivedSegment
         return result
     }
 
@@ -1045,7 +1061,7 @@ final class ScreenRecordingService: NSObject {
             let urls = sources.map(\.0)
             if !urls.isEmpty {
                 do {
-                    _ = try segmentAssembler.assembleAudioSegments(
+                    _ = try await segmentAssembler.assembleAudioSegments(
                         urls,
                         outputURL: microphoneURL,
                         maximumDurations: sources.map(\.1)
@@ -1157,15 +1173,6 @@ final class ScreenRecordingService: NSObject {
 
     private func relativePath(_ url: URL, in packageURL: URL) -> String {
         url.path.replacingOccurrences(of: packageURL.path + "/", with: "")
-    }
-
-    private func copyIfNeeded(_ sourceURL: URL, to destinationURL: URL) throws {
-        guard sourceURL.standardizedFileURL != destinationURL.standardizedFileURL else { return }
-        if FileManager.default.fileExists(atPath: destinationURL.path) {
-            try validateNonemptyFile(at: destinationURL)
-            return
-        }
-        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
     }
 
     private func shareableContent() async throws -> SCShareableContent {

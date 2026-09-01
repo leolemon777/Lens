@@ -68,6 +68,15 @@ protocol CaptureOverlayViewDelegate: AnyObject {
         _ view: CaptureOverlayView,
         didMeasureRegionDrag performance: CaptureOverlayDragPerformance
     )
+    /// Samples a small region for the magnifier. Runs on its own throttled,
+    /// sequential loop — never from `mouseDragged`/`mouseMoved` — so a slow
+    /// or failed sample can never affect drag responsiveness; `nil` on
+    /// failure just leaves the magnifier showing its last good frame.
+    func captureOverlay(
+        _ view: CaptureOverlayView,
+        didRequestMagnifierSample globalRect: CGRect
+    ) async -> CGImage?
+    func captureOverlay(_ view: CaptureOverlayView, didCopyMagnifierHex hex: String)
 }
 
 extension CaptureOverlayViewDelegate {
@@ -104,15 +113,36 @@ final class CaptureOverlayView: NSView {
     private var regionDragTotalDuration = 0.0
     private var regionDragMaximumDuration = 0.0
 
+    private static let magnifierSize: CGFloat = 96
+    private static let magnifierSourcePoints: CGFloat = 9
+    private static let magnifierMargin: CGFloat = 22
+    private static let magnifierRefreshInterval: Duration = .milliseconds(80)
+
+    private let magnifierContainerLayer = CALayer()
+    private let magnifierImageLayer = CALayer()
+    private let magnifierCrosshairLayer = CAShapeLayer()
+    private let magnifierCaptionLayer = CALayer()
+    private let magnifierHexLabel = NSTextField(labelWithString: "")
+    private var isMagnifierSuppressed = false
+    private var lastMagnifierHex: String?
+    private var magnifierPoint: CGPoint?
+    /// Only ever written on the main actor; read again by `deinit` purely to
+    /// cancel it, which by definition holds the last reference and cannot
+    /// race with the loop's own MainActor-isolated body.
+    private nonisolated(unsafe) var magnifierTask: Task<Void, Never>?
+    private let magnifierPasteboard: NSPasteboard
+
     init(
         frame: CGRect,
         displayID: CGDirectDisplayID,
         displayBounds: CGRect,
-        mode: CaptureOverlayMode
+        mode: CaptureOverlayMode,
+        magnifierPasteboard: NSPasteboard = .general
     ) {
         self.displayID = displayID
         self.displayBounds = displayBounds
         self.mode = mode
+        self.magnifierPasteboard = magnifierPasteboard
         if case let .region(_, globalSnapRects) = mode {
             regionSnapRects = globalSnapRects.compactMap {
                 CaptureGeometry.localIntersection(of: $0, displayBounds: displayBounds)
@@ -125,13 +155,19 @@ final class CaptureOverlayView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
         if case let .region(action, _) = mode {
             configureRegionLayerRendering(action: action)
+            configureMagnifierRendering()
             refreshRegionSnapTargets()
             updateRegionLayerRendering()
+            startMagnifierLoopIfNeeded()
         }
     }
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    deinit {
+        magnifierTask?.cancel()
     }
 
     override var isFlipped: Bool { true }
@@ -272,6 +308,10 @@ final class CaptureOverlayView: NSView {
         currentPoint = result.point
         currentSnapResult = result
         didFineAdjustCurrentPoint = false
+        // Cheap position-only update; the magnifier's own zoomed content
+        // refreshes on its independent throttled loop, never here, so this
+        // can never be the thing that pushes drag-update timing over budget.
+        updateMagnifierPoint(result.point)
         if changed {
             updateRegionLayerRendering()
         }
@@ -312,17 +352,21 @@ final class CaptureOverlayView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        if case .region = mode, isClickAnchoredSelection {
-            let result = regionPoint(
-                for: clipped(convert(event.locationInWindow, from: nil)),
-                event: event
-            )
-            let changed = currentPoint != result.point || currentSnapResult != result
-            currentPoint = result.point
-            currentSnapResult = result
-            didFineAdjustCurrentPoint = false
-            if changed {
-                updateRegionLayerRendering()
+        if case .region = mode {
+            let point = clipped(convert(event.locationInWindow, from: nil))
+            // Tracked independently of `currentPoint`/selection state so the
+            // magnifier is visible the moment the pointer enters the overlay,
+            // not only once a drag actually starts.
+            updateMagnifierPoint(point)
+            if isClickAnchoredSelection {
+                let result = regionPoint(for: point, event: event)
+                let changed = currentPoint != result.point || currentSnapResult != result
+                currentPoint = result.point
+                currentSnapResult = result
+                didFineAdjustCurrentPoint = false
+                if changed {
+                    updateRegionLayerRendering()
+                }
             }
             return
         }
@@ -331,14 +375,37 @@ final class CaptureOverlayView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
+        if case .region = mode {
+            magnifierPoint = nil
+            updateMagnifierPosition()
+        }
         guard isWindowSelectionMode else { return }
         hoveredWindow = nil
         needsDisplay = true
     }
 
+    override func flagsChanged(with event: NSEvent) {
+        if case .region = mode {
+            let suppressed = event.modifierFlags.contains(.option)
+            if suppressed != isMagnifierSuppressed {
+                isMagnifierSuppressed = suppressed
+                updateMagnifierPosition()
+            }
+        }
+        super.flagsChanged(with: event)
+    }
+
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {
             delegate?.captureOverlayDidCancel(self)
+            return
+        }
+        if case .region = mode,
+           event.charactersIgnoringModifiers?.lowercased() == "c",
+           let lastMagnifierHex {
+            magnifierPasteboard.clearContents()
+            magnifierPasteboard.setString(lastMagnifierHex, forType: .string)
+            delegate?.captureOverlay(self, didCopyMagnifierHex: lastMagnifierHex)
             return
         }
         if case .region = mode,
@@ -471,7 +538,7 @@ final class CaptureOverlayView: NSView {
 
         regionGuideLayer.name = "capture-region-guides"
         regionGuideLayer.fillColor = nil
-        regionGuideLayer.strokeColor = NSColor.systemCyan.withAlphaComponent(0.7).cgColor
+        regionGuideLayer.strokeColor = LensGlassPalette.accentColor.withAlphaComponent(0.7).cgColor
         regionGuideLayer.lineWidth = 0.8
         regionGuideLayer.lineDashPattern = [4, 4]
 
@@ -702,11 +769,8 @@ final class CaptureOverlayView: NSView {
 
     private func regionAccentColor(for action: CaptureOverlayAction) -> NSColor {
         switch action {
-        case .screenshot: .systemCyan
-        case .conversationInbox: .systemMint
-        case .ocr: .systemIndigo
-        case .recording: .systemRed
-        case .scrollingCapture: .systemOrange
+        case .recording: LensGlassPalette.recordingColor
+        case .screenshot, .conversationInbox, .ocr, .scrollingCapture: LensGlassPalette.accentColor
         }
     }
 
@@ -722,11 +786,13 @@ final class CaptureOverlayView: NSView {
         border.stroke()
 
         let accent: NSColor = switch mode {
-        case .region(.recording, _), .window(_, .recording): .systemRed
-        case .region(.screenshot, _), .window(_, .screenshot), .multiWindow: .systemCyan
-        case .region(.conversationInbox, _), .window(_, .conversationInbox): .systemMint
-        case .region(.ocr, _), .window(_, .ocr): .systemIndigo
-        case .region(.scrollingCapture, _), .window(_, .scrollingCapture): .systemOrange
+        case .region(.recording, _), .window(_, .recording):
+            LensGlassPalette.recordingColor
+        case .region(.screenshot, _), .window(_, .screenshot), .multiWindow,
+             .region(.conversationInbox, _), .window(_, .conversationInbox),
+             .region(.ocr, _), .window(_, .ocr),
+             .region(.scrollingCapture, _), .window(_, .scrollingCapture):
+            LensGlassPalette.accentColor
         }
         accent.withAlphaComponent(0.76).setStroke()
         let glow = NSBezierPath(roundedRect: rect.insetBy(dx: -1, dy: -1), xRadius: 5, yRadius: 5)
@@ -736,7 +802,7 @@ final class CaptureOverlayView: NSView {
 
     private func drawSnapGuides() {
         guard let currentSnapResult else { return }
-        NSColor.systemCyan.withAlphaComponent(0.7).setStroke()
+        LensGlassPalette.accentColor.withAlphaComponent(0.7).setStroke()
         if let x = currentSnapResult.snappedX {
             let path = NSBezierPath()
             path.move(to: CGPoint(x: x, y: bounds.minY))
@@ -837,5 +903,198 @@ final class CaptureOverlayView: NSView {
             at: CGPoint(x: frame.minX + 11, y: frame.minY + 5.5),
             withAttributes: attributes
         )
+    }
+
+    // MARK: - Magnifier
+
+    private func configureMagnifierRendering() {
+        guard let rootLayer = layer else { return }
+        magnifierContainerLayer.name = "capture-magnifier-container"
+        magnifierContainerLayer.backgroundColor = NSColor.black.withAlphaComponent(0.86).cgColor
+        magnifierContainerLayer.cornerRadius = LensGlassMetrics.tileCornerRadius
+        magnifierContainerLayer.borderColor = NSColor.white.withAlphaComponent(0.24).cgColor
+        magnifierContainerLayer.borderWidth = 1
+        magnifierContainerLayer.masksToBounds = true
+        // A freshly created CALayer defaults to non-flipped geometry
+        // regardless of the (flipped) view it's hosted in; without this,
+        // the caption bar math below would land at the visual top instead
+        // of the bottom.
+        magnifierContainerLayer.isGeometryFlipped = true
+        magnifierContainerLayer.isHidden = true
+        magnifierContainerLayer.zPosition = 20
+
+        magnifierImageLayer.name = "capture-magnifier-image"
+        magnifierImageLayer.magnificationFilter = .nearest
+        magnifierImageLayer.minificationFilter = .nearest
+        magnifierImageLayer.contentsGravity = .resize
+        magnifierContainerLayer.addSublayer(magnifierImageLayer)
+
+        magnifierCrosshairLayer.name = "capture-magnifier-crosshair"
+        magnifierCrosshairLayer.strokeColor = LensGlassPalette.accentColor.withAlphaComponent(0.92).cgColor
+        magnifierCrosshairLayer.fillColor = nil
+        magnifierCrosshairLayer.lineWidth = 1
+        magnifierContainerLayer.addSublayer(magnifierCrosshairLayer)
+
+        magnifierCaptionLayer.name = "capture-magnifier-caption"
+        magnifierCaptionLayer.backgroundColor = NSColor.black.withAlphaComponent(0.7).cgColor
+        magnifierContainerLayer.addSublayer(magnifierCaptionLayer)
+
+        rootLayer.addSublayer(magnifierContainerLayer)
+
+        configureRegionLabel(
+            magnifierHexLabel,
+            font: .monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
+            backgroundAlpha: 0,
+            borderAlpha: 0
+        )
+        magnifierHexLabel.alignment = .center
+        magnifierHexLabel.layer?.zPosition = 21
+        addSubview(magnifierHexLabel)
+    }
+
+    private func updateMagnifierPoint(_ point: CGPoint) {
+        magnifierPoint = point
+        updateMagnifierPosition()
+    }
+
+    /// Cheap, synchronous, and safe to call from the drag hot path: only
+    /// arithmetic and layer property assignment, never capture I/O.
+    private func updateMagnifierPosition() {
+        guard let magnifierPoint, !isMagnifierSuppressed else {
+            magnifierContainerLayer.isHidden = true
+            return
+        }
+        let size = Self.magnifierSize
+        let margin = Self.magnifierMargin
+        var origin = CGPoint(x: magnifierPoint.x + margin, y: magnifierPoint.y + margin)
+        let candidateFrame = CGRect(origin: origin, size: CGSize(width: size, height: size))
+        if let selection, selection.width > 0, selection.height > 0,
+           candidateFrame.intersects(selection) {
+            // Auto-avoid: flip to the opposite corner of the pointer so the
+            // magnifier never sits on top of the selection it's helping to
+            // draw.
+            origin = CGPoint(x: magnifierPoint.x - margin - size, y: magnifierPoint.y - margin - size)
+        }
+        origin.x = min(max(origin.x, bounds.minX), max(bounds.minX, bounds.maxX - size))
+        origin.y = min(max(origin.y, bounds.minY), max(bounds.minY, bounds.maxY - size))
+        let frame = CGRect(origin: origin, size: CGSize(width: size, height: size))
+        let captionHeight: CGFloat = 20
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        magnifierContainerLayer.isHidden = false
+        magnifierContainerLayer.frame = frame
+        magnifierImageLayer.frame = CGRect(x: 0, y: 0, width: size, height: size)
+        magnifierCrosshairLayer.frame = CGRect(x: 0, y: 0, width: size, height: size)
+        magnifierCrosshairLayer.path = Self.crosshairPath(size: size)
+        magnifierCaptionLayer.frame = CGRect(x: 0, y: size - captionHeight, width: size, height: captionHeight)
+        CATransaction.commit()
+        magnifierHexLabel.frame = CGRect(
+            x: frame.minX,
+            y: frame.maxY - captionHeight,
+            width: size,
+            height: captionHeight
+        )
+    }
+
+    nonisolated private static func crosshairPath(size: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        let mid = size / 2
+        let armLength: CGFloat = 5
+        path.move(to: CGPoint(x: mid - armLength, y: mid))
+        path.addLine(to: CGPoint(x: mid + armLength, y: mid))
+        path.move(to: CGPoint(x: mid, y: mid - armLength))
+        path.addLine(to: CGPoint(x: mid, y: mid + armLength))
+        return path
+    }
+
+    private func startMagnifierLoopIfNeeded() {
+        guard magnifierTask == nil else { return }
+        magnifierTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                await self.refreshMagnifierSample()
+                try? await Task.sleep(for: Self.magnifierRefreshInterval)
+            }
+        }
+    }
+
+    /// Drives one sampling cycle synchronously with the caller instead of
+    /// waiting on the real throttled loop, so tests don't depend on timing.
+    func refreshMagnifierSampleForTesting() async {
+        await refreshMagnifierSample()
+    }
+
+    /// Runs sequentially on its own loop, fully independent of
+    /// `mouseDragged`/`mouseMoved` — a slow or failed sample here can never
+    /// delay the selection rectangle's own responsiveness.
+    private func refreshMagnifierSample() async {
+        guard !isMagnifierSuppressed, let magnifierPoint, let delegate else { return }
+        let half = Self.magnifierSourcePoints / 2
+        let localSampleRect = CGRect(
+            x: magnifierPoint.x - half,
+            y: magnifierPoint.y - half,
+            width: Self.magnifierSourcePoints,
+            height: Self.magnifierSourcePoints
+        )
+        let globalSampleRect = CaptureGeometry.globalRect(
+            fromLocalRect: localSampleRect,
+            displayBounds: displayBounds
+        )
+        guard let sample = await delegate.captureOverlay(
+            self,
+            didRequestMagnifierSample: globalSampleRect
+        ) else { return }
+        applyMagnifierSample(sample)
+    }
+
+    private func applyMagnifierSample(_ image: CGImage) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        magnifierImageLayer.contents = image
+        CATransaction.commit()
+        guard let hex = Self.centerPixelHex(of: image) else { return }
+        lastMagnifierHex = hex
+        if let magnifierPoint {
+            let globalPoint = CaptureGeometry.globalPoint(
+                fromLocalPoint: magnifierPoint,
+                displayBounds: displayBounds
+            )
+            magnifierHexLabel.stringValue = "\(hex) · \(Int(globalPoint.x.rounded())), \(Int(globalPoint.y.rounded()))"
+        } else {
+            magnifierHexLabel.stringValue = hex
+        }
+    }
+
+    /// Draws into a context whose pixel layout is fully known (rather than
+    /// trusting the source image's own, possibly-BGRA `bitmapInfo`), so the
+    /// extracted bytes are reliably R/G/B regardless of how the screen
+    /// capture backend encoded them.
+    nonisolated static func centerPixelHex(of image: CGImage) -> String? {
+        let width = image.width
+        let height = image.height
+        guard width > 0, height > 0 else { return nil }
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var buffer = [UInt8](repeating: 0, count: height * bytesPerRow)
+        let centerX = width / 2
+        let centerY = height / 2
+        let offset = centerY * bytesPerRow + centerX * bytesPerPixel
+        guard offset + 2 < buffer.count else { return nil }
+        let sampled: (UInt8, UInt8, UInt8)? = buffer.withUnsafeMutableBytes { rawBuffer in
+            guard let context = CGContext(
+                data: rawBuffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return nil }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            let base = rawBuffer.bindMemory(to: UInt8.self)
+            return (base[offset], base[offset + 1], base[offset + 2])
+        }
+        guard let sampled else { return nil }
+        return String(format: "#%02X%02X%02X", sampled.0, sampled.1, sampled.2)
     }
 }

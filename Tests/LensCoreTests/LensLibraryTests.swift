@@ -105,6 +105,92 @@ final class LensLibraryTests: XCTestCase {
         )
     }
 
+    func testLibrarySearchRanksIntentionalMatchesBeforeLongBodyMatches() {
+        let root = temporaryRoot()
+        let bodyMatch = makeEntry(
+            root: root,
+            kind: .screenshot,
+            title: "周会记录",
+            ocrText: "这里提到 roadmap，后面还有很多正文内容"
+        )
+        let tagMatch = LensLibraryEntry(
+            packageURL: bodyMatch.packageURL.appendingPathComponent("tagged.lens"),
+            manifest: LensManifest(
+                id: UUID(),
+                kind: .screenshot,
+                title: "设计评审",
+                dimensions: LensDimensions(width: 640, height: 360),
+                assets: bodyMatch.manifest.assets
+            ),
+            primaryAssetURL: bodyMatch.primaryAssetURL,
+            displayAssetURL: bodyMatch.displayAssetURL,
+            ocrText: nil,
+            insights: LensInsightsDocument(
+                engine: "test",
+                suggestedTitle: "设计评审",
+                summary: "",
+                tags: ["roadmap"]
+            )
+        )
+        let titleMatch = makeEntry(
+            root: root,
+            kind: .screenshot,
+            title: "Roadmap 评审",
+            ocrText: nil
+        )
+
+        let result = LensLibrarySearch.filter(
+            [bodyMatch, tagMatch, titleMatch],
+            query: "roadmap",
+            filter: .all
+        )
+
+        XCTAssertEqual(result.map(\.id), [titleMatch.id, tagMatch.id, bodyMatch.id])
+    }
+
+    func testLibrarySearchUsesLocalIntentAliasesWithoutUploadingContent() {
+        let root = temporaryRoot()
+        let recording = makeEntry(
+            root: root,
+            kind: .recording,
+            title: "录屏演示",
+            ocrText: nil
+        )
+        let guide = makeEntry(
+            root: root,
+            kind: .screenshot,
+            title: "录屏操作指南",
+            ocrText: nil
+        )
+
+        let videoResult = LensLibrarySearch.filter(
+            [recording, guide],
+            query: "视频",
+            filter: .all
+        )
+        XCTAssertEqual(Set(videoResult.map(\.id)), Set([recording.id, guide.id]))
+        XCTAssertEqual(
+            LensLibrarySearch.filter(
+                [recording, guide],
+                query: "教程",
+                filter: .all
+            ).map(\.id),
+            [guide.id]
+        )
+        let contiguousIntentResult = LensLibrarySearch.filter(
+            [recording, guide],
+            query: "视频教程",
+            filter: .all
+        )
+        XCTAssertEqual(
+            contiguousIntentResult.map(\.id),
+            [guide.id]
+        )
+        XCTAssertTrue(LensLibrarySearch.usesIntentExpansion(for: "视频"))
+        XCTAssertTrue(LensLibrarySearch.usesIntentExpansion(for: "视频教程"))
+        XCTAssertFalse(LensLibrarySearch.usesIntentExpansion(for: "roadmap"))
+    }
+
     func testPersistentIndexInvalidatesWhenOCRChangesOutsideTheManifest() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -226,6 +312,33 @@ final class LensLibraryTests: XCTestCase {
                     normalizedBounds: LensRect(x: 0, y: 0, width: 1, height: 0.2)
                 )
             ]
+        )
+    }
+
+    private func makeEntry(
+        root: URL,
+        kind: LensKind,
+        title: String,
+        ocrText: String?
+    ) -> LensLibraryEntry {
+        let id = UUID()
+        let packageURL = root.appendingPathComponent("\(id.uuidString).lens", isDirectory: true)
+        let assetName = kind == .screenshot ? "screenshot.png" : "screen.mp4"
+        let assetURL = packageURL.appendingPathComponent("raw/\(assetName)")
+        let role: LensAsset.Role = kind == .screenshot ? .screenshot : .screenVideo
+        let manifest = LensManifest(
+            id: id,
+            kind: kind,
+            title: title,
+            dimensions: LensDimensions(width: 640, height: 360),
+            assets: [LensAsset(role: role, relativePath: "raw/\(assetName)")]
+        )
+        return LensLibraryEntry(
+            packageURL: packageURL,
+            manifest: manifest,
+            primaryAssetURL: assetURL,
+            displayAssetURL: assetURL,
+            ocrText: ocrText
         )
     }
 

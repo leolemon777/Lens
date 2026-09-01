@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let ocrResults = OCRResultWindowController()
     private let pointerRecorder = PointerEventRecorder()
     private let recordingControl = RecordingControlWindowController()
+    private let recordingCountdown = RecordingCountdownWindowController()
     private let previewRenderer = AutoPreviewRenderer()
     private let audioMixdownRenderer = AudioMixdownRenderer()
     private lazy var renderedEffectVerifier = RenderedEffectVerifier(
@@ -98,6 +99,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         },
         onPerformanceMeasured: { [weak self] code, metadata in
             self?.logDiagnostic(code, metadata: metadata)
+        },
+        onCaptureFailed: { [weak self] message in
+            self?.toast.show(
+                title: "Lens 无法完成截图",
+                detail: message,
+                symbol: "exclamationmark.triangle.fill"
+            )
+        },
+        onMagnifierHexCopied: { [weak self] hex in
+            self?.toast.show(title: "已复制 \(hex)", symbol: "eyedropper")
         }
     )
     private lazy var recordingService: ScreenRecordingService = {
@@ -129,7 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeysBlockedByAccessibility = false
     private var suspendHotKeysForShortcutCapture = false
     private var shortcutCaptureDepth = 0
-    private var processingRecordingPackages: Set<URL> = []
+    private let recordingProcessingGate = RecordingProcessingGate()
     private var transcribingRecordingPackages: Set<URL> = []
     private var organizingLensPackages: Set<URL> = []
     private var pendingAutomaticTranscriptions: [LensLibraryEntry] = []
@@ -295,6 +306,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quickAccess.onConversationInboxRequested = { [weak self] pngData in
             self?.exportPNGToConversationInbox(pngData)
         }
+        quickAccess.onRetryRequested = { [weak self] lens in
+            guard let self else { return }
+            quickAccess.show(
+                lens: lens,
+                image: deliveryImage(for: lens),
+                confirmationTitle: "原始录屏已保存 · 成片生成中",
+                deliveryState: .processing
+            )
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                _ = await processRecording(lens)
+            }
+        }
         annotationEditor.onSaved = { [weak self] lens, image, clipboardStatus in
             guard let self else { return }
             model.setRecentLens(lens, thumbnail: image)
@@ -382,6 +406,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         lensLibrary.onCopyResult = { [weak self] in
             self?.showClipboardFeedback(succeeded: $0)
+        }
+        lensLibrary.onStartCapture = { [weak self] in
+            guard let self else { return }
+            lensLibrary.hide()
+            actionCenter.show()
         }
         lensLibrary.onEditRecordingRequested = { [weak self] entry in
             self?.videoEditor.show(entry: entry)
@@ -1439,6 +1468,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 permissionCenter.show()
                 return
             }
+            let readyToRecord = await recordingCountdown.run(
+                source: source,
+                isEnabled: model.showsRecordingCountdown
+            )
+            guard readyToRecord else {
+                toast.show(title: "已取消录制", symbol: "xmark.circle")
+                return
+            }
             do {
                 _ = try await recordingService.start(source: source, options: options)
                 logDiagnostic(
@@ -1532,7 +1569,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             do {
                 let saved = try await recordingService.stop()
-                recordingControl.hide()
+                let recordingControlWindow = recordingControl.currentWindow
+                recordingControl.prepareForHandoff()
                 let healthReport = recordingService.lastRecordingHealthReport
                     ?? (try? store.loadRecordingHealthReport(from: saved.packageURL))
                 var stopMetadata = [
@@ -1583,7 +1621,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 quickAccess.show(
                     lens: saved,
                     image: deliveryImage(for: saved),
-                    confirmationTitle: "录屏已保存，可拖出发送"
+                    confirmationTitle: "原始录屏已保存 · 成片生成中",
+                    deliveryState: .processing,
+                    handoffFrom: recordingControlWindow
                 )
                 if !completionNotes.isEmpty {
                     toast.show(
@@ -1851,16 +1891,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func processRecording(_ saved: SavedLens) async -> AutoEditPlan? {
         let processingStartedAt = ProcessInfo.processInfo.systemUptime
         let packageKey = saved.packageURL.standardizedFileURL
-        while processingRecordingPackages.contains(packageKey) {
-            do {
-                try await Task.sleep(for: .milliseconds(120))
-                try Task.checkCancellation()
-            } catch {
-                return nil
-            }
-        }
-        processingRecordingPackages.insert(packageKey)
-        defer { processingRecordingPackages.remove(packageKey) }
+        await recordingProcessingGate.acquire(packageKey)
+        defer { Task { await recordingProcessingGate.release(packageKey) } }
         do {
             let plan = try store.loadAutoEditPlan(from: saved.packageURL)
             var healthReport = try? store.loadRecordingHealthReport(from: saved.packageURL)
@@ -1871,24 +1903,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let transcript = plan.captions?.isEnabled == true
                 ? try? store.loadTranscript(from: saved.packageURL)
                 : nil
-            _ = try await previewRenderer.render(
-                inputURL: saved.rawAssetURL,
-                cameraURL: cameraURL,
-                outputURL: outputURL,
-                plan: plan,
-                transcript: transcript
-            )
             let microphoneURL = saved.manifest.assets.first(where: { $0.role == .microphone })
                 .map { saved.packageURL.appendingPathComponent($0.relativePath) }
                 .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
             var audioMixError: Error?
             var microphoneWasMixed = false
             var voiceProcessingFellBack = false
-            if let audioPlan = plan.audio,
-               AudioMixdownRenderer.requiresMixdown(
-                   microphoneURL: microphoneURL,
-                   plan: audioPlan
-               ) {
+            let requiresAudioMixdown = plan.audio.map { audioPlan in
+                AudioMixdownRenderer.requiresMixdown(
+                    microphoneURL: microphoneURL,
+                    plan: audioPlan
+                )
+            } ?? false
+            // Single pass: prepare the narration/system mix as audio only,
+            // then the effects render embeds it during its only video encode.
+            // A sidecar failure falls back to the legacy two-pass mix below
+            // rather than failing the preview.
+            let mixedAudioSidecarURL = requiresAudioMixdown
+                ? saved.packageURL.appendingPathComponent(
+                    "previews/.audio-mix-\(UUID().uuidString).caf"
+                )
+                : nil
+            var mixedAudioReady = false
+            // Two-segment overall progress (audio 0–15%, video 15–100%,
+            // or a plain 0–100% when no mixdown runs at all) so the panel
+            // reflects one continuous number across both renderers instead
+            // of restarting when the video pass begins.
+            if let mixedAudioSidecarURL, let audioPlan = plan.audio {
+                defer { try? FileManager.default.removeItem(at: mixedAudioSidecarURL) }
+                do {
+                    let mixReport = try await audioMixdownRenderer.prepareMixedAudioSidecar(
+                        sourceURL: saved.rawAssetURL,
+                        microphoneURL: microphoneURL,
+                        outputURL: mixedAudioSidecarURL,
+                        plan: audioPlan,
+                        timeline: plan.timeline,
+                        progress: { [weak self] fraction in
+                            Task { @MainActor in
+                                self?.quickAccess.updateProgress(fraction * 0.15, for: saved)
+                            }
+                        }
+                    )
+                    voiceProcessingFellBack = mixReport
+                        .voiceProcessingErrorDescription != nil
+                    microphoneWasMixed = microphoneURL != nil
+                    mixedAudioReady = true
+                } catch {
+                    audioMixError = error
+                }
+            }
+            let videoProgressBase = requiresAudioMixdown ? 0.15 : 0.0
+            let videoProgressScale = requiresAudioMixdown ? 0.85 : 1.0
+            _ = try await previewRenderer.render(
+                inputURL: saved.rawAssetURL,
+                cameraURL: cameraURL,
+                outputURL: outputURL,
+                plan: plan,
+                transcript: transcript,
+                mixedAudioURL: mixedAudioReady ? mixedAudioSidecarURL : nil,
+                progress: { [weak self] fraction in
+                    Task { @MainActor in
+                        self?.quickAccess.updateProgress(
+                            videoProgressBase + fraction * videoProgressScale,
+                            for: saved
+                        )
+                    }
+                }
+            )
+            if requiresAudioMixdown, !mixedAudioReady, let audioPlan = plan.audio {
                 let mixedURL = saved.packageURL.appendingPathComponent(
                     "previews/.auto-mixed-\(UUID().uuidString).mp4"
                 )
@@ -1909,6 +1991,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         withItemAt: mixedURL
                     )
                     microphoneWasMixed = microphoneURL != nil
+                    audioMixError = nil
                 } catch {
                     audioMixError = error
                 }
@@ -1978,10 +2061,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 renderedVideoURL: outputURL
             )
             lensLibrary.reloadIfVisible()
+            // A completed render is the one moment worth surfacing actual
+            // speed as a visible advantage rather than just a checkmark.
+            let renderedSeconds = max(
+                ProcessInfo.processInfo.systemUptime - processingStartedAt,
+                0
+            )
+            let quickAccessConfirmation = renderedEffectVerification.isVerified
+                ? String(format: "成片已可发送 · %.1f 秒", renderedSeconds)
+                : "成片已生成 · 建议复核"
             quickAccess.updateIfShowing(
                 updated,
                 thumbnail: deliveryImage(for: updated),
-                confirmationTitle: "成片已可发送"
+                confirmationTitle: quickAccessConfirmation,
+                deliveryState: renderedEffectVerification.isVerified
+                    ? .ready
+                    : .needsReview
             )
             let includesCamera = saved.manifest.assets.contains { $0.role == .camera }
             let presenterWasRendered = plan.presenterCamera?.isEnabled == true
@@ -2069,6 +2164,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return plan
         } catch {
             logDiagnosticFailure("preview.failed", error: error)
+            quickAccess.updateIfShowing(
+                saved,
+                thumbnail: deliveryImage(for: saved),
+                confirmationTitle: "原始录屏已保留 · 成片稍后重试",
+                deliveryState: .failed
+            )
             toast.show(
                 title: "原始录屏已保留",
                 detail: "自动成片暂未完成，稍后可以重新处理",

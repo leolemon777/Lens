@@ -15,6 +15,7 @@ final class LensLibraryWindowController {
     var onOrganizationRequested: ((LensLibraryEntry) -> Void)?
     var onInsightsCustomizationRequested: ((LensLibraryEntry, LensInsightsCustomization?) -> Void)?
     var onCopyResult: ((Bool) -> Void)?
+    var onStartCapture: (() -> Void)?
     /// A rebuilt recording is handed back as `processing` so the ordinary
     /// post-processing path regenerates its preview and plan for the new length.
     var onRecordingRepaired: ((LensLibraryEntry, RebuiltRecording) -> Void)?
@@ -83,7 +84,8 @@ final class LensLibraryWindowController {
             onRepair: { [weak self] in self?.repairRecoverable($0) },
             onDeleteAll: { [weak self] in self?.confirmDeleteAll() },
             onOpenFolder: { [weak self] in self?.openFolder() },
-            onClose: { [weak self] in self?.hide() }
+            onClose: { [weak self] in self?.hide() },
+            onStartCapture: { [weak self] in self?.onStartCapture?() }
         )
         let hostingView = NSHostingView(rootView: root)
         hostingView.frame = window.contentView?.bounds ?? .zero
@@ -110,9 +112,13 @@ final class LensLibraryWindowController {
     }
 
     private func copy(_ entry: LensLibraryEntry) {
-        guard entry.manifest.kind == .screenshot,
-              let image = NSImage(contentsOf: entry.displayAssetURL) else { return }
-        onCopyResult?(ImageClipboardWriter.write(image))
+        if entry.manifest.kind == .screenshot {
+            guard let image = NSImage(contentsOf: entry.displayAssetURL) else { return }
+            onCopyResult?(ImageClipboardWriter.write(image))
+            return
+        }
+        guard let fileURL = QuickAccessFileTransfer.bestFileURL(for: entry) else { return }
+        onCopyResult?(FileURLPasteboard.copy(fileURL))
     }
 
     private func annotate(_ entry: LensLibraryEntry) {

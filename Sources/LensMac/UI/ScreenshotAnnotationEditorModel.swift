@@ -50,7 +50,12 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
         let operation: Operation
     }
 
-    init(sourceDimensions: LensDimensions, existingPlan: ScreenshotEditPlan? = nil) {
+    init(
+        sourceDimensions: LensDimensions,
+        existingPlan: ScreenshotEditPlan? = nil,
+        suggestedRedactions: [ScreenshotAnnotation] = [],
+        ocrFullText: String? = nil
+    ) {
         self.sourceDimensions = sourceDimensions
         if existingPlan?.sourceDimensions == sourceDimensions {
             annotations = existingPlan?.annotations ?? []
@@ -59,6 +64,46 @@ final class ScreenshotAnnotationEditorModel: ObservableObject {
             annotations = []
             canvasStyle = nil
         }
+        pendingRedactionSuggestions = suggestedRedactions
+        self.ocrFullText = ocrFullText
+    }
+
+    let ocrFullText: String?
+
+    var showsCodeCardExport: Bool {
+        ocrFullText.map { CodeCardRenderer.isLikelyCode($0) } == true
+    }
+
+    @Published private(set) var pendingRedactionSuggestions: [ScreenshotAnnotation] = []
+
+    var suggestedRedactionCount: Int { pendingRedactionSuggestions.count }
+
+    /// Applies the auto-detected sensitive-text redactions in one tap. The
+    /// inserted annotations are ordinary pixelate objects: reviewable,
+    /// movable, and undoable like any hand-drawn one.
+    func applySuggestedRedactions() {
+        guard !pendingRedactionSuggestions.isEmpty else { return }
+        recordUndoPoint()
+        annotations.append(contentsOf: pendingRedactionSuggestions)
+        pendingRedactionSuggestions = []
+    }
+
+    /// Applies one suggestion after the user has inspected its highlighted
+    /// bounds. Keeping this operation separate from the bulk action makes the
+    /// review surface genuinely selective instead of silently accepting every
+    /// OCR hit at once.
+    func applySuggestedRedaction(_ id: UUID) {
+        guard let index = pendingRedactionSuggestions.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        recordUndoPoint()
+        annotations.append(pendingRedactionSuggestions.remove(at: index))
+    }
+
+    /// Dismisses one suggestion without changing the screenshot edit plan.
+    /// Suggestions are regenerated from OCR the next time the editor opens.
+    func dismissSuggestedRedaction(_ id: UUID) {
+        pendingRedactionSuggestions.removeAll { $0.id == id }
     }
 
     var plan: ScreenshotEditPlan {

@@ -17,6 +17,7 @@ struct LensLibraryView: View {
     let onDeleteAll: () -> Void
     let onOpenFolder: () -> Void
     let onClose: () -> Void
+    let onStartCapture: () -> Void
 
     private let columns = [
         GridItem(.adaptive(minimum: 210, maximum: 270), spacing: 14)
@@ -38,18 +39,18 @@ struct LensLibraryView: View {
         HStack(spacing: 11) {
             ZStack {
                 Circle()
-                    .fill(.cyan.opacity(0.14))
+                    .fill(LensGlassPalette.accent.opacity(0.14))
                     .frame(width: 38, height: 38)
                 Image(systemName: "square.grid.2x2.fill")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.cyan)
+                    .font(.system(size: LensIcon.medium, weight: .semibold))
+                    .foregroundStyle(LensGlassPalette.accent)
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Lens 库")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: LensType.title, weight: .semibold))
                 Text("\(model.entries.count) 条本地记录 · 截图 \(model.screenshotCount) · 录屏 \(model.recordingCount)")
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: LensType.caption, weight: .medium))
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -60,6 +61,8 @@ struct LensLibraryView: View {
                 TextField("搜索标题、标签、OCR 或转写", text: $model.query)
                     .textFieldStyle(.plain)
                     .frame(width: 220)
+                    .accessibilityLabel("搜索 Lens 库")
+                    .accessibilityHint("按标题、标签、OCR 或转写搜索，结果会优先显示相关标题")
                 if !model.query.isEmpty {
                     Button {
                         model.query = ""
@@ -90,21 +93,22 @@ struct LensLibraryView: View {
             .buttonStyle(.plain)
             .help("在 Finder 中打开")
             .accessibilityLabel("在 Finder 中打开 Lens 文件夹")
-            Button(action: onDeleteAll) {
-                Label("全部删除", systemImage: "trash")
-                    .font(.system(size: 10, weight: .semibold))
-                    .padding(.horizontal, 9)
-                    .frame(height: 27)
-                    .background(.red.opacity(0.10), in: Capsule())
+            Menu {
+                Button(role: .destructive, action: onDeleteAll) {
+                    Label("删除全部可删除记录", systemImage: "trash")
+                }
+                .disabled(model.entries.allSatisfy { !model.canDelete($0) })
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .frame(width: 27, height: 27)
+                    .background(.primary.opacity(0.055), in: Circle())
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.red)
-            .disabled(model.entries.allSatisfy { !model.canDelete($0) })
-            .help("把全部可删除项目移到废纸篓")
-            .accessibilityLabel("全部删除 Lens 记录")
+            .menuStyle(.borderlessButton)
+            .help("更多 Lens 库操作")
+            .accessibilityLabel("Lens 库更多操作")
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: LensIcon.small, weight: .bold))
                     .frame(width: 27, height: 27)
                     .background(.primary.opacity(0.055), in: Circle())
             }
@@ -115,7 +119,7 @@ struct LensLibraryView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 13)
-        .lensGlassSurface(role: .chrome, cornerRadius: 0)
+        .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius)
     }
 
     private var filterBar: some View {
@@ -133,15 +137,26 @@ struct LensLibraryView: View {
                     .controlSize(.small)
                 Text("正在更新索引…")
                     .foregroundStyle(.secondary)
-            } else if model.visibleEntries.count != model.entries.count {
-                Text("找到 \(model.visibleEntries.count) 条")
-                    .foregroundStyle(.secondary)
+            } else {
+                HStack(spacing: 8) {
+                    if model.visibleEntries.count != model.entries.count {
+                        Text("找到 \(model.visibleEntries.count) 条")
+                            .foregroundStyle(.secondary)
+                    }
+                    if LensLibrarySearch.usesIntentExpansion(for: model.query) {
+                        Label("本地智能匹配", systemImage: "sparkles")
+                            .foregroundStyle(LensGlassPalette.accent)
+                            .help("使用本地同义词匹配，不会上传素材内容")
+                            .accessibilityLabel("本地智能匹配")
+                            .accessibilityHint("使用本地同义词匹配，不会上传素材内容")
+                    }
+                }
             }
         }
-        .font(.system(size: 10.5, weight: .medium))
+        .font(.system(size: LensType.caption, weight: .medium))
         .padding(.horizontal, 18)
         .padding(.vertical, 9)
-        .lensGlassSurface(role: .chrome, cornerRadius: 0)
+        .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius)
     }
 
     @ViewBuilder
@@ -189,13 +204,25 @@ struct LensLibraryView: View {
     private var emptyState: some View {
         VStack(spacing: 12) {
             Image(systemName: model.entries.isEmpty ? "sparkles.rectangle.stack" : "magnifyingglass")
-                .font(.system(size: 30, weight: .light))
+                .font(.system(size: LensIcon.hero, weight: .light))
                 .foregroundStyle(.secondary)
             Text(model.entries.isEmpty ? "还没有 Lens" : "没有匹配的记录")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: LensType.body, weight: .semibold))
             Text(model.entries.isEmpty ? "完成一次截图或录屏后，它会自动出现在这里。" : "尝试更换关键词或类型筛选。")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
+            if model.entries.isEmpty {
+                Button("开始一次捕获", action: onStartCapture)
+                    .buttonStyle(.borderedProminent)
+                    .tint(LensGlassPalette.accent)
+                    .keyboardShortcut(.defaultAction)
+            } else {
+                Button("清除筛选") {
+                    model.query = ""
+                    model.filter = .all
+                }
+                .buttonStyle(.bordered)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -220,6 +247,19 @@ private struct LensLibraryCard: View {
     let onRepair: () -> Void
 
     @State private var showsInsights = false
+    @State private var isHovering = false
+    @FocusState private var focusedSecondaryAction: SecondaryAction?
+
+    private enum SecondaryAction: Hashable {
+        case copy, share, annotate, ocr, transcribe
+    }
+
+    /// Hover alone would strand keyboard/VoiceOver users behind actions
+    /// that never appear, so focus reveals the same set opacity-only
+    /// (never removed from the tree) rather than requiring a pointer.
+    private var showsSecondaryActions: Bool {
+        isHovering || focusedSecondaryAction != nil
+    }
 
     /// Damage found by comparing the project against its own files. The wording
     /// separates the two outcomes on purpose: a recording that holds more
@@ -232,30 +272,32 @@ private struct LensLibraryCard: View {
                 Text(recovery.canRebuildLongerRecording
                      ? "有 \(durationText(recovery.recoverableScreenSeconds)) 画面没有并入成片"
                      : "录制期间屏幕画面提前结束")
-                    .font(.system(size: 9.5, weight: .semibold))
+                    .font(.system(size: LensType.micro, weight: .semibold))
             } icon: {
                 Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
             }
             .foregroundStyle(.orange)
 
             Text(recoveryDetail(recovery))
-                .font(.system(size: 9, weight: .medium))
+                .font(.system(size: LensType.micro, weight: .medium))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             if recovery.canRebuildLongerRecording {
                 Button(action: onRepair) {
                     Text(isRepairing ? "正在并入…" : "并入并重新生成")
-                        .font(.system(size: 9.5, weight: .semibold))
+                        .font(.system(size: LensType.micro, weight: .semibold))
                 }
                 .disabled(isRepairing)
                 .help("原始分片会保留，不会被覆盖")
+                .accessibilityLabel(isRepairing ? "正在并入并重新生成" : "并入并重新生成")
+                .accessibilityHint("原始分片会保留，不会被覆盖")
             }
         }
         .padding(7)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     private func recoveryDetail(_ recovery: RecordingRecoveryAssessment) -> String {
@@ -290,9 +332,13 @@ private struct LensLibraryCard: View {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 6) {
                     Image(systemName: entry.manifest.kind == .screenshot ? "photo" : "video.fill")
-                        .foregroundStyle(entry.manifest.kind == .screenshot ? .cyan : .red)
+                        .foregroundStyle(
+                            entry.manifest.kind == .screenshot
+                                ? LensGlassPalette.neutral
+                                : LensGlassPalette.recording
+                        )
                     Text(displayTitle)
-                        .font(.system(size: 11.5, weight: .semibold))
+                        .font(.system(size: LensType.caption, weight: .semibold))
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     stateBadge
@@ -319,12 +365,12 @@ private struct LensLibraryCard: View {
                         Text(durationText(duration))
                     }
                 }
-                .font(.system(size: 9.5, weight: .medium))
+                .font(.system(size: LensType.micro, weight: .medium))
                 .foregroundStyle(.secondary)
 
                 if let summary = entry.insights?.resolvedSummary, !summary.isEmpty {
                     Text(summary)
-                        .font(.system(size: 9.5, weight: .medium))
+                        .font(.system(size: LensType.micro, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -332,11 +378,11 @@ private struct LensLibraryCard: View {
                     HStack(spacing: 4) {
                         ForEach(Array(tags.prefix(3)), id: \.self) { tag in
                             Text("#\(tag)")
-                                .font(.system(size: 8.5, weight: .semibold))
-                                .foregroundStyle(.cyan)
+                                .font(.system(size: LensType.micro, weight: .semibold))
+                                .foregroundStyle(LensGlassPalette.neutral)
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
-                                .background(.cyan.opacity(0.09), in: Capsule())
+                                .background(LensGlassPalette.neutral.opacity(0.09), in: Capsule())
                         }
                     }
                 }
@@ -353,31 +399,56 @@ private struct LensLibraryCard: View {
                             : "timeline.selection",
                         action: onOpen
                     )
-                    if entry.manifest.kind == .screenshot {
-                        cardButton("复制", symbol: "doc.on.doc", action: onCopy)
-                        cardButton("标注", symbol: "pencil.tip", action: onAnnotate)
-                        if entry.ocrText?.isEmpty == false {
-                            cardButton("文字", symbol: "text.viewfinder", action: onShowOCR)
-                        }
-                    } else {
-                        Button(action: onTranscribe) {
-                            HStack(spacing: 4) {
-                                if isTranscribing {
-                                    ProgressView()
-                                        .controlSize(.mini)
-                                } else {
-                                    Image(systemName: "waveform.badge.magnifyingglass")
+                    HStack(spacing: 7) {
+                        if entry.manifest.kind == .screenshot {
+                            cardButton("复制", symbol: "doc.on.doc", action: onCopy)
+                                .focused($focusedSecondaryAction, equals: .copy)
+                            if let fileURL = QuickAccessFileTransfer.bestFileURL(for: entry) {
+                                cardButton("分享", symbol: "square.and.arrow.up") {
+                                    LensFileSharing.present(fileURL: fileURL)
                                 }
-                                Text(entry.transcriptText?.isEmpty == false ? "重转写" : "转写")
+                                .help("打开 macOS 系统分享面板发送当前 PNG，不会自动上传")
+                                .accessibilityHint("打开 macOS 系统分享面板发送当前 PNG，不会自动上传")
+                                .focused($focusedSecondaryAction, equals: .share)
                             }
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 5)
-                            .background(.primary.opacity(0.055), in: Capsule())
+                            cardButton("标注", symbol: "pencil.tip", action: onAnnotate)
+                                .focused($focusedSecondaryAction, equals: .annotate)
+                            if entry.ocrText?.isEmpty == false {
+                                cardButton("文字", symbol: "text.viewfinder", action: onShowOCR)
+                                    .focused($focusedSecondaryAction, equals: .ocr)
+                            }
+                        } else {
+                            cardButton("复制文件", symbol: "doc.on.doc", action: onCopy)
+                                .focused($focusedSecondaryAction, equals: .copy)
+                            if let fileURL = QuickAccessFileTransfer.bestFileURL(for: entry) {
+                                cardButton("分享", symbol: "square.and.arrow.up") {
+                                    LensFileSharing.present(fileURL: fileURL)
+                                }
+                                .help("打开 macOS 系统分享面板发送当前视频，不会自动上传")
+                                .accessibilityHint("打开 macOS 系统分享面板发送当前视频，不会自动上传")
+                                .focused($focusedSecondaryAction, equals: .share)
+                            }
+                            Button(action: onTranscribe) {
+                                HStack(spacing: 4) {
+                                    if isTranscribing {
+                                        ProgressView()
+                                            .controlSize(.mini)
+                                    } else {
+                                        Image(systemName: "waveform.badge.magnifyingglass")
+                                    }
+                                    Text(entry.transcriptText?.isEmpty == false ? "重转写" : "转写")
+                                }
+                                .font(.system(size: LensType.micro, weight: .semibold))
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 5)
+                                .background(.primary.opacity(0.055), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isTranscribing)
+                            .focused($focusedSecondaryAction, equals: .transcribe)
                         }
-                        .buttonStyle(.plain)
-                        .disabled(isTranscribing)
                     }
+                    .opacity(showsSecondaryActions ? 1 : 0)
                     Spacer(minLength: 0)
                     organizationButton
                     Button(action: onReveal) {
@@ -406,6 +477,7 @@ private struct LensLibraryCard: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onHover { isHovering = $0 }
         .onTapGesture(count: 2, perform: onOpen)
         .popover(isPresented: $showsInsights, arrowEdge: .trailing) {
             if let insights = entry.insights {
@@ -441,7 +513,7 @@ private struct LensLibraryCard: View {
             }
         }
         .buttonStyle(.plain)
-        .foregroundStyle(entry.insights == nil ? Color.secondary : Color.cyan)
+        .foregroundStyle(entry.insights == nil ? LensGlassPalette.neutral : LensGlassPalette.accent)
         .disabled(isOrganizing)
         .help(entry.insights == nil ? "本地智能整理" : "查看整理结果")
         .accessibilityLabel(entry.insights == nil
@@ -451,17 +523,61 @@ private struct LensLibraryCard: View {
 
     @ViewBuilder
     private var preview: some View {
+        if let fileURL = QuickAccessFileTransfer.bestFileURL(for: entry) {
+            basePreview
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "arrow.up.forward.app.fill")
+                        .font(.system(size: LensIcon.small, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(5)
+                        .background(.black.opacity(0.58), in: Circle())
+                        .padding(7)
+                        .accessibilityHidden(true)
+                }
+                .onDrag {
+                    let fallbackImage = NSImage(contentsOf: entry.displayAssetURL)
+                        ?? NSWorkspace.shared.icon(forFile: fileURL.path)
+                    return QuickAccessFileTransfer.itemProvider(
+                        fileURL: fileURL,
+                        suggestedName: QuickAccessFileTransfer.suggestedFileName(
+                            for: entry,
+                            fileURL: fileURL
+                        ),
+                        fallbackImage: fallbackImage
+                    )
+                } preview: {
+                    let fallbackImage = NSImage(contentsOf: entry.displayAssetURL)
+                        ?? NSWorkspace.shared.icon(forFile: fileURL.path)
+                    Image(nsImage: fallbackImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 180, height: 110)
+                        .clipShape(RoundedRectangle(cornerRadius: LensGlassMetrics.controlCornerRadius, style: .continuous))
+                }
+                .help(entry.manifest.kind == .recording
+                    ? "拖到 Finder、聊天或文档中发送视频"
+                    : "拖到 Finder、聊天或文档中发送 PNG")
+                .accessibilityHint(entry.manifest.kind == .recording
+                    ? "按住并拖动预览可发送视频文件"
+                    : "按住并拖动预览可发送 PNG 文件")
+        } else {
+            basePreview
+        }
+    }
+
+    @ViewBuilder
+    private var basePreview: some View {
         if entry.manifest.kind == .screenshot {
             LensLibraryThumbnailView(url: entry.displayAssetURL)
         } else {
             ZStack {
                 LinearGradient(
-                    colors: [.black.opacity(0.88), .indigo.opacity(0.55)],
+                    colors: [.black.opacity(0.88), LensGlassPalette.accent.opacity(0.55)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
                 Image(systemName: entry.manifest.state == .interrupted ? "exclamationmark.arrow.triangle.2.circlepath" : "play.circle.fill")
-                    .font(.system(size: 36, weight: .light))
+                    .font(.system(size: LensIcon.hero, weight: .light))
                     .foregroundStyle(.white.opacity(0.82))
             }
         }
@@ -469,7 +585,7 @@ private struct LensLibraryCard: View {
 
     private var stateBadge: some View {
         Text(stateTitle)
-            .font(.system(size: 8.5, weight: .bold))
+            .font(.system(size: LensType.micro, weight: .bold))
             .foregroundStyle(stateColor)
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
@@ -497,7 +613,7 @@ private struct LensLibraryCard: View {
     private func cardButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: symbol)
-                .font(.system(size: 9.5, weight: .semibold))
+                .font(.system(size: LensType.micro, weight: .semibold))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 5)
                 .background(.primary.opacity(0.055), in: Capsule())
@@ -534,7 +650,7 @@ private struct LensLibraryThumbnailView: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [.black.opacity(0.72), .cyan.opacity(0.22)],
+                colors: [.black.opacity(0.72), LensGlassPalette.accent.opacity(0.22)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
@@ -597,18 +713,18 @@ struct LensInsightsPopover: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 9) {
                     Image(systemName: "sparkles.rectangle.stack.fill")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.cyan)
+                        .font(.system(size: LensIcon.large, weight: .semibold))
+                        .foregroundStyle(LensGlassPalette.accent)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("本地智能整理")
                             .font(.system(size: 13, weight: .semibold))
                         Label("只读取当前项目 · 未上传", systemImage: "lock.shield.fill")
-                            .font(.system(size: 9, weight: .medium))
+                            .font(.system(size: LensType.micro, weight: .medium))
                             .foregroundStyle(.secondary)
                         if insights.customization != nil {
                             Label("含人工校正", systemImage: "person.crop.circle.badge.checkmark")
-                                .font(.system(size: 8.5, weight: .semibold))
-                                .foregroundStyle(.cyan)
+                                .font(.system(size: LensType.micro, weight: .semibold))
+                                .foregroundStyle(LensGlassPalette.success)
                         }
                     }
                     Spacer()
@@ -628,7 +744,7 @@ struct LensInsightsPopover: View {
                 if !insights.resolvedSummary.isEmpty {
                     insightSection("摘要", symbol: "text.alignleft") {
                         Text(insights.resolvedSummary)
-                            .font(.system(size: 10.5, weight: .medium))
+                            .font(.system(size: LensType.caption, weight: .medium))
                             .textSelection(.enabled)
                     }
                 }
@@ -655,15 +771,15 @@ struct LensInsightsPopover: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack {
                                         Text(chapter.title)
-                                            .font(.system(size: 10, weight: .semibold))
+                                            .font(.system(size: LensType.micro, weight: .semibold))
                                             .lineLimit(1)
                                         Spacer()
                                         Text("\(time(chapter.startSeconds))–\(time(chapter.endSeconds))")
-                                            .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                                            .font(.system(size: LensType.micro, weight: .medium, design: .monospaced))
                                             .foregroundStyle(.secondary)
                                     }
                                     Text(chapter.summary)
-                                        .font(.system(size: 9, weight: .medium))
+                                        .font(.system(size: LensType.micro, weight: .medium))
                                         .foregroundStyle(.secondary)
                                         .lineLimit(2)
                                 }
@@ -680,17 +796,17 @@ struct LensInsightsPopover: View {
                             ) { _, finding in
                                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                                     Text(finding.kind.presentationTitle)
-                                        .font(.system(size: 9, weight: .semibold))
+                                        .font(.system(size: LensType.micro, weight: .semibold))
                                     Text(finding.redactedPreview)
-                                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                        .font(.system(size: LensType.micro, weight: .medium, design: .monospaced))
                                         .textSelection(.enabled)
                                     Spacer()
                                     Text(finding.locationTitle)
-                                        .font(.system(size: 8, weight: .semibold))
+                                        .font(.system(size: LensType.micro, weight: .semibold))
                                         .foregroundStyle(.secondary)
                                     if finding.occurrenceCount > 1 {
                                         Text("×\(finding.occurrenceCount)")
-                                            .font(.system(size: 8.5, weight: .bold))
+                                            .font(.system(size: LensType.micro, weight: .bold))
                                     }
                                 }
                             }
@@ -746,7 +862,7 @@ struct LensInsightsPopover: View {
             .padding(16)
         }
         .frame(width: 380, height: 520)
-        .lensGlassSurface(role: .window, cornerRadius: 20)
+        .lensGlassSurface(role: .window, cornerRadius: LensGlassMetrics.windowCornerRadius)
         .onChange(of: insights) { _, updated in
             guard !isEditing else { return }
             titleDraft = updated.resolvedTitle
@@ -763,18 +879,18 @@ struct LensInsightsPopover: View {
             TextField("标题", text: $titleDraft)
                 .textFieldStyle(.roundedBorder)
             TextEditor(text: $summaryDraft)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: LensType.caption, weight: .medium))
                 .frame(minHeight: 70)
                 .padding(5)
                 .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
             TextField("标签，用逗号或顿号分隔", text: $tagsDraft)
                 .textFieldStyle(.roundedBorder)
             Text("只改整理层；OCR、转写和原始媒体不会改变。")
-                .font(.system(size: 8.5, weight: .medium))
+                .font(.system(size: LensType.micro, weight: .medium))
                 .foregroundStyle(.secondary)
         }
         .padding(10)
-        .background(.cyan.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        .background(LensGlassPalette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: LensGlassMetrics.controlCornerRadius))
     }
 
     private var parsedTags: [String] {
@@ -808,7 +924,7 @@ struct LensInsightsPopover: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+        .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: LensGlassMetrics.controlCornerRadius))
     }
 
     private func time(_ seconds: Double) -> String {
@@ -828,11 +944,11 @@ private struct FlowTags: View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: 5) {
             ForEach(tags, id: \.self) { tag in
                 Text("#\(tag)")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.cyan)
+                    .font(.system(size: LensType.micro, weight: .semibold))
+                    .foregroundStyle(LensGlassPalette.neutral)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(.cyan.opacity(0.10), in: Capsule())
+                    .background(LensGlassPalette.neutral.opacity(0.10), in: Capsule())
                     .lineLimit(1)
             }
         }
@@ -843,8 +959,8 @@ private struct InsightBulletLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             configuration.icon
-                .font(.system(size: 4))
-                .foregroundStyle(.cyan)
+                .font(.system(size: 4)) // lens-token-exempt: 项目符号圆点，非文字
+                .foregroundStyle(LensGlassPalette.neutral)
             configuration.title
         }
     }

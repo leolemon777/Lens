@@ -173,4 +173,47 @@ final class CaptionCuePlannerTests: XCTestCase {
             confidence: 1
         )
     }
+
+    // MARK: - 逐词高亮
+
+    func testWordSegmenterSplitsCJKPerCharacterAndLatinPerWord() {
+        let words = CaptionWordSegmenter.words(in: "先 Save 设置")
+        XCTAssertEqual(words.map(\.text), ["先", "Save", "设", "置"])
+        XCTAssertEqual(words.map(\.offset), [0, 2, 7, 8])
+    }
+
+    func testSpokenWordIndexTracksLinearCharacterProgress() throws {
+        let cue = CaptionCue(startSeconds: 0, endSeconds: 4, text: "先打开设置")
+        XCTAssertEqual(cue.spokenCharacterFraction(at: -1), 0)
+        XCTAssertEqual(cue.spokenCharacterFraction(at: 2), 0.5, accuracy: 0.000_1)
+        XCTAssertEqual(cue.spokenCharacterFraction(at: 9), 1)
+
+        XCTAssertEqual(cue.spokenWordIndex(at: 0), 0)
+        XCTAssertEqual(cue.spokenWordIndex(at: 1), 1)
+        XCTAssertEqual(cue.spokenWordIndex(at: 3.9), 4)
+        XCTAssertNil(CaptionCue(startSeconds: 0, endSeconds: 1, text: "，").spokenWordIndex(at: 0.5))
+        XCTAssertEqual(
+            CaptionCue(startSeconds: 0, endSeconds: 1, text: "，").spokenCharacterFraction(at: 0.5),
+            0.5,
+            accuracy: 0.000_1
+        )
+    }
+
+    func testLegacyCaptionsDecodeWithoutWordHighlightFlag() throws {
+        let legacy = Data("""
+        {"isEnabled":true,"style":"glass","position":"bottom","fontScale":1,"maxCharactersPerCue":28,"verticalMargin":0.065}
+        """.utf8)
+        let captions = try JSONDecoder().decode(AutoEditPlan.Captions.self, from: legacy)
+        XCTAssertFalse(captions.highlightsSpokenWords)
+        XCTAssertTrue(captions.isEnabled)
+
+        let roundTrip = try JSONDecoder().decode(
+            AutoEditPlan.Captions.self,
+            from: JSONEncoder().encode(AutoEditPlan.Captions(
+                isEnabled: true,
+                highlightsSpokenWords: true
+            ))
+        )
+        XCTAssertTrue(roundTrip.highlightsSpokenWords)
+    }
 }

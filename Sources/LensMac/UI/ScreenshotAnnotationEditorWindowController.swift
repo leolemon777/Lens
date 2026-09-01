@@ -23,6 +23,17 @@ final class ScreenshotAnnotationEditorWindowController {
     var onCopyResult: ((Bool) -> Void)?
     var onFailure: ((Error) -> Void)?
 
+    private enum ScreenshotCodeCardError: LocalizedError {
+        case renderingUnavailable
+
+        var errorDescription: String? {
+            switch self {
+            case .renderingUnavailable:
+                "代码卡片生成失败：无法从 OCR 文本渲染图片。"
+            }
+        }
+    }
+
     init(store: LensProjectStore) {
         self.store = store
         editingService = ScreenshotEditingService(store: store)
@@ -36,9 +47,15 @@ final class ScreenshotAnnotationEditorWindowController {
         // image. Reusing it avoids decoding the same large PNG twice on the UI thread.
         let originalImage = fallbackImage
         let existingPlan = try? store.loadScreenshotEditPlan(from: lens.packageURL)
+        let ocrDocument = try? store.loadOCR(from: lens.packageURL)
+        let suggestedRedactions = ocrDocument.map {
+            SensitiveRedactionPlanner().suggestions(ocr: $0)
+        } ?? []
         let model = ScreenshotAnnotationEditorModel(
             sourceDimensions: dimensions,
-            existingPlan: existingPlan
+            existingPlan: existingPlan,
+            suggestedRedactions: suggestedRedactions,
+            ocrFullText: ocrDocument?.fullText
         )
 
         activeLens = lens
@@ -52,6 +69,7 @@ final class ScreenshotAnnotationEditorWindowController {
             onSave: { [weak self] plan in self?.save(plan) },
             onCopy: { [weak self] plan in self?.copy(plan) },
             onExport: { [weak self] plan, format in self?.export(plan, format: format) },
+            onExportCodeCard: { [weak self] in self?.exportCodeCard() },
             onCancel: { [weak self] in self?.hide() }
         )
         let hostingView = NSHostingView(rootView: root)
@@ -167,6 +185,39 @@ final class ScreenshotAnnotationEditorWindowController {
                 onFailure?(error)
             }
         }
+    }
+
+    private func exportCodeCard() {
+        guard let text = activeModel?.ocrFullText,
+              let card = CodeCardRenderer.render(text: text) else {
+            onFailure?(ScreenshotCodeCardError.renderingUnavailable)
+            return
+        }
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [.png]
+        panel.nameFieldStringValue = "代码卡片.png"
+        guard panel.runModal() == .OK, let outputURL = panel.url else { return }
+        guard let destination = CGImageDestinationCreateWithURL(
+            outputURL as CFURL,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ) else {
+            onFailure?(ScreenshotCodeCardError.renderingUnavailable)
+            return
+        }
+        CGImageDestinationAddImage(destination, card, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            onFailure?(ScreenshotCodeCardError.renderingUnavailable)
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        NSWorkspace.shared.selectFile(
+            outputURL.path,
+            inFileViewerRootedAtPath: outputURL.deletingLastPathComponent().path
+        )
     }
 
     private func export(

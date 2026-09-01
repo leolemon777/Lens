@@ -270,7 +270,7 @@ struct RecordingControlView: View {
             Divider().frame(height: 20)
 
             Text(model.sourceTitle)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: LensType.caption, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -284,7 +284,7 @@ struct RecordingControlView: View {
                 showsDetails.toggle()
             } label: {
                 Image(systemName: "ellipsis")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: LensIcon.small, weight: .bold))
                     .frame(width: 28, height: 28)
                     .background(.primary.opacity(showsDetails ? 0.12 : 0.07), in: Circle())
             }
@@ -323,7 +323,7 @@ struct RecordingControlView: View {
 
             Button(action: onStop) {
                 Image(systemName: "stop.fill")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: LensIcon.small, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: 30, height: 30)
                     .background(.red, in: Circle())
@@ -375,7 +375,8 @@ struct RecordingControlView: View {
                 .accessibilityLabel("光标与点击跟踪")
                 .accessibilityValue(model.eventCaptureHelp)
         }
-        .font(.system(size: 11.5, weight: .semibold))
+        // Sizes the Image(systemName:) status glyphs above, not text.
+        .font(.system(size: LensIcon.small, weight: .semibold))
         .frame(height: 24)
     }
 
@@ -425,6 +426,9 @@ struct RecordingControlView: View {
                     Text("分轨录制")
                         .foregroundStyle(.green)
                 }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("摄像头")
+                .accessibilityValue("单独分轨录制中")
             }
 
             VStack(alignment: .leading, spacing: 5) {
@@ -539,7 +543,7 @@ private struct AudioLevelBars: View {
         HStack(alignment: .bottom, spacing: 1.5) {
             ForEach(0..<3, id: \.self) { index in
                 let threshold = Double(index + 1) / 3
-                RoundedRectangle(cornerRadius: 1.2, style: .continuous)
+                RoundedRectangle(cornerRadius: 1.2, style: .continuous) // lens-token-exempt: 音量条端点的极细装饰性圆角，非 UI 表面，套用 token 会变成胶囊形
                     .frame(width: 2.5, height: CGFloat(4 + index * 3))
                     .opacity(level >= threshold ? 0.95 : 0.2)
             }

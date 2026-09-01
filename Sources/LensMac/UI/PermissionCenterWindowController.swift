@@ -40,11 +40,12 @@ final class PermissionCenterWindowController {
             ))
         }
         NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        LensPanelPresenter.present(window, from: .center)
+        window.makeKey()
     }
 
     func hide() {
-        window.orderOut(nil)
+        LensPanelPresenter.dismiss(window)
         onShortcutCaptureActiveChange(false)
     }
 

@@ -37,11 +37,12 @@ final class ActionCenterWindowController {
             ))
         }
         NSApp.activate(ignoringOtherApps: true)
-        panel.makeKeyAndOrderFront(nil)
+        LensPanelPresenter.present(panel, from: .center)
+        panel.makeKey()
     }
 
     func hide() {
-        panel.orderOut(nil)
+        LensPanelPresenter.dismiss(panel)
     }
 
     private func configurePanel() {

@@ -60,6 +60,35 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         }
     }
 
+    var accessibilityHint: String {
+        switch self {
+        case .recordingSetup:
+            "打开录屏设置，选择来源、音频和摄像头"
+        case .recording:
+            "开始录制当前屏幕"
+        case .regionRecording:
+            "选择区域后开始录制"
+        case .windowRecording:
+            "选择窗口后开始录制"
+        case .screenshot, .windowScreenshot, .multiWindowScreenshot, .displayScreenshot:
+            "选择截图方式并开始捕获"
+        case .ocr:
+            "识别选区中的文字并允许修改后复制"
+        case .scrollingCapture:
+            "捕获可滚动内容"
+        case .pin:
+            "把截图或剪贴板内容贴在屏幕上"
+        case .conversationInbox:
+            "将选区保存到对话文件夹并复制路径"
+        case .openLibrary:
+            "打开 Lens 库"
+        case .openSettings:
+            "打开设置与权限"
+        case .enableHotKeys:
+            "打开系统设置并开启辅助功能"
+        }
+    }
+
     var symbol: String {
         switch self {
         case .screenshot: "viewfinder"
@@ -80,13 +109,12 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
 
     var tint: Color {
         switch self {
-        case .recordingSetup, .recording, .regionRecording, .windowRecording: .red
-        case .screenshot, .windowScreenshot, .multiWindowScreenshot, .displayScreenshot: .cyan
-        case .conversationInbox: .mint
-        case .ocr: .indigo
-        case .scrollingCapture: .orange
-        case .pin: .yellow
-        case .openLibrary, .openSettings, .enableHotKeys: .secondary
+        case .recordingSetup, .recording, .regionRecording, .windowRecording:
+            LensGlassPalette.recording
+        case .screenshot, .windowScreenshot, .multiWindowScreenshot, .displayScreenshot,
+             .conversationInbox, .ocr, .scrollingCapture, .pin,
+             .openLibrary, .openSettings, .enableHotKeys:
+            LensGlassPalette.neutral
         }
     }
 }
@@ -133,10 +161,16 @@ struct ActionCenterView: View {
                 onAction(.enableHotKeys)
             } label: {
                 Label("快捷键还不能用，点这里开启辅助功能", systemImage: "keyboard")
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(.system(size: LensType.caption, weight: .semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
-                    .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background(
+                        .orange.opacity(0.12),
+                        in: RoundedRectangle(
+                            cornerRadius: LensGlassMetrics.controlCornerRadius,
+                            style: .continuous
+                        )
+                    )
             }
             .buttonStyle(.plain)
             .accessibilityLabel("开启快捷键")
@@ -195,17 +229,17 @@ struct ActionCenterView: View {
                 Text("更多")
                     .font(.system(size: 13, weight: .semibold))
                 Text("文字 · 长截图 · 贴图")
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: LensType.caption, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
-            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: LensGlassMetrics.tileCornerRadius, style: .continuous))
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .buttonStyle(LensGlassButtonStyle(tint: .secondary, cornerRadius: 18))
+        .buttonStyle(LensGlassButtonStyle(tint: LensGlassPalette.neutral, cornerRadius: LensGlassMetrics.tileCornerRadius))
         .help("更多")
         .accessibilityLabel("更多")
         .accessibilityHint("OCR、长截图、贴图和 Lens 库")
@@ -244,7 +278,7 @@ struct ActionCenterView: View {
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)
-        .buttonStyle(LensGlassButtonStyle(tint: .cyan, cornerRadius: 18))
+        .buttonStyle(LensGlassButtonStyle(tint: LensGlassPalette.neutral, cornerRadius: LensGlassMetrics.tileCornerRadius))
         .keyboardShortcut("1", modifiers: [])
         .help("选择截图模式")
         .accessibilityLabel("选择截图模式")
@@ -257,9 +291,12 @@ struct ActionCenterView: View {
         } label: {
             actionTileLabel(action)
         }
-        .buttonStyle(LensGlassButtonStyle(tint: action.tint, cornerRadius: 18))
+        .buttonStyle(LensGlassButtonStyle(tint: action.tint, cornerRadius: LensGlassMetrics.tileCornerRadius))
         .keyboardShortcut(shortcut, modifiers: [])
         .help(action.title)
+        .accessibilityLabel(action.title)
+        .accessibilityValue(action.subtitle)
+        .accessibilityHint(action.accessibilityHint)
     }
 
     private func actionTileLabel(_ action: ActionCenterAction) -> some View {
@@ -275,13 +312,13 @@ struct ActionCenterView: View {
             Text(action.title)
                 .font(.system(size: 13, weight: .semibold))
             Text(action.subtitle)
-                .font(.system(size: 10.5, weight: .medium))
+                .font(.system(size: LensType.caption, weight: .medium))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
-        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: LensGlassMetrics.tileCornerRadius, style: .continuous))
     }
 
     @ViewBuilder
@@ -315,10 +352,17 @@ struct ActionCenterView: View {
                             .font(.system(size: 12, weight: .semibold))
                             .lineLimit(1)
                         Text("\(recent.dimensions.width) × \(recent.dimensions.height) · 已保存到本地")
-                            .font(.system(size: 10.5, weight: .medium))
+                            .font(.system(size: LensType.caption, weight: .medium))
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
+                    Button("打开") {
+                        onAction(.openLibrary)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("打开最近记录")
+                    .accessibilityHint("在 Lens 库中查看这条记录")
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 }
@@ -329,7 +373,7 @@ struct ActionCenterView: View {
                     Image(systemName: "sparkles")
                         .foregroundStyle(.secondary)
                     Text("完成第一次截图后，它会在这里立即出现。")
-                        .font(.system(size: 11.5, weight: .medium))
+                        .font(.system(size: LensType.caption, weight: .medium))
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
@@ -354,7 +398,7 @@ struct ActionCenterView: View {
             .accessibilityLabel("打开设置与权限")
             Text("Esc 关闭 · Command-Q 退出")
         }
-        .font(.system(size: 10.5, weight: .medium))
+        .font(.system(size: LensType.caption, weight: .medium))
         .foregroundStyle(.tertiary)
         .padding(.horizontal, 4)
         .padding(.top, 1)

@@ -134,7 +134,7 @@ final class ScrollingCaptureSessionController {
         lastObservedSignature = nil
         model.reset()
         positionPanel()
-        panel.orderFrontRegardless()
+        LensPanelPresenter.present(panel, from: .center)
 
         captureTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -165,7 +165,7 @@ final class ScrollingCaptureSessionController {
     func showExisting() {
         guard isActive else { return }
         positionPanel()
-        panel.orderFrontRegardless()
+        LensPanelPresenter.present(panel, from: .center)
     }
 
     func cancel() {
@@ -268,7 +268,7 @@ final class ScrollingCaptureSessionController {
         assembler = nil
         captureOperation = nil
         lastObservedSignature = nil
-        panel.orderOut(nil)
+        LensPanelPresenter.dismiss(panel)
         model.reset()
         if notify, wasActive { cancellation?() }
     }
@@ -281,7 +281,7 @@ final class ScrollingCaptureSessionController {
         assembler = nil
         captureOperation = nil
         lastObservedSignature = nil
-        panel.orderOut(nil)
+        LensPanelPresenter.dismiss(panel)
         model.reset()
     }
 

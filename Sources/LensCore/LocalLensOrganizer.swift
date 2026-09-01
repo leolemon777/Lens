@@ -464,7 +464,9 @@ public enum LocalLensOrganizer {
         }
     }
 
-    private static func sensitiveMatches(
+    /// Public entry for the redaction-suggestion planner: finds sanitized
+    /// sensitive matches in arbitrary text (e.g. one OCR block at a time).
+    public static func sensitiveMatches(
         in text: String
     ) -> [(kind: LensSensitiveDataKind, value: String, range: NSRange)] {
         var occupied: [NSRange] = []

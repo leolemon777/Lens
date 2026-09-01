@@ -42,6 +42,25 @@ final class OnboardingViewTests: XCTestCase {
         XCTAssertNotEqual(quiet, hinted)
     }
 
+    func testPermissionRowsExposeTargetedActionSemantics() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/OnboardingView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".accessibilityElement(children: .contain)"))
+        XCTAssertTrue(source.contains("Label(state.title, systemImage: permissionStateSymbol(state))"))
+        XCTAssertTrue(source.contains(".accessibilityValue(state.title)"))
+        XCTAssertTrue(source.contains("\\(action)：\\(kind.title)"))
+        XCTAssertTrue(source.contains("permissionActionHint(for: state, kind: kind)"))
+        XCTAssertTrue(source.contains("请求\\(kind.title)权限"))
+        XCTAssertTrue(source.contains("打开系统设置中的\\(kind.title)权限"))
+    }
+
     // MARK: - Rendering
 
     private func renderStep(

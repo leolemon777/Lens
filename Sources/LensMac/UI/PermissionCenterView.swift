@@ -36,16 +36,16 @@ struct PermissionCenterView: View {
         HStack(spacing: 11) {
             ZStack {
                 Circle()
-                    .fill(.cyan.opacity(0.14))
+                    .fill(LensGlassPalette.accent.opacity(0.14))
                     .frame(width: 38, height: 38)
                 Image(systemName: "gearshape.fill")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.cyan)
+                    .font(.system(size: LensIcon.large, weight: .semibold))
+                    .foregroundStyle(LensGlassPalette.accent)
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("设置与权限")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: LensType.title, weight: .semibold))
                 Text("权限只在对应功能被使用时生效")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -63,7 +63,7 @@ struct PermissionCenterView: View {
             .accessibilityLabel("重新检查权限")
             Button(action: onClose) {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: LensIcon.small, weight: .bold))
                     .frame(width: 26, height: 26)
                     .background(.primary.opacity(0.06), in: Circle())
             }
@@ -85,8 +85,8 @@ struct PermissionCenterView: View {
                     onShortcutsChanged()
                 }
                 .buttonStyle(.plain)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(.cyan)
+                .font(.system(size: LensType.caption, weight: .semibold))
+                .foregroundStyle(LensGlassPalette.accent)
             }
             VStack(spacing: 8) {
                 shortcutRow(
@@ -126,7 +126,7 @@ struct PermissionCenterView: View {
                 )
             }
             .padding(11)
-            .lensGlassSurface(role: .card, cornerRadius: 18)
+            .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
             Text("无 Fn 备用：Control + Option + 1 快速截图，2 打开操作中心，3 终端截屏。录入快捷键时会暂停全局热键，避免误触发截屏。")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -142,7 +142,7 @@ struct PermissionCenterView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(appModel.conversationInboxDirectory.path)
-                    .font(.system(size: 10.5, weight: .regular, design: .monospaced))
+                    .font(.system(size: LensType.micro, weight: .regular, design: .monospaced))
                     .textSelection(.enabled)
                     .foregroundStyle(.primary)
                 Text(ConversationInboxStore(directory: appModel.conversationInboxDirectory).latestURL.path)
@@ -160,8 +160,8 @@ struct PermissionCenterView: View {
                         appModel.restoreDefaultConversationInboxDirectory()
                     }
                     .buttonStyle(.plain)
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(.cyan)
+                    .font(.system(size: LensType.caption, weight: .semibold))
+                    .foregroundStyle(LensGlassPalette.accent)
                     Button("在 Finder 中打开") {
                         revealConversationInboxDirectory()
                     }
@@ -171,7 +171,7 @@ struct PermissionCenterView: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .lensGlassSurface(role: .card, cornerRadius: 18)
+            .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("终端截屏文件夹，截图会覆盖保存为 latest.png 并复制路径")
@@ -207,7 +207,7 @@ struct PermissionCenterView: View {
                     }
                 }
             }
-            .lensGlassSurface(role: .card, cornerRadius: 18)
+            .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
         }
     }
 
@@ -218,9 +218,9 @@ struct PermissionCenterView: View {
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 3) {
                 Text("本地优先")
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(.system(size: LensType.caption, weight: .semibold))
                 Text("Lens 默认不上传截图、录屏、声音或事件轨。即使自动处理失败，原始素材也会先保存。")
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: LensType.micro, weight: .medium))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -233,20 +233,20 @@ struct PermissionCenterView: View {
     private var diagnosticsSection: some View {
         HStack(alignment: .center, spacing: 12) {
             Image(systemName: "stethoscope")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.cyan)
+                .font(.system(size: LensIcon.medium, weight: .semibold))
+                .foregroundStyle(LensGlassPalette.accent)
                 .frame(width: 30, height: 30)
-                .background(.cyan.opacity(0.10), in: Circle())
+                .background(LensGlassPalette.accent.opacity(0.10), in: Circle())
             VStack(alignment: .leading, spacing: 3) {
                 Text("诊断与支持")
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(.system(size: LensType.caption, weight: .semibold))
                 Text("仅包含版本、权限状态和错误代码；不包含媒体、正文、标题或路径。")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let message = model.diagnosticStatusMessage {
                     Label(message, systemImage: message.contains("已复制") ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .font(.system(size: 9.5, weight: .semibold))
+                        .font(.system(size: LensType.micro, weight: .semibold))
                         .foregroundStyle(message.contains("已复制") ? .green : .red)
                 }
             }
@@ -259,7 +259,10 @@ struct PermissionCenterView: View {
             .disabled(model.isPreparingDiagnosticSummary)
         }
         .padding(12)
-        .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(
+            .primary.opacity(0.04),
+            in: RoundedRectangle(cornerRadius: LensGlassMetrics.cardCornerRadius, style: .continuous)
+        )
     }
 
     private var buildIdentitySection: some View {
@@ -267,19 +270,19 @@ struct PermissionCenterView: View {
             sectionTitle("当前版本", symbol: "shippingbox.fill")
             HStack(alignment: .top, spacing: 11) {
                 Image(systemName: "app.badge.checkmark.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.cyan)
+                    .font(.system(size: LensIcon.medium, weight: .semibold))
+                    .foregroundStyle(LensGlassPalette.accent)
                     .frame(width: 30, height: 30)
-                    .background(.cyan.opacity(0.10), in: Circle())
+                    .background(LensGlassPalette.accent.opacity(0.10), in: Circle())
                 VStack(alignment: .leading, spacing: 3) {
                     Text(buildIdentity.displayVersion)
-                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                        .font(.system(size: LensType.caption, weight: .semibold, design: .monospaced))
                     Text(buildIdentity.displayDetail)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.secondary)
                     if let executableURL = buildIdentity.executableURL {
                         Text(executableURL.path)
-                            .font(.system(size: 9.5, weight: .regular, design: .monospaced))
+                            .font(.system(size: LensType.micro, weight: .regular, design: .monospaced))
                             .foregroundStyle(.tertiary)
                             .lineLimit(2)
                             .textSelection(.enabled)
@@ -288,7 +291,7 @@ struct PermissionCenterView: View {
                 Spacer(minLength: 0)
             }
             .padding(12)
-            .lensGlassSurface(role: .card, cornerRadius: 18)
+            .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
@@ -311,7 +314,7 @@ struct PermissionCenterView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(.system(size: LensType.caption, weight: .semibold))
                 Text(detail)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -331,13 +334,13 @@ struct PermissionCenterView: View {
         let state = model.state(for: kind)
         return HStack(spacing: 11) {
             Image(systemName: kind.symbol)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.cyan)
+                .font(.system(size: LensIcon.medium, weight: .semibold))
+                .foregroundStyle(LensGlassPalette.accent)
                 .frame(width: 26, height: 26)
-                .background(.cyan.opacity(0.10), in: Circle())
+                .background(LensGlassPalette.accent.opacity(0.10), in: Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(kind.title)
-                    .font(.system(size: 11.5, weight: .semibold))
+                    .font(.system(size: LensType.caption, weight: .semibold))
                 Text(kind.detail)
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -347,12 +350,20 @@ struct PermissionCenterView: View {
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(stateColor(state))
                 .labelStyle(.titleAndIcon)
+                .accessibilityLabel("\(kind.title)权限状态")
+                .accessibilityValue(state.title)
             if let actionTitle = state.primaryActionTitle {
                 Button(actionTitle) {
                     model.performPrimaryAction(for: kind)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .accessibilityLabel("\(actionTitle)：\(kind.title)")
+                .accessibilityHint(
+                    state == .notDetermined
+                        ? "请求\(kind.title)权限"
+                        : "打开系统设置中的\(kind.title)权限"
+                )
             }
         }
         .padding(.horizontal, 12)

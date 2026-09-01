@@ -52,6 +52,19 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertEqual(ActionCenterAction.recordingSetup.subtitle, "停下就能拖走")
     }
 
+    func testPrimaryActionTilesExposeExplicitAccessibilitySemantics() {
+        XCTAssertEqual(
+            ActionCenterAction.recordingSetup.accessibilityHint,
+            "打开录屏设置，选择来源、音频和摄像头"
+        )
+        XCTAssertEqual(
+            ActionCenterAction.screenshot.accessibilityHint,
+            "选择截图方式并开始捕获"
+        )
+        XCTAssertEqual(ActionCenterAction.recordingSetup.title, "录屏")
+        XCTAssertEqual(ActionCenterAction.recordingSetup.subtitle, "停下就能拖走")
+    }
+
     func testActionCenterKeepsTwoPrimaryActionsAndExplainsMissingHotKeys() throws {
         let source = try String(
             contentsOf: URL(fileURLWithPath: #filePath)
@@ -65,6 +78,9 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertTrue(source.contains("moreMenu"))
         XCTAssertTrue(source.contains("快捷键还不能用"))
         XCTAssertTrue(source.contains("Command-Q 退出"))
+        XCTAssertTrue(source.contains("打开最近记录"))
+        XCTAssertTrue(source.contains(".accessibilityValue(action.subtitle)"))
+        XCTAssertTrue(source.contains(".accessibilityHint(action.accessibilityHint)"))
         XCTAssertFalse(source.contains("内测版 A"))
         XCTAssertFalse(source.contains("actionTile(.ocr"))
         XCTAssertFalse(source.contains("actionTile(.pin"))
@@ -110,6 +126,22 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(representation.pixelsWide, 780)
         XCTAssertGreaterThanOrEqual(representation.pixelsHigh, 660)
         XCTAssertGreaterThan(png.count, 28_000)
+    }
+
+    func testRecordingSetupStartActionExplainsSelectedSourceAndTracks() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/RecordingSetupView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".accessibilityValue(trackSummary)"))
+        XCTAssertTrue(source.contains(".accessibilityHint(startButtonHint)"))
+        XCTAssertTrue(source.contains("先在上方选择一个窗口"))
+        XCTAssertTrue(source.contains("按下后以当前来源和音轨设置开始录制"))
     }
 
     func testCaptureOverlayExplainsScreenshotAndRecordingIntentsSeparately() {

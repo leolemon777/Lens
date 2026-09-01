@@ -60,7 +60,8 @@ final class LensLibraryRecoveryNoticeTests: XCTestCase {
             onRepair: { _ in },
             onDeleteAll: {},
             onOpenFolder: {},
-            onClose: {}
+            onClose: {},
+            onStartCapture: {}
         )
         let hostingView = NSHostingView(rootView: rootView)
         hostingView.frame = CGRect(x: 0, y: 0, width: 1_020, height: 690)
@@ -139,5 +140,20 @@ final class LensLibraryRecoveryNoticeTests: XCTestCase {
         )
 
         XCTAssertNotEqual(damaged, healthy)
+    }
+
+    func testRecoveryActionRemainsAnIndependentAccessibleControl() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/LensLibraryView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains(".accessibilityElement(children: .contain)"))
+        XCTAssertTrue(source.contains(".accessibilityLabel(isRepairing ? \"正在并入并重新生成\" : \"并入并重新生成\")"))
+        XCTAssertTrue(source.contains(".accessibilityHint(\"原始分片会保留，不会被覆盖\")"))
     }
 }

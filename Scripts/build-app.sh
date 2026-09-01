@@ -11,6 +11,7 @@ BUILT_AT="${LENS_BUILT_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 GIT_COMMIT="${LENS_GIT_COMMIT:-$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null || true)}"
 GIT_COMMIT="${GIT_COMMIT:-unknown}"
 SIGNING_IDENTITY="${LENS_SIGNING_IDENTITY:-}"
+CODESIGN_TIMESTAMP_MODE="${LENS_CODESIGN_TIMESTAMP:-required}"
 BUILD_DIR="$PROJECT_DIR/Build"
 APP_DIR="$BUILD_DIR/Lens.app"
 CONTENTS_DIR="$APP_DIR/Contents"
@@ -48,6 +49,14 @@ if [[ ! "$BUILD_VERSION" =~ ^[0-9]+$ ]]; then
 fi
 if [[ ! "$BUILD_CHANNEL" =~ ^(development|beta|release)$ ]]; then
     echo "Invalid LENS_BUILD_CHANNEL: $BUILD_CHANNEL" >&2
+    exit 64
+fi
+if [[ "$CODESIGN_TIMESTAMP_MODE" != "required" && "$CODESIGN_TIMESTAMP_MODE" != "none" ]]; then
+    echo "Invalid LENS_CODESIGN_TIMESTAMP: $CODESIGN_TIMESTAMP_MODE (use required or none)" >&2
+    exit 64
+fi
+if [[ "$CODESIGN_TIMESTAMP_MODE" == "none" && "$BUILD_CHANNEL" != "development" ]]; then
+    echo "A missing code-signing timestamp is allowed only for development builds." >&2
     exit 64
 fi
 if [[ ! "$GIT_COMMIT" =~ ^([0-9a-fA-F]{7,64}|unknown)$ ]]; then
@@ -136,15 +145,21 @@ if [[ "$SIGNING_IDENTITY" == "-" ]]; then
         --sign - \
         "$APP_DIR"
 else
+    if [[ "$CODESIGN_TIMESTAMP_MODE" == "required" ]]; then
+        CODESIGN_TIMESTAMP_ARGUMENT=(--timestamp)
+    else
+        CODESIGN_TIMESTAMP_ARGUMENT=(--timestamp=none)
+    fi
     codesign \
         --force \
         --deep \
         --entitlements "$ENTITLEMENTS_PATH" \
         --options runtime \
-        --timestamp \
+        "${CODESIGN_TIMESTAMP_ARGUMENT[@]}" \
         --sign "$SIGNING_IDENTITY" \
         "$APP_DIR"
 fi
 echo "Signing identity: $SIGNING_IDENTITY"
+echo "Timestamp mode: $CODESIGN_TIMESTAMP_MODE"
 echo "Build identity: $APP_VERSION ($BUILD_VERSION) · $BUILD_CHANNEL · ${GIT_COMMIT:0:12} · $BUILT_AT"
 echo "$APP_DIR"

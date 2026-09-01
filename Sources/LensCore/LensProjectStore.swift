@@ -996,6 +996,15 @@ public struct LensProjectStore: Sendable {
                 button: click.button
             )
         }
+        if plan.interaction == nil { plan.interaction = .init() }
+        let keyboardEvents = (try? LensEventReader.read(
+            KeyboardEvent.self,
+            from: session.keyboardEventsURL
+        )) ?? []
+        plan.interaction?.keystrokes = KeystrokePlanner().displays(
+            events: keyboardEvents,
+            durationSeconds: sourceDuration
+        )
         plan.camera.keyframes = AutoCameraPlanner(camera: plan.camera).plan(
             clicks: plan.camera.clickToZoom ? clicks : [],
             pointerEvents: pointerEvents,

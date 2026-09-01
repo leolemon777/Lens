@@ -41,11 +41,12 @@ final class OnboardingWindowController {
             ))
         }
         NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        LensPanelPresenter.present(window, from: .center)
+        window.makeKey()
     }
 
     func hide() {
-        window.orderOut(nil)
+        LensPanelPresenter.dismiss(window)
     }
 
     /// Permission grants land in System Settings, so the guide has to recheck

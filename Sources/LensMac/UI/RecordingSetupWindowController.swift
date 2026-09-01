@@ -25,18 +25,19 @@ final class RecordingSetupWindowController {
         installContent(initialSource: initialSource)
         window.center()
         NSApp.activate(ignoringOtherApps: true)
-        window.makeKeyAndOrderFront(nil)
+        LensPanelPresenter.present(window, from: .center)
+        window.makeKey()
     }
 
     func hide() {
         model.capturesCamera = false
-        window.orderOut(nil)
+        LensPanelPresenter.dismiss(window)
     }
 
     private func hideForRecordingStart() {
         // Preserve this one explicit camera opt-in until the asynchronous source
         // selection reaches ScreenRecordingOptions. A successful start resets it.
-        window.orderOut(nil)
+        LensPanelPresenter.dismiss(window)
     }
 
     private func configureWindow() {

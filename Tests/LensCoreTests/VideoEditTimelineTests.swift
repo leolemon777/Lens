@@ -227,4 +227,69 @@ final class VideoEditTimelineTests: XCTestCase {
             VideoEditTransition(kind: .cut, durationSeconds: 0)
         )
     }
+
+    func testRemoveSourceRangeSplitsAndDisablesCoveredSlice() {
+        var timeline = VideoEditTimeline(sourceDurationSeconds: 10)
+        XCTAssertTrue(timeline.removeSourceRange(startSeconds: 4, endSeconds: 6))
+
+        XCTAssertEqual(timeline.segments.count, 3)
+        XCTAssertEqual(timeline.activeSegments.count, 2)
+        XCTAssertEqual(timeline.activeSegments[0].sourceEndSeconds, 4)
+        XCTAssertEqual(timeline.activeSegments[1].sourceStartSeconds, 6)
+        XCTAssertEqual(timeline.outputDurationSeconds, 8)
+
+        // The disabled slice stays addressable, so the removal is undoable.
+        let disabled = timeline.segments.first { $0.isEnabled == false }
+        XCTAssertEqual(disabled?.sourceStartSeconds, 4)
+        XCTAssertEqual(disabled?.sourceEndSeconds, 6)
+    }
+
+    func testRemoveSourceRangePreservesOutgoingTransitionOnKeptPiece() {
+        let original = VideoEditSegment(
+            sourceStartSeconds: 0,
+            sourceEndSeconds: 6,
+            transitionToNext: VideoEditTransition(
+                kind: .crossDissolve,
+                durationSeconds: 0.4
+            )
+        )
+        let next = VideoEditSegment(sourceStartSeconds: 6, sourceEndSeconds: 8)
+        var timeline = VideoEditTimeline(
+            sourceDurationSeconds: 8,
+            segments: [original, next]
+        )
+
+        XCTAssertTrue(timeline.removeSourceRange(startSeconds: 2, endSeconds: 4))
+
+        XCTAssertEqual(timeline.resolvedTransitions.count, 1)
+        XCTAssertEqual(
+            timeline.resolvedTransitions.first?.fromSegmentID,
+            timeline.segments.first { $0.sourceStartSeconds == 4 }?.id
+        )
+    }
+
+    func testRemoveSourceRangeRefusesToWipeOutEveryEnabledSegment() {
+        var timeline = VideoEditTimeline(sourceDurationSeconds: 4)
+        XCTAssertFalse(timeline.removeSourceRange(startSeconds: 0, endSeconds: 4))
+        XCTAssertEqual(timeline.segments.count, 1)
+        XCTAssertEqual(timeline.outputDurationSeconds, 4)
+    }
+
+    func testRemoveSourceRangeDropsSubMinimumRemaindersLikeNormalization() {
+        var timeline = VideoEditTimeline(sourceDurationSeconds: 1)
+        XCTAssertTrue(timeline.removeSourceRange(startSeconds: 0.9, endSeconds: 1))
+
+        // The covered slice survives as a disabled segment; the sub-minimum
+        // trailing remainder (0.1s < minimum) is dropped entirely.
+        XCTAssertEqual(timeline.segments.count, 2)
+        XCTAssertTrue(timeline.segments[0].isEnabled)
+        XCTAssertEqual(timeline.segments[0].sourceEndSeconds, 0.9)
+        XCTAssertEqual(timeline.outputDurationSeconds, 0.9, accuracy: 0.000_001)
+    }
+
+    func testRemoveSourceRangeIgnoresRangesBelowMinimumSegmentDuration() {
+        var timeline = VideoEditTimeline(sourceDurationSeconds: 5)
+        XCTAssertFalse(timeline.removeSourceRange(startSeconds: 2, endSeconds: 2.03))
+        XCTAssertEqual(timeline.segments.count, 1)
+    }
 }

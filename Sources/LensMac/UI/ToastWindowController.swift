@@ -9,14 +9,14 @@ private struct LensToastView: View {
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: symbol)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: LensIcon.medium, weight: .semibold))
                 .symbolRenderingMode(.hierarchical)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(.system(size: LensType.body, weight: .semibold))
                 if let detail {
                     Text(detail)
-                        .font(.system(size: 10.5, weight: .medium))
+                        .font(.system(size: LensType.caption, weight: .medium))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -24,7 +24,7 @@ private struct LensToastView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .lensGlassSurface(role: .panel, cornerRadius: 20)
+        .lensGlassSurface(role: .panel, cornerRadius: LensGlassMetrics.panelCornerRadius)
         .padding(24)
     }
 }
@@ -40,12 +40,12 @@ final class ToastWindowController {
         self.panel = panel
         panel.contentView = NSHostingView(rootView: LensToastView(title: title, detail: detail, symbol: symbol))
         position(panel)
-        panel.orderFrontRegardless()
+        LensPanelPresenter.present(panel, from: .top)
 
         dismissTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(3.2))
-            guard !Task.isCancelled else { return }
-            self?.panel?.orderOut(nil)
+            guard !Task.isCancelled, let panel = self?.panel else { return }
+            LensPanelPresenter.dismiss(panel)
         }
     }
 

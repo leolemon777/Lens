@@ -9,7 +9,7 @@ final class OCRResultWindowController {
     var hasVisibleResults: Bool { !sessions.isEmpty }
 
     func closeAll() {
-        sessions.values.forEach { $0.panel.orderOut(nil) }
+        sessions.values.forEach { LensPanelPresenter.dismiss($0.panel) }
         sessions.removeAll()
     }
 
@@ -84,14 +84,14 @@ final class OCRResultWindowController {
         ))
         position(panel)
         sessions[id] = session
-        panel.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+        LensPanelPresenter.present(panel, from: .center)
         panel.makeKey()
     }
 
     private func close(id: UUID) {
         guard let session = sessions.removeValue(forKey: id) else { return }
-        session.panel.orderOut(nil)
+        LensPanelPresenter.dismiss(session.panel)
     }
 
     private func makePanel(accessibilityLabel: String) -> OCRResultPanel {

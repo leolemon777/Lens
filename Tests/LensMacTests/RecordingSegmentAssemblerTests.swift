@@ -101,7 +101,7 @@ final class RecordingSegmentAssemblerTests: XCTestCase {
     }
 
     @MainActor
-    func testMicrophoneSegmentsJoinIntoOnePhysicalCAFTrack() throws {
+    func testMicrophoneSegmentsJoinIntoOnePhysicalCAFTrack() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let first = directory.appendingPathComponent("microphone.caf")
@@ -109,7 +109,7 @@ final class RecordingSegmentAssemblerTests: XCTestCase {
         try makeAudio(at: first, frameCount: 2_400, phaseOffset: 0)
         try makeAudio(at: second, frameCount: 3_600, phaseOffset: 2_400)
 
-        let output = try RecordingSegmentAssembler().assembleAudioSegments(
+        let output = try await RecordingSegmentAssembler().assembleAudioSegments(
             [first, second],
             outputURL: first
         )
@@ -123,7 +123,7 @@ final class RecordingSegmentAssemblerTests: XCTestCase {
     }
 
     @MainActor
-    func testRecoveryAudioKeepsValidPrefixWhenFinalCAFIsCorrupt() throws {
+    func testRecoveryAudioKeepsValidPrefixWhenFinalCAFIsCorrupt() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let first = directory.appendingPathComponent("system-audio-00000.caf")
@@ -136,7 +136,7 @@ final class RecordingSegmentAssemblerTests: XCTestCase {
             contents: Data(repeating: 0xA5, count: 16_384)
         ))
 
-        let output = try RecordingSegmentAssembler().assembleAudioSegments(
+        let output = try await RecordingSegmentAssembler().assembleAudioSegments(
             [first, second, corrupt],
             outputURL: first,
             allowsTrailingCorruption: true
@@ -148,7 +148,7 @@ final class RecordingSegmentAssemblerTests: XCTestCase {
     }
 
     @MainActor
-    func testMicrophoneSegmentsAreTrimmedToMatchingScreenDurations() throws {
+    func testMicrophoneSegmentsAreTrimmedToMatchingScreenDurations() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let first = directory.appendingPathComponent("microphone.caf")
@@ -156,7 +156,7 @@ final class RecordingSegmentAssemblerTests: XCTestCase {
         try makeAudio(at: first, frameCount: 4_800, phaseOffset: 0)
         try makeAudio(at: second, frameCount: 4_800, phaseOffset: 4_800)
 
-        let output = try RecordingSegmentAssembler().assembleAudioSegments(
+        let output = try await RecordingSegmentAssembler().assembleAudioSegments(
             [first, second],
             outputURL: first,
             maximumDurations: [0.025, 0.05]
@@ -245,7 +245,7 @@ final class RecordingSegmentAssemblerTests: XCTestCase {
         let originalSegments = try store.loadRecordingSegmentIndex(
             from: session.packageURL
         ).segments
-        let archivedSegments = try service.archiveFirstSegmentsIfNeeded(
+        let archivedSegments = try await service.archiveFirstSegmentsIfNeeded(
             originalSegments,
             session: session
         )

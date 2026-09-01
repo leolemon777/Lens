@@ -7,7 +7,92 @@ import XCTest
 @testable import LensCore
 @testable import LensMac
 
+/// Collects progress callbacks that may arrive off the calling task (the
+/// export-progress poller runs in its own `Task`); a lock-guarded array is
+/// simpler than an actor here since the callback itself is synchronous.
+final class ProgressCollectorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Double] = []
+
+    func append(_ value: Double) {
+        lock.lock()
+        values.append(value)
+        lock.unlock()
+    }
+
+    var recorded: [Double] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+}
+
 final class AutoPreviewRendererTests: XCTestCase {
+    @MainActor
+    func testRenderProgressIsMonotonicStartsNearZeroAndEndsAtOne() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LensProgressTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inputURL = directory.appendingPathComponent("input.mp4")
+        let outputURL = directory.appendingPathComponent("output.mp4")
+        try await SyntheticVideoFactory.makeVideo(at: inputURL, frameCount: 36, framesPerSecond: 24)
+        var plan = AutoEditPlan()
+        plan.presenterCamera?.isEnabled = false
+
+        let collector = ProgressCollectorBox()
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: inputURL,
+            outputURL: outputURL,
+            plan: plan,
+            progress: { collector.append($0) }
+        )
+
+        let values = collector.recorded
+        XCTAssertFalse(values.isEmpty)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(values.first), 0)
+        XCTAssertEqual(try XCTUnwrap(values.last), 1)
+        XCTAssertEqual(values, values.sorted(), "progress must never move backwards")
+        // The exporter is polled at 10 Hz; a sub-second synthetic render
+        // should never produce anywhere near a per-frame callback count.
+        XCTAssertLessThan(values.count, 300)
+    }
+
+    @MainActor
+    func testPresenterCameraRenderProgressSpansBothEncodePassesWithoutRestarting() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LensPresenterProgressTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let screenURL = directory.appendingPathComponent("screen.mp4")
+        let cameraURL = directory.appendingPathComponent("camera.mp4")
+        let outputURL = directory.appendingPathComponent("presenter.mp4")
+        try await SyntheticVideoFactory.makeVideo(at: screenURL, frameCount: 24, framesPerSecond: 24)
+        try await SyntheticVideoFactory.makeVideo(
+            at: cameraURL,
+            frameCount: 24,
+            framesPerSecond: 24,
+            style: .greenCamera
+        )
+        var plan = AutoEditPlan()
+        plan.presenterCamera?.isEnabled = true
+
+        let collector = ProgressCollectorBox()
+        _ = try await AutoPreviewRenderer().render(
+            inputURL: screenURL,
+            cameraURL: cameraURL,
+            outputURL: outputURL,
+            plan: plan,
+            progress: { collector.append($0) }
+        )
+
+        let values = collector.recorded
+        XCTAssertFalse(values.isEmpty)
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(values.first), 0)
+        XCTAssertEqual(try XCTUnwrap(values.last), 1)
+        XCTAssertEqual(values, values.sorted(), "progress must never move backwards")
+    }
+
     func testCameraMotionBlurIsVelocityDrivenAndZeroIsExactBypass() throws {
         let extent = CGRect(x: 0, y: 0, width: 320, height: 180)
         let checker = try XCTUnwrap(CIFilter(
@@ -1332,5 +1417,63 @@ enum SyntheticVideoFactory {
             }
         }
         return buffer
+    }
+
+    @MainActor
+    func testVerticalAspectRatioReframeRendersRecomposedCanvas() async throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "LensAspectReframeTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inputURL = directory.appendingPathComponent("input.mp4")
+        let outputURL = directory.appendingPathComponent("output.mp4")
+        try await SyntheticVideoFactory.makeVideo(
+            at: inputURL,
+            frameCount: 30,
+            framesPerSecond: 30
+        )
+        var plan = AutoEditPlan()
+        plan.export?.aspectRatio = .vertical9x16
+
+        let renderedURL = try await AutoPreviewRenderer().render(
+            inputURL: inputURL,
+            outputURL: outputURL,
+            plan: plan
+        )
+
+        let asset = AVURLAsset(url: renderedURL)
+        let tracks = try await asset.loadTracks(withMediaType: .video)
+        let track = try XCTUnwrap(tracks.first)
+        let naturalSize = try await track.load(.naturalSize)
+        XCTAssertEqual(naturalSize.width, 202)
+        XCTAssertEqual(naturalSize.height, 360)
+    }
+
+    func testDeliverySizeDerivesEvenCanvasPerAspect() {
+        let source = CGSize(width: 640, height: 360)
+        XCTAssertEqual(
+            AutoPreviewRenderer.deliverySize(source: source, aspectRatio: nil),
+            source
+        )
+        XCTAssertEqual(
+            AutoPreviewRenderer.deliverySize(source: source, aspectRatio: .vertical9x16),
+            CGSize(width: 202, height: 360)
+        )
+        XCTAssertEqual(
+            AutoPreviewRenderer.deliverySize(source: source, aspectRatio: .square1x1),
+            CGSize(width: 360, height: 360)
+        )
+        // A source already in the target aspect stays untouched.
+        XCTAssertEqual(
+            AutoPreviewRenderer.deliverySize(
+                source: CGSize(width: 202, height: 360),
+                aspectRatio: .vertical9x16
+            ),
+            CGSize(width: 202, height: 360)
+        )
     }
 }

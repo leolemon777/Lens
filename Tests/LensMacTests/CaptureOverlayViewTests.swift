@@ -189,7 +189,8 @@ final class CaptureOverlayViewTests: XCTestCase {
     }
 
     private func makeRegionView(
-        snapRects: [CGRect] = [CGRect(x: 100, y: 0, width: 600, height: 600)]
+        snapRects: [CGRect] = [CGRect(x: 100, y: 0, width: 600, height: 600)],
+        pasteboard: NSPasteboard = .general
     ) -> (CaptureOverlayView, SelectionDelegate) {
         let view = CaptureOverlayView(
             frame: CGRect(x: 0, y: 0, width: 800, height: 600),
@@ -198,7 +199,8 @@ final class CaptureOverlayViewTests: XCTestCase {
             mode: .region(
                 action: .screenshot,
                 snapRects: snapRects
-            )
+            ),
+            magnifierPasteboard: pasteboard
         )
         let delegate = SelectionDelegate()
         view.delegate = delegate
@@ -237,14 +239,147 @@ final class CaptureOverlayViewTests: XCTestCase {
             keyCode: keyCode
         )!
     }
+
+    private func exitEvent(location: CGPoint) -> NSEvent {
+        NSEvent.enterExitEvent(
+            with: .mouseExited,
+            location: location,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            trackingNumber: 0,
+            userData: nil
+        )!
+    }
+
+    private func keyEvent(character: String) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: character,
+            charactersIgnoringModifiers: character,
+            isARepeat: false,
+            keyCode: 8
+        )!
+    }
+
+    func testEscapeCancelsBothBeforeAndDuringRegionSelection() {
+        let (view, delegate) = makeRegionView()
+
+        view.keyDown(with: keyEvent(keyCode: 53))
+        XCTAssertEqual(delegate.cancelCount, 1)
+
+        view.mouseDown(with: mouseEvent(
+            type: .leftMouseDown,
+            location: CGPoint(x: 97, y: 500)
+        ))
+        view.keyDown(with: keyEvent(keyCode: 53))
+        XCTAssertEqual(delegate.cancelCount, 2)
+        XCTAssertNil(delegate.selection)
+    }
+
+    func testMagnifierLayerExistsAndOnlyShowsOncePointerEntersTheOverlay() throws {
+        let (view, _) = makeRegionView()
+        let magnifierLayer = try XCTUnwrap(
+            view.layer?.sublayers?.first { $0.name == "capture-magnifier-container" }
+        )
+        XCTAssertTrue(magnifierLayer.isHidden)
+
+        view.mouseMoved(with: mouseEvent(type: .mouseMoved, location: CGPoint(x: 300, y: 300)))
+        XCTAssertFalse(magnifierLayer.isHidden)
+
+        view.mouseExited(with: exitEvent(location: CGPoint(x: 300, y: 300)))
+        XCTAssertTrue(magnifierLayer.isHidden)
+    }
+
+    func testCenterPixelHexReadsBackTheExactRGBBytesAsAnUppercaseTriplet() {
+        let red = solidColorImage(width: 8, height: 8, red: 1, green: 0, blue: 0)
+        XCTAssertEqual(CaptureOverlayView.centerPixelHex(of: red), "#FF0000")
+
+        let blue = solidColorImage(width: 8, height: 8, red: 0, green: 0, blue: 1)
+        XCTAssertEqual(CaptureOverlayView.centerPixelHex(of: blue), "#0000FF")
+    }
+
+    func testDraggingNeverSynchronouslyRequestsAMagnifierSample() {
+        let (view, delegate) = makeRegionView()
+
+        view.mouseDown(with: mouseEvent(type: .leftMouseDown, location: CGPoint(x: 80, y: 520)))
+        for index in 0..<50 {
+            view.mouseDragged(with: mouseEvent(
+                type: .leftMouseDragged,
+                location: CGPoint(x: 80 + CGFloat(index) * 2, y: 520 - CGFloat(index))
+            ))
+        }
+
+        // Sampling only ever happens on the magnifier's own throttled Task
+        // loop, which cannot run mid-synchronous-call — proving the drag
+        // hot path itself never triggers capture I/O.
+        XCTAssertTrue(delegate.magnifierSampleRequests.isEmpty)
+    }
+
+    func testPressingCCopiesTheMostRecentMagnifierSampleToThePasteboardAndNotifiesDelegate() async {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("LensTests.Magnifier.\(UUID().uuidString)"))
+        let (view, delegate) = makeRegionView(pasteboard: pasteboard)
+        delegate.magnifierSampleToReturn = solidColorImage(width: 8, height: 8, red: 0, green: 1, blue: 0)
+
+        view.mouseMoved(with: mouseEvent(type: .mouseMoved, location: CGPoint(x: 300, y: 300)))
+        await view.refreshMagnifierSampleForTesting()
+        view.keyDown(with: keyEvent(character: "c"))
+
+        XCTAssertEqual(pasteboard.string(forType: .string), "#00FF00")
+        XCTAssertEqual(delegate.copiedMagnifierHex, "#00FF00")
+    }
+
+    func testPressingCBeforeAnySampleDoesNotTouchThePasteboardOrNotifyTheDelegate() {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("LensTests.MagnifierEmpty.\(UUID().uuidString)"))
+        let (view, delegate) = makeRegionView(pasteboard: pasteboard)
+
+        view.keyDown(with: keyEvent(character: "c"))
+
+        XCTAssertNil(pasteboard.string(forType: .string))
+        XCTAssertNil(delegate.copiedMagnifierHex)
+    }
+
+    private func solidColorImage(
+        width: Int,
+        height: Int,
+        red: CGFloat,
+        green: CGFloat,
+        blue: CGFloat
+    ) -> CGImage {
+        let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(red: red, green: green, blue: blue, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()!
+    }
 }
 
 @MainActor
 private final class SelectionDelegate: CaptureOverlayViewDelegate {
     var selection: CGRect?
     var dragPerformance: CaptureOverlayDragPerformance?
+    var cancelCount = 0
+    var magnifierSampleRequests: [CGRect] = []
+    var magnifierSampleToReturn: CGImage?
+    var copiedMagnifierHex: String?
 
-    func captureOverlayDidCancel(_ view: CaptureOverlayView) {}
+    func captureOverlayDidCancel(_ view: CaptureOverlayView) {
+        cancelCount += 1
+    }
 
     func captureOverlay(
         _ view: CaptureOverlayView,
@@ -263,5 +398,17 @@ private final class SelectionDelegate: CaptureOverlayViewDelegate {
         didMeasureRegionDrag performance: CaptureOverlayDragPerformance
     ) {
         dragPerformance = performance
+    }
+
+    func captureOverlay(
+        _ view: CaptureOverlayView,
+        didRequestMagnifierSample globalRect: CGRect
+    ) async -> CGImage? {
+        magnifierSampleRequests.append(globalRect)
+        return magnifierSampleToReturn
+    }
+
+    func captureOverlay(_ view: CaptureOverlayView, didCopyMagnifierHex hex: String) {
+        copiedMagnifierHex = hex
     }
 }

@@ -39,11 +39,11 @@ struct OnboardingView: View {
         HStack(spacing: 11) {
             ZStack {
                 Circle()
-                    .fill(.cyan.opacity(0.14))
+                    .fill(LensGlassPalette.accent.opacity(0.14))
                     .frame(width: 38, height: 38)
                 Image(systemName: "sparkles")
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.cyan)
+                    .foregroundStyle(LensGlassPalette.accent)
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 2) {
@@ -64,7 +64,7 @@ struct OnboardingView: View {
             ForEach(OnboardingStep.allCases) { step in
                 Capsule()
                     .fill(step.rawValue <= model.step.rawValue
-                          ? AnyShapeStyle(.cyan)
+                          ? AnyShapeStyle(LensGlassPalette.accent)
                           : AnyShapeStyle(.primary.opacity(0.14)))
                     .frame(width: step == model.step ? 18 : 7, height: 7)
             }
@@ -239,19 +239,52 @@ struct OnboardingView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if state == .granted {
-                Label("已允许", systemImage: "checkmark.circle.fill")
-                    .labelStyle(.titleAndIcon)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.green)
-            } else if let action = state.primaryActionTitle {
+            Label(state.title, systemImage: permissionStateSymbol(state))
+                .labelStyle(.titleAndIcon)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(permissionStateColor(state))
+                .accessibilityLabel("\(kind.title)权限状态")
+                .accessibilityValue(state.title)
+            if let action = state.primaryActionTitle {
                 Button(action) { onGrant(kind) }
+                    .accessibilityLabel("\(action)：\(kind.title)")
+                    .accessibilityHint(permissionActionHint(for: state, kind: kind))
             }
         }
         .padding(11)
         .background(.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(kind.title)，\(state.title)")
+        .accessibilityElement(children: .contain)
+    }
+
+    private func permissionActionHint(
+        for state: PermissionAccessState,
+        kind: SystemPermissionKind
+    ) -> String {
+        state == .notDetermined
+            ? "请求\(kind.title)权限"
+            : "打开系统设置中的\(kind.title)权限"
+    }
+
+    private func permissionStateSymbol(_ state: PermissionAccessState) -> String {
+        switch state {
+        case .granted:
+            "checkmark.circle.fill"
+        case .notDetermined:
+            "questionmark.circle"
+        case .denied, .restricted:
+            "exclamationmark.circle.fill"
+        }
+    }
+
+    private func permissionStateColor(_ state: PermissionAccessState) -> Color {
+        switch state {
+        case .granted:
+            .green
+        case .notDetermined:
+            .orange
+        case .denied, .restricted:
+            .red
+        }
     }
 
     private func shortcutRow(

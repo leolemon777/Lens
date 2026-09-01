@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Shared visual tokens for every Lens window. Keeping these values in one
@@ -15,13 +16,79 @@ enum LensGlassPalette {
             endPoint: .bottomTrailing
         )
     }
+
+    // Semantic roles. UI code should reach for these instead of a bare
+    // system hue literal so color stops being used to distinguish feature
+    // categories — only the four states below,
+    // plus content itself, ever carry color; everything else is neutral.
+    /// The single accent used for primary actions, selection and focus.
+    static let accent = ice
+    /// Recording state only — never a generic "this feature involves video" tint.
+    static let recording = Color.red
+    /// Warnings and items awaiting review.
+    static let warning = Color.orange
+    /// Completed/healthy state.
+    static let success = Color.green
+    /// Everything else: icons, secondary tags, non-primary buttons.
+    static let neutral = Color.secondary
+
+    // NSColor bridges for the small amount of AppKit drawing code (e.g. the
+    // capture selection overlay) that isn't SwiftUI and can't take a
+    // `Color` directly. `static let` so the bridging conversion happens once
+    // per process, not on every draw call in a 60 Hz drag loop.
+    static let accentColor = NSColor(accent)
+    static let recordingColor = NSColor(recording)
+    static let warningColor = NSColor(warning)
 }
 
 enum LensGlassMetrics {
     static let windowCornerRadius: CGFloat = 30
     static let panelCornerRadius: CGFloat = 24
+    /// The action center's large primary-action tiles (screenshot, record,
+    /// more). Distinct from `cardCornerRadius`: cards hold library/insight
+    /// content, tiles are tappable launch targets.
+    static let tileCornerRadius: CGFloat = 18
     static let cardCornerRadius: CGFloat = 16
     static let controlCornerRadius: CGFloat = 13
+    static let badgeCornerRadius: CGFloat = 8
+    static let thumbnailCornerRadius: CGFloat = 10
+    /// Every `role: .chrome` surface (toolbar strips flush against a window
+    /// edge) uses this everywhere it appears; unlike the other surfaces,
+    /// chrome is deliberately unrounded.
+    static let chromeCornerRadius: CGFloat = 0
+}
+
+/// Text point sizes. Every label in the app should resolve to one of these
+/// six values instead of a hand-picked literal; `LensDesignTokenLintTests`
+/// enforces this so the type scale cannot silently drift again.
+enum LensType {
+    static let title: CGFloat = 15
+    static let body: CGFloat = 13
+    static let callout: CGFloat = 12
+    /// macOS's own body-text floor; nothing user-facing should read smaller.
+    static let caption: CGFloat = 11
+    /// Reserved for short badges/pills (a few characters, semibold).
+    static let micro: CGFloat = 10
+    static let numeric: CGFloat = 13
+}
+
+/// SF Symbol point sizes, kept separate from `LensType` because
+/// `Image(systemName:)` and `Text` share the same `.font(.system(size:))`
+/// call site but scale on different axes.
+enum LensIcon {
+    static let small: CGFloat = 11
+    static let medium: CGFloat = 13
+    static let large: CGFloat = 17
+    static let xlarge: CGFloat = 24
+    static let hero: CGFloat = 34
+}
+
+enum LensSpacing {
+    static let xs: CGFloat = 4
+    static let s: CGFloat = 8
+    static let m: CGFloat = 12
+    static let l: CGFloat = 16
+    static let xl: CGFloat = 24
 }
 
 enum LensMotionPolicy {
@@ -166,6 +233,8 @@ struct LensGlassBackdrop: View {
 struct LensGlassSurface: ViewModifier {
     let role: LensGlassSurfaceRole
     let cornerRadius: CGFloat
+    var tint: Color? = nil
+    var shadowOverride: (opacity: Double, radius: CGFloat, y: CGFloat)? = nil
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.lensReduceTransparencyOverride) private var reduceTransparencyOverride
 
@@ -197,7 +266,7 @@ struct LensGlassSurface: ViewModifier {
                 // Large window surfaces must stay geometrically stable while they
                 // are being captured. Interactive Liquid Glass is intended for
                 // controls and can temporarily warp the outer rim under the pointer.
-                content.glassEffect(.regular, in: shape),
+                content.glassEffect(tint.map { Glass.regular.tint($0) } ?? .regular, in: shape),
                 shape: shape,
                 reducedTransparency: false
             )
@@ -228,7 +297,7 @@ struct LensGlassSurface: ViewModifier {
         shape: RoundedRectangle,
         reducedTransparency: Bool
     ) -> some View {
-        let shadow = role.shadow
+        let shadow = shadowOverride ?? role.shadow
         return content
             .overlay(
                 shape.strokeBorder(
@@ -354,7 +423,7 @@ struct LensGlassSection<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(title, systemImage: symbol)
-                .font(.system(size: 11.5, weight: .semibold))
+                .font(.system(size: LensType.caption, weight: .semibold))
                 .foregroundStyle(tint)
             content
         }
@@ -366,9 +435,11 @@ struct LensGlassSection<Content: View>: View {
 extension View {
     func lensGlassSurface(
         role: LensGlassSurfaceRole = .panel,
-        cornerRadius: CGFloat = LensGlassMetrics.panelCornerRadius
+        cornerRadius: CGFloat = LensGlassMetrics.panelCornerRadius,
+        tint: Color? = nil,
+        shadow: (opacity: Double, radius: CGFloat, y: CGFloat)? = nil
     ) -> some View {
-        modifier(LensGlassSurface(role: role, cornerRadius: cornerRadius))
+        modifier(LensGlassSurface(role: role, cornerRadius: cornerRadius, tint: tint, shadowOverride: shadow))
     }
 
     func lensGlassPanel(cornerRadius: CGFloat = 28) -> some View {

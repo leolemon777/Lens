@@ -6,6 +6,23 @@ import XCTest
 
 @MainActor
 final class OCRResultViewTests: XCTestCase {
+    // Several tests below assert a panel's presence/absence in `NSApp.windows`
+    // right after calling into the controller. LensPanelPresenter's animated
+    // dismiss only orders the window out after a short fade, which races
+    // with those synchronous assertions (and with the next test's own
+    // windows, since `NSApp.windows` is process-global). Forcing the
+    // reduced-motion path makes dismiss synchronous again for this file,
+    // matching what these tests were actually written to verify.
+    override func setUp() {
+        super.setUp()
+        LensPanelPresenter.reduceMotionOverride = true
+    }
+
+    override func tearDown() {
+        LensPanelPresenter.reduceMotionOverride = nil
+        super.tearDown()
+    }
+
     func testCopyUsesEditedTextInsteadOfOriginalRecognition() {
         let model = OCRResultModel(document: makeDocument("识别原文"), thumbnail: nil)
         XCTAssertEqual(model.phase, .ready)

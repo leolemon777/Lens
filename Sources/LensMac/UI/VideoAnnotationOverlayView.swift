@@ -103,8 +103,8 @@ struct VideoAnnotationOverlayView: View {
     ) {
         let rect = viewRect(annotation.bounds).insetBy(dx: -3, dy: -3)
         context.stroke(
-            Path(roundedRect: rect, cornerRadius: 5),
-            with: .color(.cyan.opacity(0.96)),
+            Path(roundedRect: rect, cornerRadius: 5), // lens-token-exempt: 画布内容渲染（选区轮廓），非 UI 表面
+            with: .color(.cyan.opacity(0.96)), // lens-token-exempt: 同上
             style: StrokeStyle(lineWidth: 1.5, dash: [5, 3])
         )
         for handle in ScreenshotAnnotationResizeHandle.allCases {
@@ -115,7 +115,7 @@ struct VideoAnnotationOverlayView: View {
             let center = viewPoint(point)
             let rect = CGRect(x: center.x - 4.5, y: center.y - 4.5, width: 9, height: 9)
             context.fill(Path(ellipseIn: rect), with: .color(.white))
-            context.stroke(Path(ellipseIn: rect), with: .color(.cyan), lineWidth: 2)
+            context.stroke(Path(ellipseIn: rect), with: .color(.cyan), lineWidth: 2) // lens-token-exempt: 画布内容渲染（缩放手柄），非 UI 表面
         }
     }
 
@@ -133,11 +133,11 @@ struct VideoAnnotationOverlayView: View {
         switch annotation.kind {
         case .rectangle:
             context.fill(
-                Path(roundedRect: rect, cornerRadius: 4),
+                Path(roundedRect: rect, cornerRadius: 4), // lens-token-exempt: 画布内容渲染（矩形标注形状），非 UI 表面
                 with: .color(color.opacity(0.10))
             )
             context.stroke(
-                Path(roundedRect: rect, cornerRadius: 4),
+                Path(roundedRect: rect, cornerRadius: 4), // lens-token-exempt: 同上
                 with: .color(color),
                 lineWidth: lineWidth
             )
@@ -185,7 +185,7 @@ struct VideoAnnotationOverlayView: View {
             )
         case .text:
             context.fill(
-                Path(roundedRect: rect.insetBy(dx: -5, dy: -3), cornerRadius: 5),
+                Path(roundedRect: rect.insetBy(dx: -5, dy: -3), cornerRadius: 5), // lens-token-exempt: 画布内容渲染（文字标注背景），非 UI 表面
                 with: .color(.black.opacity(0.58))
             )
             context.draw(
@@ -205,11 +205,11 @@ struct VideoAnnotationOverlayView: View {
         case .blur, .pixelate:
             let symbol = annotation.kind == .blur ? "drop.fill" : "square.grid.3x3.fill"
             context.fill(
-                Path(roundedRect: rect, cornerRadius: 6),
+                Path(roundedRect: rect, cornerRadius: 6), // lens-token-exempt: 画布内容渲染（模糊/像素化标注形状），非 UI 表面
                 with: .color(.white.opacity(0.18))
             )
             context.stroke(
-                Path(roundedRect: rect, cornerRadius: 6),
+                Path(roundedRect: rect, cornerRadius: 6), // lens-token-exempt: 同上
                 with: .color(.white.opacity(0.78)),
                 style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
             )

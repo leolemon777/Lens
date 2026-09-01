@@ -186,6 +186,24 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         }
     }
 
+    /// A sanitized keystroke rendered as an on-screen capsule. Only shortcuts
+    /// and non-text control keys ever reach this type — plain typing is never
+    /// recorded, so there is nothing sensitive to display.
+    public struct KeystrokeDisplay: Codable, Equatable, Sendable {
+        public let time: Double
+        public let text: String
+        public let holdSeconds: Double
+
+        public init(time: Double, text: String, holdSeconds: Double = 1.15) {
+            self.time = max(time.isFinite ? time : 0, 0)
+            self.text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.holdSeconds = min(max(
+                holdSeconds.isFinite ? holdSeconds : 1.15,
+                0.3
+            ), 3)
+        }
+    }
+
     public struct Interaction: Codable, Equatable, Sendable {
         public enum ClickEffect: String, Codable, CaseIterable, Hashable, Sendable {
             case ripple
@@ -201,6 +219,8 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         /// Nil preserves each legacy pulse's authored duration.
         public var clickPulseDuration: Double?
         public var clickPulses: [ClickPulse]
+        public var showsKeystrokes: Bool
+        public var keystrokes: [KeystrokeDisplay]
 
         public init(
             showsClickPulse: Bool = true,
@@ -209,7 +229,9 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             clickPulseScale: Double = 1.25,
             clickPulseColorHex: String = "#FF684D",
             clickPulseDuration: Double? = 0.62,
-            clickPulses: [ClickPulse] = []
+            clickPulses: [ClickPulse] = [],
+            showsKeystrokes: Bool = false,
+            keystrokes: [KeystrokeDisplay] = []
         ) {
             self.showsClickPulse = showsClickPulse
             self.clickEffect = clickEffect
@@ -226,6 +248,8 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
                 min(max($0.isFinite ? $0 : 0.55, 0.15), 1.5)
             }
             self.clickPulses = clickPulses
+            self.showsKeystrokes = showsKeystrokes
+            self.keystrokes = keystrokes
         }
 
         private enum CodingKeys: String, CodingKey {
@@ -236,6 +260,8 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             case clickPulseColorHex
             case clickPulseDuration
             case clickPulses
+            case showsKeystrokes
+            case keystrokes
         }
 
         public init(from decoder: Decoder) throws {
@@ -268,6 +294,14 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
                 clickPulses: try container.decodeIfPresent(
                     [ClickPulse].self,
                     forKey: .clickPulses
+                ) ?? [],
+                showsKeystrokes: try container.decodeIfPresent(
+                    Bool.self,
+                    forKey: .showsKeystrokes
+                ) ?? false,
+                keystrokes: try container.decodeIfPresent(
+                    [KeystrokeDisplay].self,
+                    forKey: .keystrokes
                 ) ?? []
             )
         }
@@ -378,6 +412,10 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             case macOS
             case highContrast
             case minimalDot
+            /// Laser-pointer style accent ring centered on the hotspot.
+            case ring
+            /// Soft glowing accent dot.
+            case glowDot
         }
 
         public enum MotionEffect: String, Codable, CaseIterable, Hashable, Sendable {
@@ -385,6 +423,16 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             case halo
             case trail
             case spotlight
+        }
+
+        /// How the rendered pointer chases the recorded track. `custom` keeps
+        /// the hand-tuned smoothing fields; legacy plans (field absent) also
+        /// resolve to `custom` so existing projects render unchanged.
+        public enum FollowStyle: String, Codable, CaseIterable, Sendable {
+            case faithful
+            case smooth
+            case elastic
+            case custom
         }
 
         /// Nil in legacy projects means enabled.
@@ -396,6 +444,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         public var smoothing: Double
         /// Nil preserves the legacy normalized smoothing renderer.
         public var smoothingWindowMilliseconds: Double?
+        public var followStyle: FollowStyle?
         public var scale: Double
         public var hidesWhenIdle: Bool
         public var keyframes: [CursorKeyframe]
@@ -409,6 +458,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             motionEffectStrength: Double = 0.42,
             smoothing: Double,
             smoothingWindowMilliseconds: Double? = nil,
+            followStyle: FollowStyle? = nil,
             scale: Double,
             hidesWhenIdle: Bool,
             keyframes: [CursorKeyframe] = [],
@@ -426,6 +476,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             self.smoothingWindowMilliseconds = smoothingWindowMilliseconds.map {
                 min(max($0.isFinite ? $0 : 0, 0), 160)
             }
+            self.followStyle = followStyle
             self.scale = scale
             self.hidesWhenIdle = hidesWhenIdle
             self.keyframes = keyframes
@@ -437,6 +488,26 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
                 ?? min(max(smoothing.isFinite ? smoothing : 0.72, 0), 1) * 80
         }
 
+        /// Smoothing inputs the renderer should use for the chosen follow
+        /// style. `faithful` zeroes the Hermite blend (pure track-following);
+        /// the presets map to window widths; `custom` and legacy plans keep
+        /// the authored fields.
+        public var resolvedSmoothingParameters: (
+            smoothing: Double,
+            windowMilliseconds: Double?
+        ) {
+            switch followStyle {
+            case .faithful:
+                (0, nil)
+            case .smooth:
+                (0.72, 26)
+            case .elastic:
+                (1, 80)
+            case .custom, .none:
+                (smoothing, smoothingWindowMilliseconds)
+            }
+        }
+
         private enum CodingKeys: String, CodingKey {
             case isEnabled
             case appearance
@@ -445,6 +516,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             case motionEffectStrength
             case smoothing
             case smoothingWindowMilliseconds
+            case followStyle
             case scale
             case hidesWhenIdle
             case keyframes
@@ -476,6 +548,10 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
                 smoothingWindowMilliseconds: try container.decodeIfPresent(
                     Double.self,
                     forKey: .smoothingWindowMilliseconds
+                ),
+                followStyle: try container.decodeIfPresent(
+                    FollowStyle.self,
+                    forKey: .followStyle
                 ),
                 scale: try container.decodeIfPresent(Double.self, forKey: .scale) ?? 1.15,
                 hidesWhenIdle: try container.decodeIfPresent(
@@ -725,6 +801,30 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     }
 
     public struct Audio: Codable, Equatable, Sendable {
+        /// One-tap narration polish presets. The levels only remap existing
+        /// mixdown fields, so they stay reviewable tweak-by-tweak afterwards.
+        public enum VoiceEnhancementLevel: String, Codable, CaseIterable, Sendable {
+            case light
+            case standard
+            case strong
+
+            public var noiseReductionAmount: Double {
+                switch self {
+                case .light: 0.4
+                case .standard: 0.55
+                case .strong: 0.75
+                }
+            }
+
+            public var targetLoudnessLUFS: Double {
+                switch self {
+                case .light: -18
+                case .standard: -16
+                case .strong: -14
+                }
+            }
+        }
+
         public var isEnabled: Bool
         public var systemVolume: Double
         public var microphoneVolume: Double
@@ -860,6 +960,8 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         public var fontScale: Double
         public var maxCharactersPerCue: Int
         public var verticalMargin: Double
+        /// Highlights the word being spoken inside each cue (karaoke style).
+        public var highlightsSpokenWords: Bool
         /// Nil keeps following the latest transcript. Once edited, this stores a
         /// non-destructive source-time caption copy in the edit plan.
         public var customCues: [CaptionSourceCue]?
@@ -871,6 +973,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             fontScale: Double = 1,
             maxCharactersPerCue: Int = 28,
             verticalMargin: Double = 0.065,
+            highlightsSpokenWords: Bool = false,
             customCues: [CaptionSourceCue]? = nil
         ) {
             self.isEnabled = isEnabled
@@ -882,7 +985,57 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
                 verticalMargin.isFinite ? verticalMargin : 0.065,
                 0
             ), 0.3)
+            self.highlightsSpokenWords = highlightsSpokenWords
             self.customCues = customCues
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case isEnabled
+            case style
+            case position
+            case fontScale
+            case maxCharactersPerCue
+            case verticalMargin
+            case highlightsSpokenWords
+            case customCues
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                isEnabled: try container.decodeIfPresent(
+                    Bool.self,
+                    forKey: .isEnabled
+                ) ?? false,
+                style: try container.decodeIfPresent(
+                    Style.self,
+                    forKey: .style
+                ) ?? .glass,
+                position: try container.decodeIfPresent(
+                    Position.self,
+                    forKey: .position
+                ) ?? .bottom,
+                fontScale: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .fontScale
+                ) ?? 1,
+                maxCharactersPerCue: try container.decodeIfPresent(
+                    Int.self,
+                    forKey: .maxCharactersPerCue
+                ) ?? 28,
+                verticalMargin: try container.decodeIfPresent(
+                    Double.self,
+                    forKey: .verticalMargin
+                ) ?? 0.065,
+                highlightsSpokenWords: try container.decodeIfPresent(
+                    Bool.self,
+                    forKey: .highlightsSpokenWords
+                ) ?? false,
+                customCues: try container.decodeIfPresent(
+                    [CaptionSourceCue].self,
+                    forKey: .customCues
+                )
+            )
         }
     }
 
@@ -895,10 +1048,23 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             case compact
         }
 
-        public var preset: Preset
+        /// Reframes the delivery for social platforms. Nil keeps the source
+        /// aspect; camera motion is remapped onto the new canvas instead of
+        /// letterboxing.
+        public enum AspectRatio: String, Codable, CaseIterable, Sendable {
+            case vertical9x16
+            case square1x1
+        }
 
-        public init(preset: Preset = .balanced) {
+        public var preset: Preset
+        public var aspectRatio: AspectRatio?
+
+        public init(
+            preset: Preset = .balanced,
+            aspectRatio: AspectRatio? = nil
+        ) {
             self.preset = preset
+            self.aspectRatio = aspectRatio
         }
     }
 
@@ -914,6 +1080,10 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     public var captions: Captions?
     public var videoAnnotations: [VideoAnnotation]?
     public var export: Export?
+    /// Reviewable narration-cleanup proposals. Purely additive within schema
+    /// 1.2: legacy plans decode without it, and pending suggestions never
+    /// affect rendering — only accepted ones change `timeline`.
+    public var narrationTrims: [NarrationTrimSuggestion]?
 
     public init(
         schemaVersion: String = AutoEditPlan.currentSchemaVersion,
@@ -940,7 +1110,8 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         timeline: VideoEditTimeline? = nil,
         captions: Captions? = Captions(),
         videoAnnotations: [VideoAnnotation]? = [],
-        export: Export? = Export()
+        export: Export? = Export(),
+        narrationTrims: [NarrationTrimSuggestion]? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.preset = preset
@@ -954,5 +1125,6 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
         self.captions = captions
         self.videoAnnotations = videoAnnotations
         self.export = export
+        self.narrationTrims = narrationTrims
     }
 }

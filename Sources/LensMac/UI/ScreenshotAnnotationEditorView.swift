@@ -8,7 +8,28 @@ struct ScreenshotAnnotationEditorView: View {
     let onSave: (ScreenshotEditPlan) -> Void
     let onCopy: (ScreenshotEditPlan) -> Void
     let onExport: (ScreenshotEditPlan, ScreenshotExportFormat) -> Void
+    let onExportCodeCard: () -> Void
     let onCancel: () -> Void
+
+    @State private var showsRedactionReview = false
+
+    init(
+        model: ScreenshotAnnotationEditorModel,
+        image: NSImage,
+        onSave: @escaping (ScreenshotEditPlan) -> Void,
+        onCopy: @escaping (ScreenshotEditPlan) -> Void,
+        onExport: @escaping (ScreenshotEditPlan, ScreenshotExportFormat) -> Void,
+        onExportCodeCard: @escaping () -> Void = {},
+        onCancel: @escaping () -> Void
+    ) {
+        self.model = model
+        self.image = image
+        self.onSave = onSave
+        self.onCopy = onCopy
+        self.onExport = onExport
+        self.onExportCodeCard = onExportCodeCard
+        self.onCancel = onCancel
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,19 +53,19 @@ struct ScreenshotAnnotationEditorView: View {
         HStack(spacing: 11) {
             ZStack {
                 Circle()
-                    .fill(.cyan.opacity(0.14))
+                    .fill(LensGlassPalette.accent.opacity(0.14))
                     .frame(width: 34, height: 34)
                 Image(systemName: "pencil.and.outline")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.cyan)
+                    .font(.system(size: LensIcon.medium, weight: .semibold))
+                    .foregroundStyle(LensGlassPalette.accent)
                     .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text("标注截图")
-                    .font(.system(size: 14, weight: .semibold))
-                Text("所有标注均非破坏性，原图始终保留")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: LensType.title, weight: .semibold))
+                Text(annotationPrivacySubtitle)
+                    .font(.system(size: LensType.caption, weight: .medium))
+                    .foregroundStyle(annotationPrivacySubtitleColor)
             }
             Spacer()
             if let feedback = model.clipboardFeedback {
@@ -54,7 +75,7 @@ struct ScreenshotAnnotationEditorView: View {
                         ? "checkmark.circle.fill"
                         : "exclamationmark.triangle.fill"
                 )
-                .font(.system(size: 10.5, weight: .semibold))
+                .font(.system(size: LensType.micro, weight: .semibold))
                 .foregroundStyle(feedback == .copied ? .green : .orange)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 6)
@@ -69,7 +90,7 @@ struct ScreenshotAnnotationEditorView: View {
                     .controlSize(.small)
                     .accessibilityLabel("正在渲染标注结果")
                 Text("正在渲染…")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.system(size: LensType.micro, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
             Button(action: model.undo) {
@@ -119,13 +140,13 @@ struct ScreenshotAnnotationEditorView: View {
                 Label("完成并复制", systemImage: "checkmark")
             }
             .buttonStyle(.borderedProminent)
-            .tint(.cyan)
+            .tint(LensGlassPalette.accent)
             .disabled(model.isRendering)
             .keyboardShortcut(.return, modifiers: .command)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        .lensGlassSurface(role: .chrome, cornerRadius: 0)
+        .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius, tint: LensGlassPalette.ice)
     }
 
     private var toolbar: some View {
@@ -134,19 +155,55 @@ struct ScreenshotAnnotationEditorView: View {
                 model.activateSelectionTool()
             } label: {
                 Label("选择", systemImage: "cursorarrow")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.system(size: LensType.micro, weight: .semibold))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 6)
                     .background(
                         model.isSelectionMode
-                            ? Color.cyan.opacity(0.16)
+                            ? LensGlassPalette.accent.opacity(0.16)
                             : Color.primary.opacity(0.045),
                         in: Capsule()
                     )
             }
             .buttonStyle(.plain)
-            .foregroundStyle(model.isSelectionMode ? .cyan : .primary)
+            .foregroundStyle(model.isSelectionMode ? LensGlassPalette.accent : .primary)
             .help("选择、移动或缩放对象")
+
+            if model.suggestedRedactionCount > 0 {
+                Button {
+                    showsRedactionReview.toggle()
+                } label: {
+                    Label(
+                        "复核 \(model.suggestedRedactionCount) 处",
+                        systemImage: "eye.slash"
+                    )
+                        .font(.system(size: LensType.micro, weight: .semibold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 6)
+                        .background(Color.orange.opacity(0.18), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.orange)
+                .accessibilityLabel("复核 \(model.suggestedRedactionCount) 处可能的敏感信息")
+                .accessibilityHint("打开逐项复核面板；确认后才会加入可移动、可撤销的像素化标注")
+                .help("对 OCR 识别到的邮箱、电话、证件号、卡号与凭据生成可撤销的像素化标注；像素化仅适合演示，不等于安全脱敏")
+                .popover(isPresented: $showsRedactionReview, arrowEdge: .bottom) {
+                    redactionReviewPanel
+                }
+            }
+
+            if model.showsCodeCardExport {
+                Button(action: onExportCodeCard) {
+                    Label("导出代码卡片", systemImage: "chevron.left.forwardslash.chevron.right")
+                        .font(.system(size: LensType.micro, weight: .semibold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 6)
+                        .background(LensGlassPalette.accent.opacity(0.16), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LensGlassPalette.accent)
+                .help("把识别到的代码渲染成深色等宽卡片（PNG）")
+            }
 
             Divider().frame(height: 25)
 
@@ -155,18 +212,18 @@ struct ScreenshotAnnotationEditorView: View {
                     model.activateDrawingTool(tool)
                 } label: {
                     Label(tool.editorTitle, systemImage: tool.editorSymbol)
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(.system(size: LensType.micro, weight: .semibold))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 6)
                         .background(
                             !model.isSelectionMode && model.selectedTool == tool
-                                ? Color.cyan.opacity(0.16)
+                                ? LensGlassPalette.accent.opacity(0.16)
                                 : Color.primary.opacity(0.045),
                             in: Capsule()
                         )
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(!model.isSelectionMode && model.selectedTool == tool ? .cyan : .primary)
+                .foregroundStyle(!model.isSelectionMode && model.selectedTool == tool ? LensGlassPalette.accent : .primary)
                 .help(tool.editorTitle)
             }
 
@@ -193,15 +250,15 @@ struct ScreenshotAnnotationEditorView: View {
                 }
             } label: {
                 HStack(spacing: 6) {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: LensGlassMetrics.badgeCornerRadius, style: .continuous)
                         .fill(selectedColorStyle)
                         .frame(width: 25, height: 17)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            RoundedRectangle(cornerRadius: LensGlassMetrics.badgeCornerRadius, style: .continuous)
                                 .stroke(.white.opacity(0.45), lineWidth: 1)
                         )
                     Text("颜色")
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(.system(size: LensType.micro, weight: .semibold))
                 }
             }
             .menuStyle(.borderlessButton)
@@ -238,7 +295,7 @@ struct ScreenshotAnnotationEditorView: View {
                     model.deleteSelected()
                 } label: {
                     Label("删除", systemImage: "trash")
-                        .font(.system(size: 10.5, weight: .semibold))
+                        .font(.system(size: LensType.micro, weight: .semibold))
                 }
                 .buttonStyle(.borderless)
                 .disabled(model.selectedAnnotation == nil)
@@ -248,18 +305,34 @@ struct ScreenshotAnnotationEditorView: View {
                 model.clear()
             } label: {
                 Label("清空", systemImage: "trash")
-                    .font(.system(size: 10.5, weight: .semibold))
+                    .font(.system(size: LensType.micro, weight: .semibold))
             }
             .buttonStyle(.borderless)
             .disabled(model.annotations.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .lensGlassSurface(role: .chrome, cornerRadius: 0)
+        .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius, tint: LensGlassPalette.ice)
     }
 
     private var backgroundToolbar: some View {
         ScreenshotCanvasToolbar(model: model)
+    }
+
+    private var annotationPrivacySubtitle: String {
+        if model.suggestedRedactionCount > 0 {
+            return "检测到敏感信息建议 · 像素化可撤销，不等于安全脱敏"
+        }
+        if model.annotations.contains(where: { $0.kind == .pixelate }) {
+            return "像素化仅适合演示 · 不等于安全脱敏，原图始终保留"
+        }
+        return "所有标注均非破坏性，原图始终保留"
+    }
+
+    private var annotationPrivacySubtitleColor: Color {
+        model.suggestedRedactionCount > 0 || model.annotations.contains(where: { $0.kind == .pixelate })
+            ? .orange
+            : .secondary
     }
 
     private var canvas: some View {
@@ -301,6 +374,14 @@ struct ScreenshotAnnotationEditorView: View {
                     )
 
                 Canvas { context, _ in
+                    for (index, suggestion) in model.pendingRedactionSuggestions.enumerated() {
+                        drawPendingRedaction(
+                            suggestion,
+                            index: index,
+                            context: &context,
+                            imageRect: imageRect
+                        )
+                    }
                     for annotation in model.annotations {
                         draw(annotation, context: &context, imageRect: imageRect)
                     }
@@ -319,11 +400,18 @@ struct ScreenshotAnnotationEditorView: View {
                     .frame(width: imageRect.width, height: imageRect.height)
                     .position(x: imageRect.midX, y: imageRect.midY)
                     .gesture(annotationGesture(in: imageRect))
-                    .accessibilityLabel("截图标注画布")
-                    .accessibilityValue("\(model.annotations.count) 个标注对象")
-                    .accessibilityHint(model.isSelectionMode
-                        ? "使用指针选择、移动或缩放标注对象"
-                        : "使用指针拖动添加\(model.selectedTool.editorTitle)")
+                // SwiftUI's transparent gesture target is reported as
+                // AXUnknown on macOS and drops its value. Keep the gesture
+                // target visual-only for AX and add a native group proxy that
+                // reliably exposes the canvas name, value, and hint.
+                ScreenshotCanvasAccessibilityProxy(
+                    label: "截图标注画布",
+                    value: canvasAccessibilityValue,
+                    hint: canvasAccessibilityHint
+                )
+                .frame(width: imageRect.width, height: imageRect.height)
+                .position(x: imageRect.midX, y: imageRect.midY)
+                .allowsHitTesting(false)
             }
         }
     }
@@ -374,14 +462,112 @@ struct ScreenshotAnnotationEditorView: View {
                 Text("·")
                 Text("文字工具可单击放置")
             }
+            if model.suggestedRedactionCount > 0 {
+                Text("·")
+                Label("待复核 \(model.suggestedRedactionCount) 处", systemImage: "eye")
+                    .accessibilityLabel("待复核 \(model.suggestedRedactionCount) 处敏感信息建议")
+            }
             Spacer()
             Text("\(model.annotations.count) 个对象")
         }
-        .font(.system(size: 10.5, weight: .medium))
+        .font(.system(size: LensType.caption, weight: .medium))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 17)
         .padding(.vertical, 8)
-        .lensGlassSurface(role: .chrome, cornerRadius: 0)
+        .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius, tint: LensGlassPalette.ice)
+    }
+
+    private var canvasAccessibilityValue: String {
+        if model.suggestedRedactionCount > 0 {
+            return "\(model.annotations.count) 个标注对象，\(model.suggestedRedactionCount) 个待复核敏感信息建议"
+        }
+        return "\(model.annotations.count) 个标注对象"
+    }
+
+    private var canvasAccessibilityHint: String {
+        if model.suggestedRedactionCount > 0 {
+            return "先查看画布上的橙色虚线框，再从复核面板逐项应用或跳过"
+        }
+        return model.isSelectionMode
+            ? "使用指针选择、移动或缩放标注对象"
+            : "使用指针拖动添加\(model.selectedTool.editorTitle)"
+    }
+
+    private var redactionReviewPanel: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 7) {
+                Label("敏感信息建议", systemImage: "eye.slash")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text("\(model.suggestedRedactionCount) 处")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.orange)
+            }
+            Text("橙色虚线框只表示 OCR 建议。请先检查位置，再逐项应用；原图始终保留，像素化不等于安全脱敏。")
+                .font(.system(size: LensType.micro, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(Array(model.pendingRedactionSuggestions.enumerated()), id: \.element.id) { index, suggestion in
+                        HStack(spacing: 7) {
+                            Text("\(index + 1)")
+                                .font(.system(size: LensType.micro, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white)
+                                .frame(width: 20, height: 20)
+                                .background(.orange, in: Circle())
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("建议 \(index + 1)")
+                                    .font(.system(size: LensType.micro, weight: .semibold))
+                                Text(redactionBoundsText(suggestion.bounds))
+                                    .font(.system(size: LensType.micro, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 2)
+                            Button("跳过") {
+                                model.dismissSuggestedRedaction(suggestion.id)
+                            }
+                            .controlSize(.mini)
+                            Button("应用") {
+                                model.applySuggestedRedaction(suggestion.id)
+                            }
+                            .controlSize(.mini)
+                            .buttonStyle(.borderedProminent)
+                            .tint(.orange)
+                        }
+                        .padding(.vertical, 3)
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+
+            HStack {
+                Button("全部应用") {
+                    model.applySuggestedRedactions()
+                    showsRedactionReview = false
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                Button("关闭") {
+                    showsRedactionReview = false
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+            }
+        }
+        .padding(14)
+        .frame(width: 360)
+    }
+
+    private func redactionBoundsText(_ bounds: LensRect) -> String {
+        String(
+            format: "画布 %.0f%%, %.0f%% · %.0f%% × %.0f%%",
+            bounds.x * 100,
+            bounds.y * 100,
+            bounds.width * 100,
+            bounds.height * 100
+        )
     }
 
     private func annotationGesture(in imageRect: CGRect) -> some Gesture {
@@ -427,8 +613,8 @@ struct ScreenshotAnnotationEditorView: View {
     ) {
         let rect = viewRect(annotation.bounds, in: imageRect).insetBy(dx: -3, dy: -3)
         context.stroke(
-            Path(roundedRect: rect, cornerRadius: 5),
-            with: .color(.cyan.opacity(0.92)),
+            Path(roundedRect: rect, cornerRadius: 5), // lens-token-exempt: 画布内容渲染（选区轮廓），非 UI 表面
+            with: .color(.cyan.opacity(0.92)), // lens-token-exempt: 同上
             style: StrokeStyle(lineWidth: 1.5, dash: [5, 3])
         )
 
@@ -440,8 +626,34 @@ struct ScreenshotAnnotationEditorView: View {
             let center = viewPoint(point, in: imageRect)
             let handleRect = CGRect(x: center.x - 4.5, y: center.y - 4.5, width: 9, height: 9)
             context.fill(Path(ellipseIn: handleRect), with: .color(.white))
-            context.stroke(Path(ellipseIn: handleRect), with: .color(.cyan), lineWidth: 2)
+            context.stroke(Path(ellipseIn: handleRect), with: .color(.cyan), lineWidth: 2) // lens-token-exempt: 画布内容渲染（缩放手柄），非 UI 表面
         }
+    }
+
+    private func drawPendingRedaction(
+        _ annotation: ScreenshotAnnotation,
+        index: Int,
+        context: inout GraphicsContext,
+        imageRect: CGRect
+    ) {
+        let rect = viewRect(annotation.bounds, in: imageRect).insetBy(dx: -2, dy: -2)
+        context.fill(
+            Path(roundedRect: rect, cornerRadius: 5), // lens-token-exempt: 画布内容渲染（待复核建议框与序号徽标），非 UI 表面
+            with: .color(.orange.opacity(0.10))
+        )
+        context.stroke(
+            Path(roundedRect: rect, cornerRadius: 5), // lens-token-exempt: 同上，画布内容渲染
+            with: .color(.orange.opacity(0.95)),
+            style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
+        )
+        let badge = CGRect(x: rect.minX, y: rect.minY, width: 18, height: 18)
+        context.fill(Path(ellipseIn: badge), with: .color(.orange))
+        context.draw(
+            Text("\(index + 1)")
+                .font(.system(size: 9, weight: .bold, design: .monospaced)) // lens-token-exempt: 画布徽标文字，非 UI 表面
+                .foregroundStyle(.white),
+            at: CGPoint(x: badge.midX, y: badge.midY)
+        )
     }
 
     private func normalizedPoint(_ point: CGPoint, in rect: CGRect) -> LensPoint {
@@ -463,8 +675,8 @@ struct ScreenshotAnnotationEditorView: View {
         let rect = viewRect(annotation.bounds, in: imageRect)
         switch annotation.kind {
         case .rectangle:
-            context.fill(Path(roundedRect: rect, cornerRadius: 4), with: annotationShading(annotation, in: rect, opacity: 0.10))
-            context.stroke(Path(roundedRect: rect, cornerRadius: 4), with: shading, lineWidth: lineWidth)
+            context.fill(Path(roundedRect: rect, cornerRadius: 4), with: annotationShading(annotation, in: rect, opacity: 0.10)) // lens-token-exempt: 画布内容渲染（矩形标注形状），非 UI 表面
+            context.stroke(Path(roundedRect: rect, cornerRadius: 4), with: shading, lineWidth: lineWidth) // lens-token-exempt: 同上
         case .ellipse:
             context.fill(Path(ellipseIn: rect), with: annotationShading(annotation, in: rect, opacity: 0.10))
             context.stroke(Path(ellipseIn: rect), with: shading, lineWidth: lineWidth)
@@ -514,9 +726,9 @@ struct ScreenshotAnnotationEditorView: View {
             context.draw(text, at: CGPoint(x: rect.minX, y: rect.minY), anchor: .topLeading)
         case .blur, .pixelate:
             let symbol = annotation.kind == .blur ? "drop.fill" : "square.grid.3x3.fill"
-            context.fill(Path(roundedRect: rect, cornerRadius: 6), with: .color(.white.opacity(0.18)))
+            context.fill(Path(roundedRect: rect, cornerRadius: 6), with: .color(.white.opacity(0.18))) // lens-token-exempt: 画布内容渲染（模糊/像素化标注形状），非 UI 表面
             context.stroke(
-                Path(roundedRect: rect, cornerRadius: 6),
+                Path(roundedRect: rect, cornerRadius: 6), // lens-token-exempt: 同上
                 with: .color(.white.opacity(0.72)),
                 style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
             )
@@ -625,16 +837,17 @@ struct ScreenshotAnnotationEditorView: View {
         )
     }
 
+    // lens-token-exempt: 用户标注调色板，供用户选择标注颜色，非 UI 表面
     private var editorColors: [(name: String, color: LensColor)] {
         [
             ("红色", .red),
             ("橙色", .orange),
-            ("黄色", .yellow),
+            ("黄色", .yellow), // lens-token-exempt: 用户标注调色板选项
             ("绿色", .green),
-            ("青色", .cyan),
+            ("青色", .cyan), // lens-token-exempt: 用户标注调色板选项
             ("蓝色", .blue),
-            ("紫色", .purple),
-            ("粉色", .pink),
+            ("紫色", .purple), // lens-token-exempt: 用户标注调色板选项
+            ("粉色", .pink), // lens-token-exempt: 用户标注调色板选项
             ("白色", .white),
             ("黑色", .black)
         ]
@@ -642,8 +855,8 @@ struct ScreenshotAnnotationEditorView: View {
 
     private var editorGradients: [(name: String, start: LensColor, end: LensColor)] {
         [
-            ("日落橙粉", .orange, .pink),
-            ("海蓝青紫", .cyan, .purple),
+            ("日落橙粉", .orange, .pink), // lens-token-exempt: 用户标注渐变选项
+            ("海蓝青紫", .cyan, .purple), // lens-token-exempt: 用户标注渐变选项
             ("暖阳红橙", .red, .orange),
             ("薄荷青蓝", .green, .blue)
         ]
@@ -687,6 +900,35 @@ struct ScreenshotAnnotationEditorView: View {
         )
     }
 
+}
+
+/// A small AppKit-backed accessibility element used for the canvas only. A
+/// native view is necessary here because SwiftUI's accessibilityValue is not
+/// surfaced on a transparent gesture shape as an AXGroup on macOS.
+private struct ScreenshotCanvasAccessibilityProxy: NSViewRepresentable {
+    let label: String
+    let value: String
+    let hint: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.group)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityValue(value)
+        view.setAccessibilityHelp(hint)
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.clear.cgColor
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.group)
+        view.setAccessibilityLabel(label)
+        view.setAccessibilityValue(value)
+        view.setAccessibilityHelp(hint)
+    }
 }
 
 extension ScreenshotAnnotationKind {

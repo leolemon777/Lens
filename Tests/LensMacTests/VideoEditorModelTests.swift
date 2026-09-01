@@ -309,6 +309,25 @@ final class VideoEditorModelTests: XCTestCase {
         )
     }
 
+    func testPlanPersistenceCanPrecedePreviewWithoutClearingDirtyState() {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 8,
+            hasCameraTrack: false
+        )
+        model.setAutomaticZoomScale(1.8)
+        let persistedPlan = model.plan
+
+        model.markPlanPersisted(persistedPlan)
+
+        XCTAssertTrue(model.isPlanPersisted)
+        XCTAssertTrue(model.isDirty, "preview is still stale until rendering completes")
+
+        model.markSaved(persistedPlan)
+        XCTAssertTrue(model.isPlanPersisted)
+        XCTAssertFalse(model.isDirty)
+    }
+
     func testBackgroundPreviewAdoptionRequiresUntouchedMatchingPlan() {
         let model = VideoEditorModel(
             plan: AutoEditPlan(),
@@ -609,6 +628,27 @@ final class VideoEditorModelTests: XCTestCase {
         XCTAssertTrue(model.canRedo)
     }
 
+    func testContinuousInspectorSliderChangesCommitAsOneUndoableEdit() {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 5,
+            hasCameraTrack: false
+        )
+        let originalMargin = model.plan.canvas?.margin ?? 0.055
+
+        model.beginContinuousEdit()
+        model.setCanvasMargin(0.08)
+        model.setCanvasMargin(0.11)
+        model.setCanvasMargin(0.14)
+        model.endContinuousEdit()
+
+        XCTAssertEqual(model.plan.canvas?.margin ?? 0, 0.14, accuracy: 0.000_1)
+        XCTAssertTrue(model.canUndo)
+        model.undo()
+        XCTAssertEqual(model.plan.canvas?.margin ?? 0.055, originalMargin, accuracy: 0.000_1)
+        XCTAssertFalse(model.canUndo)
+    }
+
     func testPresenterKeyframesUseSourceTimeAcrossCutsAndPlaybackRates() throws {
         let firstID = UUID()
         let secondID = UUID()
@@ -716,5 +756,136 @@ final class VideoEditorModelTests: XCTestCase {
         model.endPresenterInteraction()
         XCTAssertLessThan(model.presenterState(atOutputTime: 0).center.x, 0.5)
         XCTAssertEqual(model.plan.presenterCamera?.position?.x, 0.8)
+    }
+
+    // MARK: - 旁白清理
+
+    private func narrationTrimModel() -> VideoEditorModel {
+        VideoEditorModel(
+            plan: AutoEditPlan(
+                timeline: VideoEditTimeline(sourceDurationSeconds: 12),
+                narrationTrims: [
+                    NarrationTrimSuggestion(
+                        kind: .silence,
+                        startSeconds: 4,
+                        endSeconds: 6
+                    ),
+                    NarrationTrimSuggestion(
+                        kind: .fillerWord,
+                        startSeconds: 8,
+                        endSeconds: 8.4,
+                        label: "嗯"
+                    )
+                ]
+            ),
+            sourceDurationSeconds: 12,
+            hasCameraTrack: false
+        )
+    }
+
+    func testAcceptNarrationTrimRemovesRangeAndMarksDirty() throws {
+        let model = narrationTrimModel()
+        let silence = try XCTUnwrap(model.narrationTrimSuggestions.first)
+
+        model.acceptNarrationTrim(silence.id)
+
+        XCTAssertEqual(model.narrationTrimSuggestions.first?.status, .accepted)
+        XCTAssertEqual(model.outputDurationSeconds, 10, accuracy: 0.000_001)
+        XCTAssertTrue(model.isDirty)
+        XCTAssertTrue(model.canUndo)
+
+        model.undo()
+        XCTAssertEqual(model.outputDurationSeconds, 12, accuracy: 0.000_001)
+        XCTAssertEqual(model.narrationTrimSuggestions.first?.status, .pending)
+    }
+
+    func testAcceptAllPendingNarrationTrimsAppliesEveryRange() {
+        let model = narrationTrimModel()
+
+        model.acceptAllPendingNarrationTrims()
+
+        XCTAssertTrue(model.pendingNarrationTrims.isEmpty)
+        XCTAssertTrue(model.narrationTrimSuggestions.allSatisfy { $0.status == .accepted })
+        XCTAssertEqual(model.outputDurationSeconds, 9.6, accuracy: 0.000_001)
+    }
+
+    func testRejectAndRestoreOnlyChangeReviewStatus() throws {
+        let model = narrationTrimModel()
+        let filler = try XCTUnwrap(
+            model.narrationTrimSuggestions.first { $0.kind == .fillerWord }
+        )
+
+        model.rejectNarrationTrim(filler.id)
+        XCTAssertEqual(
+            model.narrationTrimSuggestions.first { $0.kind == .fillerWord }?.status,
+            .rejected
+        )
+        XCTAssertEqual(model.outputDurationSeconds, 12, accuracy: 0.000_001)
+        XCTAssertEqual(model.pendingNarrationTrims.count, 1)
+
+        model.restoreNarrationTrim(filler.id)
+        XCTAssertEqual(
+            model.narrationTrimSuggestions.first { $0.kind == .fillerWord }?.status,
+            .pending
+        )
+    }
+
+    func testDetectionSkipsWhenPlanAlreadyCarriesSuggestionsOrNoTrack() {
+        // A plan that already carries suggestions must not re-run detection,
+        // and a missing microphone URL leaves the state ready without work.
+        let model = narrationTrimModel()
+        XCTAssertEqual(model.narrationTrimDetectionState, .ready)
+
+        let bare = VideoEditorModel(
+            plan: AutoEditPlan(timeline: VideoEditTimeline(sourceDurationSeconds: 5)),
+            sourceDurationSeconds: 5,
+            hasCameraTrack: false,
+            hasMicrophoneTrack: false
+        )
+        XCTAssertEqual(bare.narrationTrimDetectionState, .ready)
+        XCTAssertTrue(bare.narrationTrimSuggestions.isEmpty)
+    }
+
+    // MARK: - 一键人声增强
+
+    func testVoiceEnhancementTogglesAllNarrationPolishAtOnce() {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 5,
+            hasCameraTrack: false
+        )
+
+        // Default Audio() enables all three switches at standard strength.
+        XCTAssertEqual(model.appliedVoiceEnhancementLevel, .standard)
+
+        model.setVoiceEnhancement(nil)
+        XCTAssertNil(model.appliedVoiceEnhancementLevel)
+        let disabled = model.plan.audio
+        XCTAssertFalse(disabled?.reducesMicrophoneNoise ?? true)
+        XCTAssertFalse(disabled?.normalizesLoudness ?? true)
+        XCTAssertFalse(disabled?.ducksSystemUnderNarration ?? true)
+
+        model.setVoiceEnhancement(.strong)
+        XCTAssertEqual(model.appliedVoiceEnhancementLevel, .strong)
+        XCTAssertEqual(model.plan.audio?.noiseReductionAmount ?? 0, 0.75, accuracy: 0.000_1)
+        XCTAssertEqual(model.plan.audio?.targetLoudnessLUFS ?? 0, -14, accuracy: 0.000_1)
+    }
+
+    func testUnprocessedAuditionRestoresPreviousAudio() {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 5,
+            hasCameraTrack: false
+        )
+        model.setVoiceEnhancement(.light)
+
+        model.setUnprocessedAudition(true)
+        XCTAssertTrue(model.isAuditioningUnprocessedAudio)
+        XCTAssertFalse(model.plan.audio?.reducesMicrophoneNoise ?? true)
+
+        model.setUnprocessedAudition(false)
+        XCTAssertFalse(model.isAuditioningUnprocessedAudio)
+        XCTAssertEqual(model.appliedVoiceEnhancementLevel, .light)
+        XCTAssertEqual(model.plan.audio?.noiseReductionAmount ?? 0, 0.4, accuracy: 0.000_1)
     }
 }

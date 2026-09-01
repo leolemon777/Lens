@@ -57,8 +57,8 @@ public struct CameraMotionComfortLimits: Equatable, Sendable {
         switch strength {
         case .restrained:
             Self(
-                maximumPanVelocity: 0.75,
-                maximumZoomVelocity: 1.25,
+                maximumPanVelocity: 1.30,
+                maximumZoomVelocity: 2.10,
                 maximumCombinedMotionRatio: 1.35,
                 reversalWindowSeconds: 1.25,
                 maximumRapidReversalsPerTenSeconds: 2,
@@ -66,8 +66,8 @@ public struct CameraMotionComfortLimits: Equatable, Sendable {
             )
         case .balanced:
             Self(
-                maximumPanVelocity: 1.00,
-                maximumZoomVelocity: 1.60,
+                maximumPanVelocity: 1.75,
+                maximumZoomVelocity: 2.70,
                 maximumCombinedMotionRatio: 1.45,
                 reversalWindowSeconds: 0.95,
                 maximumRapidReversalsPerTenSeconds: 3,
@@ -75,8 +75,8 @@ public struct CameraMotionComfortLimits: Equatable, Sendable {
             )
         case .active:
             Self(
-                maximumPanVelocity: 1.40,
-                maximumZoomVelocity: 2.40,
+                maximumPanVelocity: 2.40,
+                maximumZoomVelocity: 3.60,
                 maximumCombinedMotionRatio: 1.60,
                 reversalWindowSeconds: 0.70,
                 maximumRapidReversalsPerTenSeconds: 4,

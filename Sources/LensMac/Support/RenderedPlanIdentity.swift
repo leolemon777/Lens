@@ -21,8 +21,14 @@ enum RenderedPlanIdentity {
         let renderedTranscript = plan.captions?.isEnabled == true
             ? transcript
             : nil
+        // Narration-trim suggestions do not affect rendering until accepted,
+        // and accepting already rewrites `timeline`, which is digested. Keeping
+        // the proposal list out of the identity stops a detection pass from
+        // marking every existing preview as stale.
+        var renderedPlan = plan
+        renderedPlan.narrationTrims = nil
         let data = try encoder.encode(Input(
-            plan: plan,
+            plan: renderedPlan,
             transcript: renderedTranscript
         ))
         return "sha256:" + SHA256.hash(data: data).map {

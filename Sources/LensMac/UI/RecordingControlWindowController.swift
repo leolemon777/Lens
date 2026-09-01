@@ -31,6 +31,9 @@ final class RecordingControlWindowController {
 
     var isVisible: Bool { panel.isVisible }
     var panelForTesting: NSPanel { panel }
+    /// Exposed so `AppDelegate` can hand this panel off to Quick Access on a
+    /// successful stop without either controller knowing the other's type.
+    var currentWindow: NSWindow { panel }
 
     init() {
         panel = RecordingPanel(
@@ -77,16 +80,28 @@ final class RecordingControlWindowController {
         startLevelUpdates()
         startStorageUpdates()
         ensurePanelIsOnScreen()
-        panel.orderFrontRegardless()
+        LensPanelPresenter.present(panel, from: .center)
         onVisibilityChange?(true)
     }
 
     func hide() {
+        stopTimersAndNotifyHidden()
+        LensPanelPresenter.dismiss(panel)
+    }
+
+    /// Same cleanup as `hide()`, minus dismissing the panel: used when the
+    /// caller is about to hand this panel off to another window via
+    /// `LensPanelPresenter.handoff`, which owns the panel's own fade-out.
+    /// Calling both would fight over the same window's animation.
+    func prepareForHandoff() {
+        stopTimersAndNotifyHidden()
+    }
+
+    private func stopTimersAndNotifyHidden() {
         levelTimer?.invalidate()
         levelTimer = nil
         storageTimer?.invalidate()
         storageTimer = nil
-        panel.orderOut(nil)
         onVisibilityChange?(false)
     }
 

@@ -8,6 +8,9 @@ enum VideoEditorWindowError: LocalizedError {
     case sourceUnavailable
     case durationUnavailable
     case previewVerificationFailed(String)
+    case stepDocumentUnavailable
+    case stepDocumentExportFailed(String)
+    case narrationDraftFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -15,6 +18,12 @@ enum VideoEditorWindowError: LocalizedError {
         case .durationUnavailable: "录屏时长尚不可用，请先完成或恢复原始录制。"
         case let .previewVerificationFailed(detail):
             "最终成片尚未通过媒体验证：\(detail)"
+        case .stepDocumentUnavailable:
+            "缺少可用的点击事件或原始画面，无法生成步骤文档。"
+        case let .stepDocumentExportFailed(detail):
+            "步骤文档导出失败：\(detail)"
+        case let .narrationDraftFailed(detail):
+            "配音草稿生成失败：\(detail)"
         }
     }
 }
@@ -119,19 +128,26 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
             .map { entry.packageURL.appendingPathComponent($0.relativePath) }
             .first { FileManager.default.fileExists(atPath: $0.path) }
         let hasCamera = cameraURL != nil
-        let hasMicrophone = entry.manifest.assets.contains {
-            $0.role == .microphone
-                && FileManager.default.fileExists(
-                    atPath: entry.packageURL.appendingPathComponent($0.relativePath).path
-                )
-        }
+        let microphoneURL = entry.manifest.assets
+            .lazy
+            .filter { $0.role == .microphone }
+            .map { entry.packageURL.appendingPathComponent($0.relativePath) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+        let hasMicrophone = microphoneURL != nil
+        let keyboardEventsURL = entry.manifest.assets
+            .lazy
+            .filter { $0.role == .keyboardEvents }
+            .map { entry.packageURL.appendingPathComponent($0.relativePath) }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
         let transcript = try? store.loadTranscript(from: entry.packageURL)
         let model = VideoEditorModel(
             plan: plan,
             sourceDurationSeconds: duration,
             hasCameraTrack: hasCamera,
             hasMicrophoneTrack: hasMicrophone,
-            transcript: transcript
+            transcript: transcript,
+            microphoneURL: microphoneURL,
+            keyboardEventsURL: keyboardEventsURL
         )
         let playback = VideoEditorPlaybackController()
         model.onTimelineChanged = { [weak playback] timeline in
@@ -157,6 +173,8 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
             onRefreshPreview: { [weak self] in self?.requestPreviewRefresh() },
             onSave: { [weak self] in self?.save() },
             onExport: { [weak self] in self?.exportMP4() },
+            onExportStepDocument: { [weak self] in self?.exportStepDocument() },
+            onExportNarrationDraft: { [weak self] in self?.exportNarrationDraft() },
             onClose: { [weak self] in self?.requestClose() }
         ))
         let renderedPreviewURL = requiresPlanMigration ? nil : entry.manifest.assets
@@ -361,6 +379,10 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
         guard !model.isProcessing else { return nil }
         do {
             let saved = try store.writeAutoEditPlan(requestedPlan, to: packageURL)
+            // The edit plan is durable before the renderer starts. The UI can
+            // now let the user close the editor without suggesting that their
+            // change will be lost while the preview is still encoding.
+            model.markPlanPersisted(requestedPlan)
             model.beginProcessing()
             await onSaved?(saved)
             guard self.model === model else { return nil }
@@ -438,6 +460,114 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func exportStepDocument() {
+        guard let packageURL, let model, !model.isProcessing else { return }
+        let eventsDirectory = packageURL.appendingPathComponent("events", isDirectory: true)
+        let clickURL = eventsDirectory.appendingPathComponent("clicks.jsonl")
+        let windowURL = eventsDirectory.appendingPathComponent("windows.jsonl")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let package = packageURL
+            let duration = model.sourceDurationSeconds
+            let document = await Task.detached(priority: .utility) { () -> StepDocument? in
+                let clicks = (try? LensEventReader.read(
+                    ClickEvent.self,
+                    from: clickURL
+                )) ?? []
+                let windows = (try? LensEventReader.read(
+                    WindowEvent.self,
+                    from: windowURL
+                )) ?? []
+                let document = StepDocumentPlanner().document(
+                    clicks: clicks,
+                    windows: windows,
+                    durationSeconds: duration
+                )
+                return document.steps.isEmpty ? nil : document
+            }.value
+            guard let document else {
+                onFailure?(VideoEditorWindowError.stepDocumentUnavailable)
+                return
+            }
+            guard let rawVideoURL = (try? store.loadManifest(from: package))?
+                .assets
+                .first(where: { $0.role == .screenVideo })
+                .map({ package.appendingPathComponent($0.relativePath) }),
+                FileManager.default.fileExists(atPath: rawVideoURL.path) else {
+                onFailure?(VideoEditorWindowError.stepDocumentUnavailable)
+                return
+            }
+            presentStepDocumentPanel(document: document, rawVideoURL: rawVideoURL)
+        }
+    }
+
+    private func presentStepDocumentPanel(document: StepDocument, rawVideoURL: URL) {
+        let panel = NSSavePanel()
+        panel.title = "导出步骤文档"
+        panel.prompt = "导出 Markdown"
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "操作步骤.md"
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            let exporter = StepDocumentExporter(document: document, videoURL: rawVideoURL)
+            Task { @MainActor [weak self] in
+                do {
+                    try await exporter.write(to: url)
+                    NSApp.activate(ignoringOtherApps: true)
+                    NSWorkspace.shared.selectFile(
+                        url.path,
+                        inFileViewerRootedAtPath: url.deletingLastPathComponent().path
+                    )
+                } catch {
+                    self?.onFailure?(
+                        VideoEditorWindowError.stepDocumentExportFailed(
+                            error.localizedDescription
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private func exportNarrationDraft() {
+        guard let packageURL, let model, !model.isProcessing else { return }
+        let package = packageURL
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                guard let transcript = try? store.loadTranscript(from: package) else {
+                    onFailure?(VideoEditorWindowError.narrationDraftFailed("没有可用的转写文本。"))
+                    return
+                }
+                let script = NarrationSpeechSynthesizer.script(from: transcript)
+                let tempURL = try await Task.detached(priority: .utility) {
+                    try await NarrationSpeechSynthesizer().synthesize(
+                        text: script,
+                        language: transcript.localeIdentifier
+                    )
+                }.value
+                let destination = package.appendingPathComponent("previews/narration-draft.caf")
+                try? FileManager.default.removeItem(at: destination)
+                try FileManager.default.createDirectory(
+                    at: destination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try FileManager.default.copyItem(at: tempURL, to: destination)
+                try? FileManager.default.removeItem(at: tempURL)
+                NSApp.activate(ignoringOtherApps: true)
+                NSWorkspace.shared.selectFile(
+                    destination.path,
+                    inFileViewerRootedAtPath: destination.deletingLastPathComponent().path
+                )
+            } catch {
+                onFailure?(VideoEditorWindowError.narrationDraftFailed(
+                    error.localizedDescription
+                ))
+            }
+        }
+    }
+
     private func presentExportPanel(sourceURL: URL) {
         let panel = NSSavePanel()
         panel.title = "导出 Lens 视频"
@@ -504,10 +634,10 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
     }
 
     private func canDiscardUnsavedChanges() -> Bool {
-        guard model?.isDirty == true else { return true }
+        guard model?.isPlanPersisted == false else { return true }
         let alert = NSAlert()
         alert.messageText = "放弃尚未保存的编辑？"
-        alert.informativeText = "原始录屏不会受影响，但本次时间线和效果调整会丢失。"
+        alert.informativeText = "原始录屏不会受影响，但本次尚未写入磁盘的调整会丢失。"
         alert.addButton(withTitle: "继续编辑")
         alert.addButton(withTitle: "放弃更改")
         return alert.runModal() == .alertSecondButtonReturn

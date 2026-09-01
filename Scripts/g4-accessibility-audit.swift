@@ -104,7 +104,16 @@ let requirements = [
     Requirement(label: "留白", role: kAXSliderRole, requiresValue: true, requiresPressAction: false),
     Requirement(label: "推近倍率", role: kAXSliderRole, requiresValue: true, requiresPressAction: false),
     Requirement(label: "预览播放位置", role: kAXSliderRole, requiresValue: true, requiresPressAction: false),
-    Requirement(label: "关闭视频编辑器", role: kAXButtonRole, requiresValue: false, requiresPressAction: true)
+    Requirement(label: "关闭视频编辑器", role: kAXButtonRole, requiresValue: false, requiresPressAction: true),
+    Requirement(label: "录制详情", role: kAXButtonRole, requiresValue: false, requiresPressAction: true),
+    Requirement(label: "隐藏录屏浮标", role: kAXButtonRole, requiresValue: false, requiresPressAction: true),
+    Requirement(label: "暂停录制", role: kAXButtonRole, requiresValue: false, requiresPressAction: true),
+    Requirement(label: "停止录制", role: kAXButtonRole, requiresValue: false, requiresPressAction: true),
+    Requirement(label: "搜索 Lens 库", role: kAXTextFieldRole, requiresValue: true, requiresPressAction: false),
+    Requirement(label: "复制文件", role: kAXButtonRole, requiresValue: false, requiresPressAction: true),
+    Requirement(label: "分享", role: kAXButtonRole, requiresValue: false, requiresPressAction: true),
+    Requirement(label: "在 Finder 中显示：G4 产品演示录屏", role: kAXButtonRole, requiresValue: false, requiresPressAction: true),
+    Requirement(label: "刷新 Lens 库", role: kAXButtonRole, requiresValue: false, requiresPressAction: true)
 ]
 
 let checks = requirements.map { requirement in

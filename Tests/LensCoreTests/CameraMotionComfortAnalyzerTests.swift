@@ -7,9 +7,9 @@ final class CameraMotionComfortAnalyzerTests: XCTestCase {
             keyframes: [
                 frame(time: 0, scale: 1, x: 0.5, reason: .baseline),
                 frame(time: 1, scale: 1, x: 0.5, reason: .baseline),
-                frame(time: 1.82, scale: 1.6, x: 0.3125, reason: .clickFocus),
-                frame(time: 2.2, scale: 1.6, x: 0.3125, reason: .clickHold),
-                frame(time: 3.02, scale: 1.6, x: 0.6875, reason: .clickFocus)
+                frame(time: 1.55, scale: 1.6, x: 0.3125, reason: .clickFocus),
+                frame(time: 1.9, scale: 1.6, x: 0.3125, reason: .clickHold),
+                frame(time: 2.5, scale: 1.6, x: 0.6875, reason: .clickFocus)
             ],
             durationSeconds: 5,
             limits: .recommended(for: .restrained)
@@ -45,8 +45,8 @@ final class CameraMotionComfortAnalyzerTests: XCTestCase {
         )
 
         XCTAssertTrue(report.isComfortable, "Unexpected issues: \(report.issues)")
-        XCTAssertLessThanOrEqual(report.maximumPanVelocity, 0.75 * 1.02)
-        XCTAssertLessThanOrEqual(report.maximumZoomVelocity, 1.25 * 1.02)
+        XCTAssertLessThanOrEqual(report.maximumPanVelocity, 1.30 * 1.02)
+        XCTAssertLessThanOrEqual(report.maximumZoomVelocity, 2.10 * 1.02)
         XCTAssertEqual(report.compressedReturnCount, 0)
     }
 

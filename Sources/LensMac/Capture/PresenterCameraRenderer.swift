@@ -36,7 +36,9 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         timeline: VideoEditTimeline? = nil,
         cameraKeyframes: [AutoEditPlan.CameraKeyframe] = [],
         captions: AutoEditPlan.Captions? = nil,
-        captionCues: [CaptionCue]? = nil
+        captionCues: [CaptionCue]? = nil,
+        mixedAudioURL: URL? = nil,
+        progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> URL {
         let exportProfile = VideoExportProfile(export)
         let screenAsset = AVURLAsset(url: screenURL)
@@ -107,7 +109,17 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         screenReader.add(screenOutput)
         cameraReader.add(cameraOutput)
 
-        let audioTrack = try await screenAsset.loadTracks(withMediaType: .audio).first
+        // The effects render embedded the prepared mix when one exists; its
+        // temporary output already carries that audio, but re-attaching from
+        // the sidecar keeps the presenter path independent of intermediate
+        // encode details.
+        let audioAsset: AVAsset = if let mixedAudioURL,
+                                     FileManager.default.fileExists(atPath: mixedAudioURL.path) {
+            AVURLAsset(url: mixedAudioURL)
+        } else {
+            screenAsset
+        }
+        let audioTrack = try await audioAsset.loadTracks(withMediaType: .audio).first
 
         if FileManager.default.fileExists(atPath: outputURL.path) {
             try FileManager.default.removeItem(at: outputURL)
@@ -176,8 +188,10 @@ final class PresenterCameraRenderer: @unchecked Sendable {
         ])
         let outputExtent = CGRect(origin: .zero, size: outputSize)
         let cameraDuration = try await cameraAsset.load(.duration).seconds
+        let screenDuration = try await screenAsset.load(.duration).seconds
         var nextCameraSample = cameraOutput.copyNextSampleBuffer()
         var currentCameraBuffer: CVPixelBuffer?
+        var lastProgressReportedAt = Date.distantPast
         while let screenSample = screenOutput.copyNextSampleBuffer() {
             try Task.checkCancellation()
             let time = CMSampleBufferGetPresentationTimeStamp(screenSample)
@@ -201,6 +215,13 @@ final class PresenterCameraRenderer: @unchecked Sendable {
                 )
             }()
             let outputTime = max(time.seconds.isFinite ? time.seconds : 0, 0)
+            if let progress {
+                let now = Date()
+                if now.timeIntervalSince(lastProgressReportedAt) >= 0.1 {
+                    lastProgressReportedAt = now
+                    progress(min(outputTime / max(screenDuration, 0.001), 1))
+                }
+            }
             let sourceTime = timeline?.position(atOutputTime: outputTime)?.sourceTimeSeconds
                 ?? outputTime
             let captionAmount = captionCues.map {
@@ -244,6 +265,7 @@ final class PresenterCameraRenderer: @unchecked Sendable {
             }
         }
         videoInput.markAsFinished()
+        progress?(1)
         if screenReader.status == .failed {
             throw PresenterCameraRendererError.mediaWriteFailed(
                 screenReader.error?.localizedDescription ?? "屏幕媒体读取失败"

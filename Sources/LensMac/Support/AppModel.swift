@@ -52,17 +52,20 @@ enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
             plan.camera.zoomIntensity = 0.42
             plan.camera.zoomScale = 1.60
             plan.camera.generationStrength = .restrained
-            plan.camera.motionBlurStrength = 0.12
+            plan.camera.motionBlurStrength = 0
             plan.camera.clickToZoom = true
             plan.camera.followPointer = true
             plan.cursor.isEnabled = true
-            plan.cursor.smoothing = 0.72
-            plan.cursor.smoothingWindowMilliseconds = 42
+            // The default path should feel faithful to the user's real input.
+            // Smoothing and glow remain available in the presentation/teaching
+            // presets, but must not make an ordinary recording feel delayed.
+            plan.cursor.smoothing = 0
+            plan.cursor.smoothingWindowMilliseconds = nil
+            plan.cursor.followStyle = .faithful
             plan.cursor.scale = 1.15
             plan.cursor.hidesWhenIdle = false
             plan.cursor.appearance = .recorded
-            plan.cursor.motionEffect = .halo
-            plan.cursor.motionEffectStrength = 0.50
+            plan.cursor.motionEffect = .none
             plan.interaction?.showsClickPulse = true
             plan.interaction?.clickEffect = .ripple
             plan.interaction?.clickEffectStrength = 1
@@ -78,17 +81,17 @@ enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
             plan.camera.zoomIntensity = 0.62
             plan.camera.zoomScale = 1.60
             plan.camera.generationStrength = .active
-            plan.camera.motionBlurStrength = 0.16
+            plan.camera.motionBlurStrength = 0
             plan.camera.clickToZoom = true
             plan.camera.followPointer = true
             plan.cursor.isEnabled = true
             plan.cursor.smoothing = 0.78
-            plan.cursor.smoothingWindowMilliseconds = 52
+            plan.cursor.smoothingWindowMilliseconds = 30
             plan.cursor.scale = 1.28
             plan.cursor.hidesWhenIdle = false
             plan.cursor.appearance = .highContrast
-            plan.cursor.motionEffect = .trail
-            plan.cursor.motionEffectStrength = 0.48
+            plan.cursor.motionEffect = .halo
+            plan.cursor.motionEffectStrength = 0.28
             plan.interaction?.showsClickPulse = true
             plan.interaction?.clickEffect = .pulse
             plan.interaction?.clickEffectStrength = 0.96
@@ -111,17 +114,17 @@ enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
             plan.camera.zoomIntensity = 0.50
             plan.camera.zoomScale = 1.60
             plan.camera.generationStrength = .balanced
-            plan.camera.motionBlurStrength = 0.14
+            plan.camera.motionBlurStrength = 0
             plan.camera.clickToZoom = true
             plan.camera.followPointer = true
             plan.cursor.isEnabled = true
             plan.cursor.smoothing = 0.76
-            plan.cursor.smoothingWindowMilliseconds = 48
+            plan.cursor.smoothingWindowMilliseconds = 28
             plan.cursor.scale = 1.22
             plan.cursor.hidesWhenIdle = false
             plan.cursor.appearance = .recorded
-            plan.cursor.motionEffect = .spotlight
-            plan.cursor.motionEffectStrength = 0.42
+            plan.cursor.motionEffect = .halo
+            plan.cursor.motionEffectStrength = 0.28
             plan.interaction?.showsClickPulse = true
             plan.interaction?.clickEffect = .spotlight
             plan.interaction?.clickEffectStrength = 0.90
@@ -241,6 +244,7 @@ final class AppModel: ObservableObject {
         static let capturesMicrophone = "recording.capturesMicrophone"
         static let capturesCamera = "recording.capturesCamera"
         static let frameRate = "recording.framesPerSecond"
+        static let showsRecordingCountdown = "recording.showsCountdown"
         static let experiencePreset = "recording.experiencePreset"
         static let automaticallyTranscribesRecordings = "analysis.automaticallyTranscribesRecordings"
         static let transcriptionLanguage = "analysis.transcriptionLanguage"
@@ -263,6 +267,11 @@ final class AppModel: ObservableObject {
     }
     @Published var recordingFrameRate: RecordingFrameRate {
         didSet { defaults.set(recordingFrameRate.rawValue, forKey: PreferenceKey.frameRate) }
+    }
+    @Published var showsRecordingCountdown: Bool {
+        didSet {
+            defaults.set(showsRecordingCountdown, forKey: PreferenceKey.showsRecordingCountdown)
+        }
     }
     @Published var recordingExperiencePreset: RecordingExperiencePreset {
         didSet {
@@ -313,6 +322,9 @@ final class AppModel: ObservableObject {
         recordingFrameRate = RecordingFrameRate(
             rawValue: defaults.integer(forKey: PreferenceKey.frameRate)
         ) ?? .fps60
+        showsRecordingCountdown = defaults.object(
+            forKey: PreferenceKey.showsRecordingCountdown
+        ) as? Bool ?? true
         recordingExperiencePreset = defaults.string(forKey: PreferenceKey.experiencePreset)
             .flatMap(RecordingExperiencePreset.init(rawValue:)) ?? .natural
         automaticallyTranscribesRecordings = defaults.object(

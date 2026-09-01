@@ -5,6 +5,22 @@ import XCTest
 
 @MainActor
 final class PermissionCenterViewTests: XCTestCase {
+    func testPermissionRowsExposeStateAndTargetedActionLabels() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/PermissionCenterView.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("权限状态"))
+        XCTAssertTrue(source.contains("\\(actionTitle)：\\(kind.title)"))
+        XCTAssertTrue(source.contains("请求\\(kind.title)权限"))
+        XCTAssertTrue(source.contains("打开系统设置中的\\(kind.title)权限"))
+    }
+
     func testPermissionCenterRendersEditableShortcutsAndPermissions() throws {
         let suiteName = "LensPermissionViewTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

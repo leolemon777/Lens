@@ -198,7 +198,7 @@ struct RecordingRecoveryRepair {
         // A failed side track must not fail the rebuild: the picture is the
         // part the user came back for.
         if fileType == .caf {
-            _ = try? assembler.assembleAudioSegments(
+            _ = try? await assembler.assembleAudioSegments(
                 existing.map(\.0),
                 outputURL: outputURL,
                 maximumDurations: existing.map(\.1)

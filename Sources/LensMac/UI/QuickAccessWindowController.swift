@@ -245,10 +245,7 @@ final class QuickAccessWindowController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        // The reference look is a bright glass card regardless of the
-        // system's own light/dark setting — Liquid Glass otherwise adapts
-        // to match, which renders dark and muted under Dark Mode.
-        panel.appearance = NSAppearance(named: .aqua)
+        panel.applyLensBrightGlassAppearance()
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.hidesOnDeactivate = false

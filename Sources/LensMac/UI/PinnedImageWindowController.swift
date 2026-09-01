@@ -163,15 +163,57 @@ final class PinnedImageWindowController {
         window.onCopyResult = { [weak self] in self?.onCopyResult?($0) }
         windows.append(window)
         window.center()
-        let offset = CGFloat(windows.count - 1) * 28
-        if offset > 0 {
-            var origin = window.frame.origin
-            origin.x += offset
-            origin.y -= offset
-            window.setFrameOrigin(origin)
-        }
+        window.setFrameOrigin(Self.cascadedOrigin(
+            centeredFrame: window.frame,
+            pinIndex: windows.count - 1,
+            visibleFrame: (window.screen ?? NSScreen.main)?.visibleFrame
+        ))
         window.orderFrontRegardless()
         window.makeKey()
+    }
+
+    /// Offsets each new pin from the centred position so stacked pins stay
+    /// individually grabbable, then keeps the result on screen.
+    ///
+    /// The offset wraps rather than growing without bound: pinning many images
+    /// previously marched them off the bottom-right corner, where they could
+    /// no longer be seen or closed.
+    static func cascadedOrigin(
+        centeredFrame: CGRect,
+        pinIndex: Int,
+        visibleFrame: CGRect?,
+        step: CGFloat = 28
+    ) -> CGPoint {
+        guard pinIndex > 0 else { return centeredFrame.origin }
+        guard let visibleFrame, visibleFrame.width > 0, visibleFrame.height > 0 else {
+            return CGPoint(
+                x: centeredFrame.minX + CGFloat(pinIndex) * step,
+                y: centeredFrame.minY - CGFloat(pinIndex) * step
+            )
+        }
+
+        // Wrap before the cascade can leave the usable area, so a long session
+        // of pinning cycles back over the centre instead of escaping the screen.
+        let slack = max(
+            0,
+            min(
+                visibleFrame.maxX - centeredFrame.maxX,
+                centeredFrame.minY - visibleFrame.minY
+            )
+        )
+        let stepsBeforeWrap = max(1, Int(slack / step))
+        let offset = CGFloat(pinIndex % (stepsBeforeWrap + 1)) * step
+
+        return CGPoint(
+            x: min(
+                max(centeredFrame.minX + offset, visibleFrame.minX),
+                max(visibleFrame.minX, visibleFrame.maxX - centeredFrame.width)
+            ),
+            y: min(
+                max(centeredFrame.minY - offset, visibleFrame.minY),
+                max(visibleFrame.minY, visibleFrame.maxY - centeredFrame.height)
+            )
+        )
     }
 }
 

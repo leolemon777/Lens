@@ -298,6 +298,8 @@ final class ScreenshotAnnotationEditorWindowController {
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = false
         window.isReleasedWhenClosed = false
+        window.applyLensBrightGlassAppearance()
+        // Adaptive token, resolved against the forced-light appearance above.
         window.backgroundColor = .windowBackgroundColor
         window.minSize = NSSize(width: 900, height: 620)
         window.collectionBehavior = [.fullScreenPrimary]

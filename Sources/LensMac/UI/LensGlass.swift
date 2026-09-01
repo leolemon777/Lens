@@ -454,3 +454,16 @@ extension View {
             .environment(\.lensReduceMotionOverride, reduceMotion)
     }
 }
+
+extension NSWindow {
+    /// Screenshot-flow surfaces render bright glass regardless of the system's
+    /// own light/dark setting. Liquid Glass otherwise adapts to match, which
+    /// under Dark Mode reads as a flat dark grey rather than glass — a tint
+    /// alone cannot overcome that, only the appearance can.
+    ///
+    /// Deliberately scoped to the screenshot flow: the library, video editor,
+    /// permission center, and onboarding still follow the system.
+    func applyLensBrightGlassAppearance() {
+        appearance = NSAppearance(named: .aqua)
+    }
+}

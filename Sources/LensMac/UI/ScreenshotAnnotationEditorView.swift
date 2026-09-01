@@ -146,7 +146,7 @@ struct ScreenshotAnnotationEditorView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius, tint: LensGlassPalette.ice)
+        .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius)
     }
 
     private var toolbar: some View {
@@ -312,7 +312,7 @@ struct ScreenshotAnnotationEditorView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius, tint: LensGlassPalette.ice)
+        .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius)
     }
 
     private var backgroundToolbar: some View {
@@ -474,7 +474,7 @@ struct ScreenshotAnnotationEditorView: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 17)
         .padding(.vertical, 8)
-        .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius, tint: LensGlassPalette.ice)
+        .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius)
     }
 
     private var canvasAccessibilityValue: String {

@@ -37,15 +37,27 @@ struct LensLibraryView: View {
 
     private var header: some View {
         HStack(spacing: 11) {
+            // A neutral glass chip carrying the drawn orb mark, so the header
+            // anchors to the app icon's lens instead of a generic grid glyph.
             ZStack {
                 Circle()
-                    .fill(LensGlassPalette.accent.opacity(0.14))
-                    .frame(width: 38, height: 38)
-                Image(systemName: "square.grid.2x2.fill")
-                    .font(.system(size: LensIcon.medium, weight: .semibold))
-                    .foregroundStyle(LensGlassPalette.accent)
-                    .accessibilityHidden(true)
+                    .fill(.primary.opacity(0.06))
+                Circle()
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(0.20),
+                                .white.opacity(0.05),
+                                LensGlassPalette.ice.opacity(0.16)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+                LensBrandMark()
             }
+            .frame(width: 38, height: 38)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Lens 库")
                     .font(.system(size: LensType.title, weight: .semibold))
@@ -343,27 +355,15 @@ private struct LensLibraryCard: View {
                     Spacer(minLength: 0)
                     stateBadge
                 }
-                HStack(spacing: 7) {
-                    Text(entry.manifest.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    if entry.ocrText?.isEmpty == false {
-                        Label("OCR", systemImage: "text.viewfinder")
-                    }
-                    if entry.transcriptText?.isEmpty == false {
-                        Label("转写", systemImage: "captions.bubble.fill")
-                    }
-                    if entry.insights != nil {
-                        Label("已整理", systemImage: "sparkles")
-                    }
-                    if let count = entry.insights?.sensitiveFindings.count, count > 0 {
-                        Label("\(count) 项敏感", systemImage: "exclamationmark.shield.fill")
-                            .foregroundStyle(.orange)
-                    }
-                    if let capture = entry.manifest.captureSource {
-                        Label(capture.mode.libraryTitle, systemImage: capture.mode.librarySymbol)
-                    }
-                    if let duration = entry.manifest.durationSeconds {
-                        Text(durationText(duration))
-                    }
+                // A card is only 210–270pt wide, which the timestamp plus every
+                // badge routinely overruns — the badges then collide instead of
+                // truncating. Drop badges from least to most informative until a
+                // variant fits, so the row stays legible at any card width.
+                ViewThatFits(in: .horizontal) {
+                    metadataRow(badgeLimit: .max)
+                    metadataRow(badgeLimit: 2)
+                    metadataRow(badgeLimit: 1)
+                    metadataRow(badgeLimit: 0)
                 }
                 .font(.system(size: LensType.micro, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -390,6 +390,12 @@ private struct LensLibraryCard: View {
                 if let recovery, recovery.isDamaged {
                     recoveryNotice(recovery)
                 }
+
+                // Summary, tags, and the recovery notice are all optional, so
+                // cards in the same grid row would otherwise end at different
+                // heights and leave the action rows visibly ragged. Absorbing
+                // the slack here pins every card's actions to its bottom edge.
+                Spacer(minLength: 0)
 
                 HStack(spacing: 7) {
                     cardButton(
@@ -448,6 +454,14 @@ private struct LensLibraryCard: View {
                             .focused($focusedSecondaryAction, equals: .transcribe)
                         }
                     }
+                    // Hidden actions must not reserve layout width: four
+                    // buttons held the row at ~290pt, which became the card's
+                    // minimum width and pushed the trailing tools into the
+                    // neighbouring card. Collapsing to zero width keeps them
+                    // in the tree for focus/VoiceOver, and focus or hover
+                    // reopens the group (see `showsSecondaryActions`).
+                    .frame(width: showsSecondaryActions ? nil : 0, alignment: .leading)
+                    .clipped()
                     .opacity(showsSecondaryActions ? 1 : 0)
                     Spacer(minLength: 0)
                     organizationButton
@@ -470,6 +484,9 @@ private struct LensLibraryCard: View {
             }
             .padding(11)
         }
+        // Stretch to the grid row's height so every card in a row shares one
+        // baseline instead of being centred at its own natural height.
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -583,6 +600,50 @@ private struct LensLibraryCard: View {
         }
     }
 
+    /// Secondary badges for the metadata row, most informative first so the
+    /// `ViewThatFits` variants above shed the least useful ones as space runs out.
+    private var metadataBadges: [(text: String, symbol: String, isWarning: Bool)] {
+        var badges: [(String, String, Bool)] = []
+        if let count = entry.insights?.sensitiveFindings.count, count > 0 {
+            badges.append(("\(count) 项敏感", "exclamationmark.shield.fill", true))
+        }
+        if let capture = entry.manifest.captureSource {
+            badges.append((capture.mode.libraryTitle, capture.mode.librarySymbol, false))
+        }
+        if entry.ocrText?.isEmpty == false {
+            badges.append(("OCR", "text.viewfinder", false))
+        }
+        if entry.transcriptText?.isEmpty == false {
+            badges.append(("转写", "captions.bubble.fill", false))
+        }
+        if entry.insights != nil {
+            badges.append(("已整理", "sparkles", false))
+        }
+        return badges
+    }
+
+    private func metadataRow(badgeLimit: Int) -> some View {
+        HStack(spacing: 7) {
+            Text(entry.manifest.createdAt.formatted(date: .abbreviated, time: .shortened))
+            if let duration = entry.manifest.durationSeconds {
+                Text(durationText(duration))
+            }
+            ForEach(Array(metadataBadges.prefix(badgeLimit)), id: \.text) { badge in
+                Label(badge.text, systemImage: badge.symbol)
+                    .foregroundStyle(badge.isWarning ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            }
+        }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        // `fixedSize` makes the row report its ideal width even under a nil
+        // proposal, and the card's row-height stretch measures exactly that.
+        // An ideal wider than a grid cell became the card's minimum width, so
+        // every card grew to the widest badge row and overlapped its
+        // neighbours. Capping the ideal keeps the ladder (candidates still
+        // report fixedSize under real proposals) without leaking it.
+        .frame(idealWidth: 213, maxWidth: .infinity, alignment: .leading)
+    }
+
     private var stateBadge: some View {
         Text(stateTitle)
             .font(.system(size: LensType.micro, weight: .bold))
@@ -628,7 +689,7 @@ private struct LensLibraryCard: View {
 }
 
 @MainActor
-private final class LensLibraryThumbnailCache {
+final class LensLibraryThumbnailCache {
     static let shared = LensLibraryThumbnailCache()
 
     private let images = NSCache<NSURL, NSImage>()
@@ -642,30 +703,57 @@ private final class LensLibraryThumbnailCache {
     }
 }
 
-private struct LensLibraryThumbnailView: View {
+struct LensLibraryThumbnailView: View {
     let url: URL
 
     @State private var image: NSImage?
 
+    init(url: URL) {
+        self.url = url
+        // A cache hit renders the image on the first pass instead of flashing
+        // the loading state until `.task` completes.
+        _image = State(initialValue: LensLibraryThumbnailCache.shared.image(for: url))
+    }
+
+    /// Synchronous seed for previews and layout tests. Production callers use
+    /// `init(url:)` and let the `.task` below load from disk.
+    init(url: URL, previewImage: NSImage) {
+        self.url = url
+        _image = State(initialValue: previewImage)
+    }
+
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [.black.opacity(0.72), LensGlassPalette.accent.opacity(0.22)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(.white.opacity(0.75))
+        Color.clear
+            .background {
+                LinearGradient(
+                    colors: [.black.opacity(0.72), LensGlassPalette.accent.opacity(0.22)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: url) {
+            .background {
+                if let image {
+                    // `scaledToFill` reports its cover size (row height × image
+                    // aspect) as the view's ideal width, and under a frame that
+                    // measures ideal size (the card's row-height stretch) that
+                    // width inflated the whole card past its grid cell so cards
+                    // overlapped their neighbours. Background layers never feed
+                    // size back into layout, and the clip below trims the
+                    // overflowing paint to the slot.
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                }
+            }
+            .overlay {
+                if image == nil {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white.opacity(0.75))
+                }
+            }
+            .clipped()
+            .task(id: url) {
             if let cached = LensLibraryThumbnailCache.shared.image(for: url) {
                 image = cached
                 return

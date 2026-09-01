@@ -53,7 +53,13 @@ final class QuickAccessViewTests: XCTestCase {
 
         XCTAssertTrue(source.contains("isPreviewNeedsReview"))
         XCTAssertTrue(source.contains("建议打开编辑器复核"))
-        XCTAssertTrue(source.contains("renderedPreviewRequiresReview"))
+        // Asserts the state actually driving the banner. This previously named
+        // `renderedPreviewRequiresReview`, a symbol that has never existed
+        // anywhere in the repository (`git log -S` finds no commit adding or
+        // removing it), so the assertion could only ever fail. The behaviour it
+        // was meant to guard is real: AppDelegate maps an unverified render to
+        // `.needsReview`, which is what `isPreviewNeedsReview` reads.
+        XCTAssertTrue(source.contains("deliveryState == .needsReview"))
     }
 
     func testOneHundredScreenshotDeliveriesRemainReadableAndDraggable() throws {

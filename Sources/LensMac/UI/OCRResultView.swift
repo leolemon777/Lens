@@ -112,7 +112,7 @@ struct OCRResultView: View {
         }
         .padding(14)
         .frame(width: 420, height: model.thumbnail == nil ? 320 : 408)
-        .lensGlassSurface(role: .panel, cornerRadius: LensGlassMetrics.panelCornerRadius, tint: LensGlassPalette.ice)
+        .lensGlassSurface(role: .panel, cornerRadius: LensGlassMetrics.panelCornerRadius)
         .padding(22)
         .onAppear { focusEditorIfReady() }
         .onChange(of: model.phase) { _, _ in focusEditorIfReady() }

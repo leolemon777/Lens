@@ -43,7 +43,7 @@ struct ScreenshotCanvasToolbar: View {
         .font(.system(size: 10.5, weight: .medium))
         .padding(.horizontal, 16)
         .padding(.vertical, 7)
-        .lensGlassSurface(role: .chrome, cornerRadius: 0, tint: LensGlassPalette.ice)
+        .lensGlassSurface(role: .chrome, cornerRadius: 0)
     }
 
     private var enabledToggle: some View {

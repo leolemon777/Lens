@@ -237,7 +237,7 @@ final class QuickAccessWindowController {
 
     private func makePanel() -> QuickAccessPanel {
         let panel = QuickAccessPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 564, height: 152),
+            contentRect: NSRect(x: 0, y: 0, width: 376, height: 392),
             styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -245,7 +245,6 @@ final class QuickAccessWindowController {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.applyLensBrightGlassAppearance()
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.hidesOnDeactivate = false

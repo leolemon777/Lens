@@ -233,8 +233,6 @@ struct LensGlassBackdrop: View {
 struct LensGlassSurface: ViewModifier {
     let role: LensGlassSurfaceRole
     let cornerRadius: CGFloat
-    var tint: Color? = nil
-    var shadowOverride: (opacity: Double, radius: CGFloat, y: CGFloat)? = nil
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.lensReduceTransparencyOverride) private var reduceTransparencyOverride
 
@@ -266,7 +264,7 @@ struct LensGlassSurface: ViewModifier {
                 // Large window surfaces must stay geometrically stable while they
                 // are being captured. Interactive Liquid Glass is intended for
                 // controls and can temporarily warp the outer rim under the pointer.
-                content.glassEffect(tint.map { Glass.regular.tint($0) } ?? .regular, in: shape),
+                content.glassEffect(.regular, in: shape),
                 shape: shape,
                 reducedTransparency: false
             )
@@ -297,7 +295,7 @@ struct LensGlassSurface: ViewModifier {
         shape: RoundedRectangle,
         reducedTransparency: Bool
     ) -> some View {
-        let shadow = shadowOverride ?? role.shadow
+        let shadow = role.shadow
         return content
             .overlay(
                 shape.strokeBorder(
@@ -325,6 +323,10 @@ struct LensGlassSurface: ViewModifier {
 struct LensGlassButtonStyle: ButtonStyle {
     var tint: Color = LensGlassPalette.ice
     var isSelected = false
+    /// Solid accent-fill variant for a surface's one primary action. The
+    /// label should carry a high-contrast foreground (e.g.
+    /// `LensGlassPalette.midnight`) since the fill is the tint itself.
+    var isFilled = false
     var cornerRadius: CGFloat = LensGlassMetrics.controlCornerRadius
 
     func makeBody(configuration: Configuration) -> some View {
@@ -332,6 +334,7 @@ struct LensGlassButtonStyle: ButtonStyle {
             label: configuration.label,
             isPressed: configuration.isPressed,
             isSelected: isSelected,
+            isFilled: isFilled,
             tint: tint,
             cornerRadius: cornerRadius
         )
@@ -342,6 +345,7 @@ private struct LensGlassButtonBody<Label: View>: View {
     let label: Label
     let isPressed: Bool
     let isSelected: Bool
+    let isFilled: Bool
     let tint: Color
     let cornerRadius: CGFloat
 
@@ -358,10 +362,7 @@ private struct LensGlassButtonBody<Label: View>: View {
             .overlay(
                 shape.strokeBorder(
                     LinearGradient(
-                        colors: [
-                            .white.opacity(isPressed || isSelected ? 0.28 : 0.14),
-                            tint.opacity(isSelected ? 0.48 : isHovering ? 0.26 : 0.08)
-                        ],
+                        colors: borderColors,
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
@@ -369,7 +370,7 @@ private struct LensGlassButtonBody<Label: View>: View {
                 )
             )
             .shadow(
-                color: tint.opacity(isHovering && !shouldReduceMotion ? 0.15 : 0),
+                color: shadowColor,
                 radius: 9,
                 y: 3
             )
@@ -395,10 +396,35 @@ private struct LensGlassButtonBody<Label: View>: View {
     }
 
     private var backgroundColor: Color {
+        if isFilled {
+            if isPressed { return tint }
+            return tint.opacity(isHovering ? 1 : 0.88)
+        }
         if isPressed { return tint.opacity(0.19) }
         if isSelected { return tint.opacity(0.13) }
         if isHovering { return tint.opacity(0.085) }
         return .primary.opacity(0.045)
+    }
+
+    private var borderColors: [Color] {
+        if isFilled {
+            return [
+                .white.opacity(isPressed ? 0.42 : 0.3),
+                tint.opacity(isPressed ? 0.2 : 0.35)
+            ]
+        }
+        return [
+            .white.opacity(isPressed || isSelected ? 0.28 : 0.14),
+            tint.opacity(isSelected ? 0.48 : isHovering ? 0.26 : 0.08)
+        ]
+    }
+
+    private var shadowColor: Color {
+        let shouldReduceMotion = reduceMotionOverride ?? reduceMotion
+        if isFilled {
+            return tint.opacity(isHovering && !shouldReduceMotion ? 0.38 : 0.22)
+        }
+        return tint.opacity(isHovering && !shouldReduceMotion ? 0.15 : 0)
     }
 }
 
@@ -432,14 +458,54 @@ struct LensGlassSection<Content: View>: View {
     }
 }
 
+/// A small vector rendition of the Lens glass-orb mark (Assets/AppIcon.png)
+/// for surfaces that need a brand anchor without pulling in the full app
+/// icon. Drawn rather than imaged so it stays crisp at any scale and holds
+/// up in both appearances.
+struct LensBrandMark: View {
+    var diameter: CGFloat = 20
+
+    var body: some View {
+        ZStack {
+            // The orb body: the brand ice→blue sweep.
+            Circle()
+                .fill(LensGlassPalette.brandGradient)
+            // The icon's sphere falls into shadow below the equator.
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [.clear, .black.opacity(0.25)],
+                        startPoint: .center,
+                        endPoint: .bottom
+                    )
+                )
+            // Its window reflection reads as one soft pool above the
+            // equator; an ellipse (not a circle) keeps it lens-like.
+            Ellipse()
+                .fill(
+                    LinearGradient(
+                        colors: [.white.opacity(0.85), .white.opacity(0)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: diameter * 0.72, height: diameter * 0.44)
+                .offset(y: -diameter * 0.15)
+            // Rim light keeps the sphere legible on light backgrounds.
+            Circle()
+                .strokeBorder(.white.opacity(0.5), lineWidth: max(0.8, diameter * 0.045))
+        }
+        .frame(width: diameter, height: diameter)
+        .accessibilityHidden(true)
+    }
+}
+
 extension View {
     func lensGlassSurface(
         role: LensGlassSurfaceRole = .panel,
-        cornerRadius: CGFloat = LensGlassMetrics.panelCornerRadius,
-        tint: Color? = nil,
-        shadow: (opacity: Double, radius: CGFloat, y: CGFloat)? = nil
+        cornerRadius: CGFloat = LensGlassMetrics.panelCornerRadius
     ) -> some View {
-        modifier(LensGlassSurface(role: role, cornerRadius: cornerRadius, tint: tint, shadowOverride: shadow))
+        modifier(LensGlassSurface(role: role, cornerRadius: cornerRadius))
     }
 
     func lensGlassPanel(cornerRadius: CGFloat = 28) -> some View {
@@ -452,18 +518,5 @@ extension View {
     ) -> some View {
         environment(\.lensReduceTransparencyOverride, reduceTransparency)
             .environment(\.lensReduceMotionOverride, reduceMotion)
-    }
-}
-
-extension NSWindow {
-    /// Screenshot-flow surfaces render bright glass regardless of the system's
-    /// own light/dark setting. Liquid Glass otherwise adapts to match, which
-    /// under Dark Mode reads as a flat dark grey rather than glass — a tint
-    /// alone cannot overcome that, only the appearance can.
-    ///
-    /// Deliberately scoped to the screenshot flow: the library, video editor,
-    /// permission center, and onboarding still follow the system.
-    func applyLensBrightGlassAppearance() {
-        appearance = NSAppearance(named: .aqua)
     }
 }

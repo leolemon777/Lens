@@ -150,6 +150,21 @@ struct QuickAccessView: View {
         Array(stackModel.entries.dropFirst())
     }
 
+    /// Hero-card width. Deliberately narrower and taller than the old 508pt
+    /// strip: the capture itself is the anchor now, and the title and actions
+    /// stack beneath it instead of stretching beside a tiny thumbnail.
+    private var cardWidth: CGFloat { 320 }
+    private var heroWidth: CGFloat { cardWidth - 20 }
+
+    /// Aspect-true hero height, clamped so extreme captures (tall scrolling
+    /// shots, thin strips) neither balloon the panel nor vanish into a sliver.
+    private var heroHeight: CGFloat {
+        let size = image.size
+        guard size.width > 0, size.height > 0 else { return 168 }
+        let aspectHeight = heroWidth * size.height / size.width
+        return min(max(aspectHeight, 104), 192)
+    }
+
     var body: some View {
         VStack(alignment: .trailing, spacing: 8) {
             primaryCard
@@ -161,122 +176,145 @@ struct QuickAccessView: View {
     }
 
     private var primaryCard: some View {
-        HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             draggablePreview
+                .padding(.top, 10)
+                .padding(.horizontal, 10)
 
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 7) {
-                    if isProcessing {
-                        ProgressView(value: progressModel.fraction ?? 0)
-                            .progressViewStyle(.circular)
-                            .controlSize(.small)
-                            .accessibilityLabel("成片生成中")
-                            .accessibilityValue(progressCaption)
-                    } else {
-                        Image(systemName: isProcessingFailed || isPreviewNeedsReview || isInterrupted
-                              ? "exclamationmark.triangle.fill"
-                              : "checkmark.circle.fill")
-                            .foregroundStyle(
-                                isProcessingFailed || isPreviewNeedsReview || isInterrupted
-                                    ? .orange
-                                    : .green
-                            )
-                            .accessibilityHidden(true)
-                    }
-                    Text(confirmationTitle)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
-                }
+            VStack(alignment: .leading, spacing: 7) {
+                statusTitleRow
                 Text(detailText)
                     .font(.system(size: LensType.caption, weight: .medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
                 if isProcessing {
-                    HStack(spacing: 6) {
-                        ProgressView(value: progressModel.fraction ?? 0)
-                            .progressViewStyle(.linear)
-                            .frame(maxWidth: 150)
-                        Text(progressCaption)
-                            .font(.system(size: LensType.micro, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("成片生成进度")
-                    .accessibilityValue(progressCaption)
+                    progressRow
                 }
-                HStack(spacing: 6) {
-                    if isRecording {
-                        // Primary: retry takes over the primary slot when the
-                        // render actually failed — that is the one action
-                        // the user needs most in that state.
-                        if isProcessingFailed, let onRetry {
-                            primaryQuickButton("重试成片", symbol: "arrow.clockwise", action: onRetry)
-                        } else {
-                            primaryQuickButton(
-                                isProcessing ? "查看原片" : "编辑",
-                                symbol: "timeline.selection",
-                                action: onEdit
-                            )
-                        }
-                        quickButton("复制文件", symbol: "doc.on.doc", action: onCopy)
-                        if dragFileURL != nil {
-                            quickButton("分享", symbol: "square.and.arrow.up", action: onShare)
-                                .help("打开 macOS 系统分享面板发送当前视频，不会自动上传")
-                                .accessibilityHint("打开 macOS 系统分享面板发送当前视频，不会自动上传")
-                        }
-                        overflowMenu {
-                            Button(action: onReveal) {
-                                Label("显示", systemImage: "folder")
-                            }
-                        }
-                    } else {
-                        primaryQuickButton("复制", symbol: "doc.on.doc", action: onCopy)
-                        quickButton("标注", symbol: "pencil.tip", action: onAnnotate)
-                        quickButton("贴图", symbol: "pin", action: onPin)
-                        overflowMenu {
-                            if dragFileURL != nil {
-                                Button(action: onShare) {
-                                    Label("分享", systemImage: "square.and.arrow.up")
-                                }
-                                .help("打开 macOS 系统分享面板发送当前 PNG，不会自动上传")
-                                .accessibilityHint("打开 macOS 系统分享面板发送当前 PNG，不会自动上传")
-                            }
-                            Button(action: onReveal) {
-                                Label("显示", systemImage: "folder")
-                            }
-                            Button(action: onConversationInbox) {
-                                Label("对话", systemImage: "terminal")
-                            }
-                            .help("保存到对话文件夹并复制路径，方便在终端里发给 AI")
-                            .accessibilityHint("保存到对话文件夹并复制路径")
-                        }
-                    }
-                }
-                .padding(.top, 3)
+                actionBar
+                    .padding(.top, 3)
             }
-
-            Spacer(minLength: 0)
-
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: LensIcon.small, weight: .bold))
-                    .frame(width: 24, height: 24)
-                    .background(.primary.opacity(0.07), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("关闭")
-            .accessibilityLabel("关闭快速操作")
-            .keyboardShortcut(.cancelAction)
+            .padding(12)
         }
-        .padding(12)
-        .frame(width: isRecording ? 460 : 508)
-        .lensGlassSurface(
-            role: .panel,
+        .frame(width: cardWidth)
+        // Keeps control glows (the filled primary button's shadow) inside the
+        // card outline instead of bleeding past its edge onto the desktop.
+        .clipShape(RoundedRectangle(
             cornerRadius: LensGlassMetrics.panelCornerRadius,
-            tint: LensGlassPalette.ice,
-            shadow: LensGlassSurfaceRole.card.shadow
-        )
+            style: .continuous
+        ))
+        .lensGlassSurface(role: .panel, cornerRadius: LensGlassMetrics.panelCornerRadius)
+    }
+
+    private var statusTitleRow: some View {
+        HStack(spacing: 7) {
+            if isProcessing {
+                ProgressView(value: progressModel.fraction ?? 0)
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+                    .accessibilityLabel("成片生成中")
+                    .accessibilityValue(progressCaption)
+            } else {
+                Image(systemName: isProcessingFailed || isPreviewNeedsReview || isInterrupted
+                      ? "exclamationmark.triangle.fill"
+                      : "checkmark.circle.fill")
+                    .font(.system(size: LensIcon.medium, weight: .semibold))
+                    .foregroundStyle(
+                        isProcessingFailed || isPreviewNeedsReview || isInterrupted
+                            ? LensGlassPalette.warning
+                            : LensGlassPalette.success
+                    )
+                    .accessibilityHidden(true)
+            }
+            Text(confirmationTitle)
+                .font(.system(size: LensType.title, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+        }
+    }
+
+    private var progressRow: some View {
+        HStack(spacing: 8) {
+            ProgressView(value: progressModel.fraction ?? 0)
+                .progressViewStyle(.linear)
+            Text(progressCaption)
+                .font(.system(size: LensType.caption, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("成片生成进度")
+        .accessibilityValue(progressCaption)
+    }
+
+    /// Lives on the hero image's top-right corner: a dark glass chip that
+    /// stays legible over any capture content instead of a plain circle
+    /// floating in the card's dead space.
+    private var closeButton: some View {
+        Button(action: onClose) {
+            Image(systemName: "xmark")
+                .font(.system(size: LensIcon.small, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(.black.opacity(0.46), in: Circle())
+                .background(.ultraThinMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .shadow(color: .black.opacity(0.22), radius: 5, y: 1)
+        .help("关闭")
+        .accessibilityLabel("关闭快速操作")
+        .keyboardShortcut(.cancelAction)
+    }
+
+    @ViewBuilder
+    private var actionBar: some View {
+        HStack(spacing: 7) {
+            if isRecording {
+                // Primary: retry takes over the primary slot when the
+                // render actually failed — that is the one action
+                // the user needs most in that state.
+                if isProcessingFailed, let onRetry {
+                    primaryQuickButton("重试成片", symbol: "arrow.clockwise", action: onRetry)
+                } else {
+                    primaryQuickButton(
+                        isProcessing ? "查看原片" : "编辑",
+                        symbol: "timeline.selection",
+                        action: onEdit
+                    )
+                }
+                quickButton("复制文件", symbol: "doc.on.doc", action: onCopy)
+                if dragFileURL != nil {
+                    quickButton("分享", symbol: "square.and.arrow.up", action: onShare)
+                        .help("打开 macOS 系统分享面板发送当前视频，不会自动上传")
+                        .accessibilityHint("打开 macOS 系统分享面板发送当前视频，不会自动上传")
+                }
+                overflowMenu {
+                    Button(action: onReveal) {
+                        Label("显示", systemImage: "folder")
+                    }
+                }
+            } else {
+                primaryQuickButton("复制", symbol: "doc.on.doc", action: onCopy)
+                quickButton("标注", symbol: "pencil.tip", action: onAnnotate)
+                quickButton("贴图", symbol: "pin", action: onPin)
+                overflowMenu {
+                    if dragFileURL != nil {
+                        Button(action: onShare) {
+                            Label("分享", systemImage: "square.and.arrow.up")
+                        }
+                        .help("打开 macOS 系统分享面板发送当前 PNG，不会自动上传")
+                        .accessibilityHint("打开 macOS 系统分享面板发送当前 PNG，不会自动上传")
+                    }
+                    Button(action: onReveal) {
+                        Label("显示", systemImage: "folder")
+                    }
+                    Button(action: onConversationInbox) {
+                        Label("对话", systemImage: "terminal")
+                    }
+                    .help("保存到对话文件夹并复制路径，方便在终端里发给 AI")
+                    .accessibilityHint("保存到对话文件夹并复制路径")
+                }
+            }
+        }
     }
 
     /// Compact rows for every capture beyond the primary card — thumbnail,
@@ -291,13 +329,8 @@ struct QuickAccessView: View {
             }
         }
         .padding(8)
-        .frame(width: isRecording ? 460 : 508, alignment: .trailing)
-        .lensGlassSurface(
-            role: .panel,
-            cornerRadius: LensGlassMetrics.panelCornerRadius,
-            tint: LensGlassPalette.ice,
-            shadow: LensGlassSurfaceRole.card.shadow
-        )
+        .frame(width: cardWidth, alignment: .trailing)
+        .lensGlassSurface(role: .panel, cornerRadius: LensGlassMetrics.panelCornerRadius)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
@@ -398,25 +431,17 @@ struct QuickAccessView: View {
 
     @ViewBuilder
     private var draggablePreview: some View {
+        let heroShape = RoundedRectangle(
+            cornerRadius: LensGlassMetrics.cardCornerRadius,
+            style: .continuous
+        )
         let preview = Image(nsImage: image)
             .resizable()
             .scaledToFill()
-            .frame(width: 118, height: 72)
-            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .stroke(.white.opacity(0.18), lineWidth: 1)
-            )
-            .overlay(alignment: .bottomTrailing) {
-                Image(systemName: "arrow.up.forward.app.fill")
-                    .font(.system(size: LensIcon.small, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(5)
-                    .background(.black.opacity(0.58), in: Circle())
-                    .padding(5)
-                    .accessibilityHidden(true)
-            }
-            .overlay(alignment: .topTrailing) {
+            .frame(width: heroWidth, height: heroHeight)
+            .clipShape(heroShape)
+            .overlay(heroShape.stroke(.white.opacity(0.2), lineWidth: 1))
+            .overlay(alignment: .topLeading) {
                 if stackedEntries.count > 0 {
                     Button {
                         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
@@ -426,13 +451,14 @@ struct QuickAccessView: View {
                         Text("+\(stackedEntries.count)")
                             .font(.system(size: LensType.micro, weight: .bold))
                             .monospacedDigit()
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 6)
+                            .foregroundStyle(LensGlassPalette.midnight)
+                            .padding(.horizontal, 7)
                             .padding(.vertical, 3)
                             .background(LensGlassPalette.accent, in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .padding(5)
+                    .shadow(color: .black.opacity(0.28), radius: 4, y: 1)
+                    .padding(8)
                     .help(stackModel.isExpanded ? "收起最近捕获" : "展开最近捕获")
                     .accessibilityLabel(
                         stackModel.isExpanded
@@ -441,7 +467,19 @@ struct QuickAccessView: View {
                     )
                 }
             }
-            .contentShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(alignment: .topTrailing) {
+                closeButton
+                    .padding(8)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                Image(systemName: "arrow.up.forward.app.fill")
+                    .font(.system(size: LensIcon.small, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(5)
+                    .background(.black.opacity(0.58), in: Circle())
+                    .accessibilityHidden(true)
+            }
+            .contentShape(heroShape)
             .accessibilityLabel(isRecording ? "刚刚保存的录屏预览" : "刚刚保存的截图预览")
 
         if let dragFileURL {
@@ -469,24 +507,29 @@ struct QuickAccessView: View {
     }
 
     /// The one action most people take on any given card — copy, or edit for
-    /// a recording, or retry when the render actually failed. Rendered
-    /// larger and in the accent color so it reads as the default choice
+    /// a recording, or retry when the render actually failed. Rendered as the
+    /// card's single filled accent pill so it reads as the default choice
     /// without anyone needing to read all the labels first.
     private func primaryQuickButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: symbol)
                 .font(.system(size: LensType.caption, weight: .semibold))
+                .foregroundStyle(LensGlassPalette.midnight)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 7)
         }
-        .buttonStyle(LensGlassButtonStyle(tint: LensGlassPalette.accent, cornerRadius: LensGlassMetrics.controlCornerRadius))
+        .buttonStyle(LensGlassButtonStyle(
+            tint: LensGlassPalette.accent,
+            isFilled: true,
+            cornerRadius: LensGlassMetrics.controlCornerRadius
+        ))
     }
 
     private func quickButton(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: symbol)
-                .font(.system(size: LensType.micro, weight: .semibold))
-                .padding(.horizontal, 9)
+                .font(.system(size: LensType.caption, weight: .semibold))
+                .padding(.horizontal, 10)
                 .padding(.vertical, 6)
         }
         .buttonStyle(LensGlassButtonStyle(tint: LensGlassPalette.neutral, cornerRadius: LensGlassMetrics.controlCornerRadius))
@@ -501,9 +544,9 @@ struct QuickAccessView: View {
             items()
         } label: {
             Image(systemName: "ellipsis")
-                .font(.system(size: LensType.micro, weight: .semibold))
-                .padding(.horizontal, 9)
-                .padding(.vertical, 6)
+                .font(.system(size: LensIcon.small, weight: .semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
         }
         .menuStyle(.button)
         .menuIndicator(.hidden)

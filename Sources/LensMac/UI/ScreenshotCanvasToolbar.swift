@@ -41,7 +41,7 @@ struct ScreenshotCanvasToolbar: View {
             Spacer(minLength: 0)
         }
         .font(.system(size: 10.5, weight: .medium))
-        .padding(.horizontal, 16)
+        .padding(.horizontal, LensSpacing.l)
         .padding(.vertical, 7)
         .lensGlassSurface(role: .chrome, cornerRadius: 0)
     }

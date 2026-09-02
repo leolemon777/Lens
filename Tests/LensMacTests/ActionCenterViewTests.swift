@@ -44,6 +44,8 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertTrue(ActionCenterAction.allCases.contains(.multiWindowScreenshot))
         XCTAssertTrue(ActionCenterAction.allCases.contains(.conversationInbox))
         XCTAssertEqual(ActionCenterAction.conversationInbox.title, "截到对话")
+        XCTAssertEqual(ActionCenterAction.regionRecording.menuTitle, "快速录制区域")
+        XCTAssertEqual(ActionCenterAction.openSettings.menuTitle, "设置与权限")
         XCTAssertEqual(ActionCenterAction.ocr.subtitle, "改完再复制")
         XCTAssertTrue(CaptureOverlayAction.conversationInbox.regionGuidance.contains("复制路径"))
         XCTAssertTrue(CaptureOverlayAction.ocr.regionGuidance.contains("可改再复制"))
@@ -168,6 +170,17 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertEqual(quitItem.keyEquivalent, "q")
         XCTAssertEqual(quitItem.keyEquivalentModifierMask, [.command])
         XCTAssertTrue(quitItem.target === target)
+
+        let editMenu = try XCTUnwrap(
+            mainMenu.items.first { $0.title == "编辑" }?.submenu
+        )
+        let copyItem = try XCTUnwrap(editMenu.items.first { $0.title == "复制" })
+        XCTAssertEqual(copyItem.keyEquivalent, "c")
+        XCTAssertEqual(copyItem.action, #selector(NSText.copy(_:)))
+        XCTAssertNil(copyItem.target)
+        XCTAssertTrue(editMenu.items.contains { $0.action == Selector(("undo:")) })
+        XCTAssertTrue(editMenu.items.contains { $0.action == #selector(NSText.paste(_:)) })
+        XCTAssertTrue(editMenu.items.contains { $0.action == #selector(NSText.selectAll(_:)) })
     }
 
     func testActionCenterRendersRecordingAndScreenshotMenusAtPanelSize() throws {

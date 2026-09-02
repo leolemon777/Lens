@@ -1,0 +1,9 @@
+# SwiftFormat — keep Lens's existing indent and brace style, fail CI on drift.
+--swiftversion 6.0
+--indent 4
+--maxwidth 100
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--trimwhitespace always
+--disable redundantSelf,andOperator,blankLinesAtStartOfScope

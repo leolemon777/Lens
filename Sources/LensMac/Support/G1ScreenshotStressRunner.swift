@@ -2,11 +2,11 @@ import AppKit
 import Foundation
 import LensCore
 
-struct G1ScreenshotStressConfiguration {
+package struct G1ScreenshotStressConfiguration {
     let iterations: Int
     let reportURL: URL
 
-    init?(arguments: [String]) {
+    package init?(arguments: [String]) {
         guard arguments.contains("--g1-screenshot-stress") else { return nil }
         let requestedIterations = Self.option("--iterations", in: arguments)
             .flatMap(Int.init) ?? 100
@@ -30,8 +30,8 @@ struct G1ScreenshotStressConfiguration {
 }
 
 @MainActor
-enum G1ScreenshotStressRunner {
-    static func run(_ configuration: G1ScreenshotStressConfiguration) async -> Int32 {
+package enum G1ScreenshotStressRunner {
+    package static func run(_ configuration: G1ScreenshotStressConfiguration) async -> Int32 {
         let generatedAt = ISO8601DateFormatter().string(from: Date())
         guard ScreenPermission.hasAccess else {
             writeReport(

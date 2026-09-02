@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 import LensCore
 
-struct G3RenderedEffectsConfiguration {
+package struct G3RenderedEffectsConfiguration {
     let projectURL: URL
     let reportURL: URL
     let outputURL: URL?
@@ -14,7 +14,7 @@ struct G3RenderedEffectsConfiguration {
     let persistsDerivedCopy: Bool
     let requiredEffects: [RenderedEffectKind]
 
-    init?(arguments: [String], workingDirectory: URL? = nil) {
+    package init?(arguments: [String], workingDirectory: URL? = nil) {
         guard arguments.contains("--g3-rendered-effects"),
               let projectPath = Self.option("--project", in: arguments),
               let reportPath = Self.option("--report", in: arguments) else {
@@ -144,8 +144,8 @@ private struct G3RenderedEffectsFailureReport: Encodable {
 /// It never mutates the source project: rendering happens in a caller-provided
 /// destination or an ephemeral sibling file that is deleted after verification.
 @MainActor
-enum G3RenderedEffectsRunner {
-    static func run(_ configuration: G3RenderedEffectsConfiguration) async -> Int32 {
+package enum G3RenderedEffectsRunner {
+    package static func run(_ configuration: G3RenderedEffectsConfiguration) async -> Int32 {
         let isInstalledApplication = Bundle.main.bundleURL.standardizedFileURL.path
             .hasPrefix("/Applications/")
         let evidenceLevel = isInstalledApplication

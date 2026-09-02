@@ -165,7 +165,12 @@ final class AudioMixdownRenderer: @unchecked Sendable {
             at: outputURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        try await exporter.export(to: outputURL, as: .mp4)
+        try await AutoPreviewRenderer.runExport(
+            exporter,
+            to: outputURL,
+            as: .mp4,
+            progress: nil
+        )
         return AudioMixdownRenderReport(
             outputURL: outputURL,
             voiceProcessingResult: microphone.processingResult,

@@ -21,12 +21,39 @@ final class LensDesignTokenLintTests: XCTestCase {
         let value: String
     }
 
-    private static let allowedTextSizes: Set<Double> = [10, 11, 12, 13, 15]
-    private static let allowedIconSizes: Set<Double> = [11, 13, 17, 24, 34]
-    private static let allowedCornerRadii: Set<Double> = [0, 8, 10, 13, 16, 18, 24, 30]
     private static let colorLiteralNames = [
         "cyan", "mint", "indigo", "yellow", "purple", "pink", "teal", "brown"
     ]
+
+    /// Token values are read from `LensGlass.swift` so adding a size or radius
+    /// only has to happen in one place. Hard-coded sets here would drift.
+    private static let tokenFileURL = uiDirectoryURL.appendingPathComponent("LensGlass.swift")
+
+    private static let tokenSource: String = {
+        (try? String(contentsOf: tokenFileURL, encoding: .utf8)) ?? ""
+    }()
+
+    private static func numericTokens(in enumName: String) -> Set<Double> {
+        let pattern = regex(
+            #"enum \#(enumName) \{([^}]*)\}"#
+        )
+        let range = NSRange(tokenSource.startIndex..., in: tokenSource)
+        guard let match = pattern.firstMatch(in: tokenSource, range: range),
+              let bodyRange = Range(match.range(at: 1), in: tokenSource) else {
+            return []
+        }
+        let body = String(tokenSource[bodyRange])
+        let valuePattern = regex(#"=\s*(\d+(?:\.\d+)?)"#)
+        let bodyRangeNS = NSRange(body.startIndex..., in: body)
+        return Set(valuePattern.matches(in: body, range: bodyRangeNS).compactMap { match in
+            guard let r = Range(match.range(at: 1), in: body) else { return nil }
+            return Double(body[r])
+        })
+    }
+
+    private static let allowedTextSizes: Set<Double> = numericTokens(in: "LensType")
+    private static let allowedIconSizes: Set<Double> = numericTokens(in: "LensIcon")
+    private static let allowedCornerRadii: Set<Double> = numericTokens(in: "LensGlassMetrics")
 
     // Ratchet baselines. Lower these as violations are fixed; never raise
     // them except when genuinely new, justified exemption categories are
@@ -66,8 +93,8 @@ final class LensDesignTokenLintTests: XCTestCase {
     // recording countdown's 120pt digit in
     // RecordingCountdownWindowController) that has no other consumer and
     // doesn't belong on the reusable type scale meant for panel chrome.
-    // Current usage: 31.
-    private static let maxExemptions = 31
+    // Current usage grows as content-color exemptions are explicit.
+    private static let maxExemptions = 40
 
     private static let uiDirectoryURL: URL = {
         URL(fileURLWithPath: #filePath)
@@ -96,6 +123,9 @@ final class LensDesignTokenLintTests: XCTestCase {
     private static let colorPattern = regex(
         #"\.(cyan|mint|indigo|yellow|purple|pink|teal|brown)\b"#
     )
+    private static let semanticColorPattern = regex(
+        #"(?<![A-Za-z0-9_])(?:Color\.(red|orange|green)|(?<=[\(\s,?:])\.(red|orange|green))\b"#
+    )
     private static let exemptionPattern = regex(#"lens-token-exempt:\s*\S"#)
 
     private static func firstMatch(
@@ -116,13 +146,31 @@ final class LensDesignTokenLintTests: XCTestCase {
         return exemptionPattern.firstMatch(in: line, range: range) != nil
     }
 
+    private static func isContentColorLine(_ line: String) -> Bool {
+        if line.contains("LensColor") { return true }
+        let range = NSRange(line.startIndex..., in: line)
+        let palette = regex(
+            #"\(\s*"[^"]+"\s*,\s*\.(red|orange|green|cyan|mint|indigo|yellow|purple|pink|teal|brown|blue|white|black)\b"#
+        )
+        return palette.firstMatch(in: line, range: range) != nil
+    }
+
     private static func containsColorLiteral(_ line: String) -> [String] {
         let range = NSRange(line.startIndex..., in: line)
-        return colorPattern.matches(in: line, range: range).compactMap { match in
+        var names = colorPattern.matches(in: line, range: range).compactMap { match -> String? in
             guard match.numberOfRanges > 1, let r = Range(match.range(at: 1), in: line)
             else { return nil }
             return String(line[r])
         }
+        for match in semanticColorPattern.matches(in: line, range: range) {
+            for index in 1..<match.numberOfRanges {
+                if let r = Range(match.range(at: index), in: line) {
+                    names.append(String(line[r]))
+                    break
+                }
+            }
+        }
+        return names
     }
 
     private struct ScanResult {
@@ -169,6 +217,11 @@ final class LensDesignTokenLintTests: XCTestCase {
                     )
                 }
                 for color in containsColorLiteral(line) {
+                    if fileName == "LensGlass.swift",
+                       ["red", "orange", "green"].contains(color) {
+                        continue
+                    }
+                    if isContentColorLine(line) { continue }
                     result.colorViolations.append(
                         Violation(file: fileName, line: lineNumber, value: color)
                     )
@@ -205,6 +258,12 @@ final class LensDesignTokenLintTests: XCTestCase {
             file: file,
             line: line
         )
+    }
+
+    func testTokenSetsAreReadFromLensGlass() {
+        XCTAssertEqual(Self.allowedTextSizes, [10, 11, 12, 13, 15])
+        XCTAssertEqual(Self.allowedIconSizes, [11, 13, 17, 24, 34])
+        XCTAssertEqual(Self.allowedCornerRadii, [0, 8, 10, 13, 16, 18, 24, 30])
     }
 
     func testTextSizesStayWithinTypeScale() throws {

@@ -32,7 +32,7 @@ final class GlobalHotKeyManagerTests: XCTestCase {
         let report = manager.start()
         defer { manager.stop() }
 
-        XCTAssertEqual(report.issues.count, 4)
+        XCTAssertEqual(report.issues.count, 6)
         XCTAssertTrue(report.usesEventMonitorFallback)
         XCTAssertEqual(Set(report.issues.map(\.status)), [OSStatus(eventHotKeyExistsErr)])
     }

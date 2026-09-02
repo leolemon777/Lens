@@ -27,9 +27,19 @@ private struct CursorRenderAssets: @unchecked Sendable {
     let system: [PointerCursorShape: CursorRenderAsset]
     let highContrast: CursorRenderAsset
     let minimalDot: CursorRenderAsset
+    let magicWand: CursorRenderAsset
+    let laser: CursorRenderAsset
+    let pixelHand: CursorRenderAsset
+    let highlighterPencil: CursorRenderAsset
+    let crosshairHUD: CursorRenderAsset
+    let rocket: CursorRenderAsset
 
     var arrow: CursorRenderAsset {
         system[.arrow] ?? highContrast
+    }
+
+    var pointingHand: CursorRenderAsset {
+        system[.pointingHand] ?? arrow
     }
 }
 
@@ -45,7 +55,7 @@ final class AutoPreviewRenderer {
     /// downscaling. This baseline remains user-scalable while preserving a
     /// clearly readable default at 1080p delivery sizes.
     nonisolated static func baseCursorWidth(sourcePixelWidth: CGFloat) -> CGFloat {
-        min(max(sourcePixelWidth * 0.021, 36), 104)
+        CameraPresentationMapping.baseCursorWidth(sourcePixelWidth: sourcePixelWidth)
     }
 
     func render(
@@ -388,16 +398,14 @@ final class AutoPreviewRenderer {
         as fileType: AVFileType,
         progress: (@Sendable (Double) -> Void)?
     ) async throws {
-        guard let progress else {
-            try await exporter.export(to: outputURL, as: fileType)
-            return
-        }
         // Concurrent progress polling alongside the export call is the
         // documented use of `states(updateInterval:)`; the session type
         // predates Sendable, so the capture is annotated rather than
-        // provably checked by the compiler.
+        // provably checked by the compiler. Cancellation always stops the
+        // session, including mixdown exports that omit a progress callback.
         nonisolated(unsafe) let exporter = exporter
         let progressTask = Task {
+            guard let progress else { return }
             for try await state in exporter.states(updateInterval: 0.1) {
                 if case .exporting(let fraction) = state {
                     progress(fraction.fractionCompleted)
@@ -405,8 +413,13 @@ final class AutoPreviewRenderer {
             }
         }
         defer { progressTask.cancel() }
-        try await exporter.export(to: outputURL, as: fileType)
-        progress(1)
+        try await withTaskCancellationHandler {
+            try await exporter.export(to: outputURL, as: fileType)
+        } onCancel: {
+            exporter.cancelExport()
+        }
+        try Task.checkCancellation()
+        progress?(1)
     }
 
     /// Rescales a sub-pass's own 0...1 progress into its slice of the
@@ -476,7 +489,7 @@ final class AutoPreviewRenderer {
             )
         }
         return CursorRenderAsset(
-            image: try fallbackCursorImage(),
+            image: try glyphImage(.highContrast),
             hotSpot: CGPoint(x: 0.1, y: 4.0 / 48.0),
             relativeWidth: relativeWidth
         )
@@ -511,14 +524,44 @@ final class AutoPreviewRenderer {
         let assets = CursorRenderAssets(
             system: system,
             highContrast: CursorRenderAsset(
-                image: try fallbackCursorImage(),
+                image: try glyphImage(.highContrast),
                 hotSpot: CGPoint(x: 0.1, y: 4.0 / 48.0),
                 relativeWidth: 1
             ),
             minimalDot: CursorRenderAsset(
-                image: try dotCursorImage(),
+                image: try glyphImage(.minimalDot),
                 hotSpot: CGPoint(x: 0.5, y: 0.5),
                 relativeWidth: 0.72
+            ),
+            magicWand: CursorRenderAsset(
+                image: try glyphImage(.magicWand),
+                hotSpot: CGPoint(x: 18.0 / 64.0, y: 18.0 / 64.0),
+                relativeWidth: 1.15
+            ),
+            laser: CursorRenderAsset(
+                image: try glyphImage(.laser),
+                hotSpot: CGPoint(x: 0.5, y: 0.5),
+                relativeWidth: 0.75
+            ),
+            pixelHand: CursorRenderAsset(
+                image: try glyphImage(.pixelHand),
+                hotSpot: CGPoint(x: 16.0 / 48.0, y: 8.0 / 48.0),
+                relativeWidth: 1.0
+            ),
+            highlighterPencil: CursorRenderAsset(
+                image: try glyphImage(.highlighterPencil),
+                hotSpot: CGPoint(x: 12.0 / 56.0, y: 12.0 / 56.0),
+                relativeWidth: 1.15
+            ),
+            crosshairHUD: CursorRenderAsset(
+                image: try glyphImage(.crosshairHUD),
+                hotSpot: CGPoint(x: 0.5, y: 0.5),
+                relativeWidth: 0.95
+            ),
+            rocket: CursorRenderAsset(
+                image: try glyphImage(.rocket),
+                hotSpot: CGPoint(x: 14.0 / 56.0, y: 14.0 / 56.0),
+                relativeWidth: 1.15
             )
         )
         cachedCursorAssets = assets
@@ -532,65 +575,11 @@ final class AutoPreviewRenderer {
         return image
     }
 
-    private func fallbackCursorImage() throws -> CIImage {
-        let width = 40
-        let height = 48
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
+    private func glyphImage(_ kind: CursorGlyphFactory.Kind) throws -> CIImage {
+        guard let image = CursorGlyphFactory.image(kind) else {
             throw AutoPreviewRendererError.cursorImageUnavailable
         }
-
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: 4, y: 44))
-        path.addLine(to: CGPoint(x: 4, y: 8))
-        path.addLine(to: CGPoint(x: 13, y: 17))
-        path.addLine(to: CGPoint(x: 20, y: 3))
-        path.addLine(to: CGPoint(x: 26, y: 6))
-        path.addLine(to: CGPoint(x: 19, y: 20))
-        path.addLine(to: CGPoint(x: 33, y: 20))
-        path.closeSubpath()
-        context.addPath(path)
-        context.setFillColor(NSColor.white.cgColor)
-        context.setStrokeColor(NSColor.black.withAlphaComponent(0.92).cgColor)
-        context.setLineWidth(4)
-        context.setLineJoin(.round)
-        context.drawPath(using: .fillStroke)
-        guard let cgImage = context.makeImage() else {
-            throw AutoPreviewRendererError.cursorImageUnavailable
-        }
-        return CIImage(cgImage: cgImage)
-    }
-
-    private func dotCursorImage() throws -> CIImage {
-        let size = 48
-        guard let context = CGContext(
-            data: nil,
-            width: size,
-            height: size,
-            bitsPerComponent: 8,
-            bytesPerRow: size * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            throw AutoPreviewRendererError.cursorImageUnavailable
-        }
-        let outer = CGRect(x: 4, y: 4, width: 40, height: 40)
-        context.setFillColor(NSColor.white.cgColor)
-        context.fillEllipse(in: outer)
-        context.setStrokeColor(NSColor.black.withAlphaComponent(0.72).cgColor)
-        context.setLineWidth(3)
-        context.strokeEllipse(in: outer.insetBy(dx: 1.5, dy: 1.5))
-        guard let cgImage = context.makeImage() else {
-            throw AutoPreviewRendererError.cursorImageUnavailable
-        }
-        return CIImage(cgImage: cgImage)
+        return CIImage(cgImage: image)
     }
 
     private func clickRingImage() throws -> CIImage {
@@ -783,7 +772,9 @@ final class AutoPreviewRenderer {
                 viewport: viewport,
                 cameraScale: scale,
                 extent: extent,
-                clickRingImage: clickRingImage
+                clickRingImage: clickRingImage,
+                sourceExtent: sourceExtent,
+                contentSize: contentSize
             )
         }
 
@@ -807,24 +798,27 @@ final class AutoPreviewRenderer {
         }()
 
         if let cursorPosition, cursorOpacity > 0.001 {
-            let screenPoint = CGPoint(
-                x: extent.width * cursorPosition.x,
-                y: extent.height * (1 - cursorPosition.y)
-            )
-            let outputPoint = CGPoint(
-                x: (screenPoint.x - viewport.minX) * scale,
-                y: (screenPoint.y - viewport.minY) * scale
+            let outputPoint = CameraPresentationMapping.ciOutputPoint(
+                sourceNormalized: cursorPosition,
+                sourceExtent: sourceExtent,
+                viewport: viewport,
+                scale: scale,
+                deliveryExtent: extent,
+                contentSize: contentSize
             )
             let cursorAsset = resolvedCursorAsset(
                 at: sourceTime,
                 cursor: plan.cursor,
                 assets: cursorAssets
             )
-            let targetCursorWidth = Self.baseCursorWidth(
-                sourcePixelWidth: extent.width
-            )
-                * plan.cursor.scale
-                * cursorAsset.relativeWidth
+            let targetCursorWidth = CameraPresentationMapping.cursorFrame(
+                at: outputPoint,
+                sourcePixelWidth: max(contentSize.width, 1),
+                userScale: plan.cursor.scale,
+                relativeWidth: cursorAsset.relativeWidth,
+                imageSize: cursorAsset.image.extent.size,
+                hotSpot: cursorAsset.hotSpot
+            ).width
             frame = applyCursorMotionEffect(
                 to: frame,
                 at: sourceTime,
@@ -836,7 +830,9 @@ final class AutoPreviewRenderer {
                 opacity: cursorOpacity,
                 viewport: viewport,
                 cameraScale: scale,
-                extent: extent
+                extent: extent,
+                sourceExtent: sourceExtent,
+                contentSize: contentSize
             )
             if EffectTimeline.cursorKind(
                 at: sourceTime,
@@ -902,7 +898,7 @@ final class AutoPreviewRenderer {
                     ),
                     opacity: cursorOpacity
                 ).composited(over: frame)
-            case .recorded, .macOS, .highContrast, .minimalDot:
+            case .recorded, .macOS, .highContrast, .minimalDot, .pointingHand, .magicWand, .laser, .pixelHand, .highlighterPencil, .crosshairHUD, .rocket:
                 break
             }
         }
@@ -939,6 +935,20 @@ final class AutoPreviewRenderer {
             return assets.highContrast
         case .minimalDot:
             return assets.minimalDot
+        case .pointingHand:
+            return assets.pointingHand
+        case .magicWand:
+            return assets.magicWand
+        case .laser:
+            return assets.laser
+        case .pixelHand:
+            return assets.pixelHand
+        case .highlighterPencil:
+            return assets.highlighterPencil
+        case .crosshairHUD:
+            return assets.crosshairHUD
+        case .rocket:
+            return assets.rocket
         case .ring, .glowDot:
             // Procedural overlays stack on top of the recorded glyph.
             return assets.arrow
@@ -984,7 +994,9 @@ final class AutoPreviewRenderer {
         opacity: Double,
         viewport: CGRect,
         cameraScale: CGFloat,
-        extent: CGRect
+        extent: CGRect,
+        sourceExtent: CGRect,
+        contentSize: CGSize
     ) -> CIImage {
         guard cursor.motionEffect != .none,
               cursor.motionEffectStrength > 0,
@@ -1032,13 +1044,13 @@ final class AutoPreviewRenderer {
                     position.y - currentPosition.y
                 )
                 guard movement > 0.0015 else { continue }
-                let screenPoint = CGPoint(
-                    x: extent.width * position.x,
-                    y: extent.height * (1 - position.y)
-                )
-                let outputPoint = CGPoint(
-                    x: (screenPoint.x - viewport.minX) * cameraScale,
-                    y: (screenPoint.y - viewport.minY) * cameraScale
+                let outputPoint = CameraPresentationMapping.ciOutputPoint(
+                    sourceNormalized: position,
+                    sourceExtent: sourceExtent,
+                    viewport: viewport,
+                    scale: cameraScale,
+                    deliveryExtent: extent,
+                    contentSize: contentSize
                 )
                 let ghost = cursorLayer(
                     asset: cursorAsset,
@@ -1222,9 +1234,14 @@ final class AutoPreviewRenderer {
         viewport: CGRect,
         cameraScale: CGFloat,
         extent: CGRect,
-        clickRingImage: CIImage
+        clickRingImage: CIImage,
+        sourceExtent: CGRect? = nil,
+        contentSize: CGSize? = nil
     ) -> CIImage {
         guard interaction.showsClickPulse else { return frame }
+        let resolvedSourceExtent = sourceExtent
+            ?? CGRect(origin: .zero, size: extent.size)
+        let resolvedContentSize = contentSize ?? extent.size
         var result = frame
         let pulseColor = color(
             hex: interaction.clickPulseColorHex,
@@ -1238,13 +1255,13 @@ final class AutoPreviewRenderer {
             let eased = progress * progress * (3 - 2 * progress)
             let strength = min(max(interaction.clickEffectStrength, 0.1), 1)
             let opacity = pow(1 - progress, 0.68) * strength
-            let screenPoint = CGPoint(
-                x: extent.width * pulse.position.x,
-                y: extent.height * (1 - pulse.position.y)
-            )
-            let outputPoint = CGPoint(
-                x: (screenPoint.x - viewport.minX) * cameraScale,
-                y: (screenPoint.y - viewport.minY) * cameraScale
+            let outputPoint = CameraPresentationMapping.ciOutputPoint(
+                sourceNormalized: pulse.position,
+                sourceExtent: resolvedSourceExtent,
+                viewport: viewport,
+                scale: cameraScale,
+                deliveryExtent: extent,
+                contentSize: resolvedContentSize
             )
 
             switch interaction.clickEffect {
@@ -1438,7 +1455,7 @@ final class AutoPreviewRenderer {
                 width: radius * 4.2,
                 height: radius * 4.2
             ))
-        case .recorded, .macOS, .highContrast, .minimalDot:
+        case .recorded, .macOS, .highContrast, .minimalDot, .pointingHand, .magicWand, .laser, .pixelHand, .highlighterPencil, .crosshairHUD, .rocket:
             return CIImage.empty()
         }
     }

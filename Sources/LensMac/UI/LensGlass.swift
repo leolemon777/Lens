@@ -4,10 +4,10 @@ import SwiftUI
 /// Shared visual tokens for every Lens window. Keeping these values in one
 /// place prevents each tool from building a slightly different "glass" surface.
 enum LensGlassPalette {
-    static let ice = Color(red: 0.47, green: 0.88, blue: 1.00)
-    static let blue = Color(red: 0.12, green: 0.48, blue: 1.00)
-    static let coral = Color(red: 1.00, green: 0.31, blue: 0.32)
-    static let midnight = Color(red: 0.025, green: 0.045, blue: 0.075)
+    fileprivate static let ice = Color(red: 0.47, green: 0.88, blue: 1.00)
+    fileprivate static let blue = Color(red: 0.12, green: 0.48, blue: 1.00)
+    fileprivate static let coral = Color(red: 1.00, green: 0.31, blue: 0.32)
+    fileprivate static let midnight = Color(red: 0.025, green: 0.045, blue: 0.075)
 
     static var brandGradient: LinearGradient {
         LinearGradient(
@@ -23,6 +23,10 @@ enum LensGlassPalette {
     // plus content itself, ever carry color; everything else is neutral.
     /// The single accent used for primary actions, selection and focus.
     static let accent = ice
+    /// A deeper companion stop for brand gradients that still read as accent.
+    static let accentDeep = blue
+    /// Dark ink for on-glass labels and preview scrims.
+    static let ink = midnight
     /// Recording state only — never a generic "this feature involves video" tint.
     static let recording = Color.red
     /// Warnings and items awaiting review.
@@ -86,8 +90,12 @@ enum LensIcon {
 enum LensSpacing {
     static let xs: CGFloat = 4
     static let s: CGFloat = 8
+    static let inset: CGFloat = 10
     static let m: CGFloat = 12
+    static let card: CGFloat = 14
     static let l: CGFloat = 16
+    static let section: CGFloat = 18
+    static let panel: CGFloat = 20
     static let xl: CGFloat = 24
 }
 
@@ -321,11 +329,11 @@ struct LensGlassSurface: ViewModifier {
 }
 
 struct LensGlassButtonStyle: ButtonStyle {
-    var tint: Color = LensGlassPalette.ice
+    var tint: Color = LensGlassPalette.accent
     var isSelected = false
     /// Solid accent-fill variant for a surface's one primary action. The
     /// label should carry a high-contrast foreground (e.g.
-    /// `LensGlassPalette.midnight`) since the fill is the tint itself.
+    /// `LensGlassPalette.ink`) since the fill is the tint itself.
     var isFilled = false
     var cornerRadius: CGFloat = LensGlassMetrics.controlCornerRadius
 
@@ -453,51 +461,57 @@ struct LensGlassSection<Content: View>: View {
                 .foregroundStyle(tint)
             content
         }
-        .padding(14)
+        .padding(LensSpacing.card)
         .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
     }
 }
 
-/// A small vector rendition of the Lens glass-orb mark (Assets/AppIcon.png)
-/// for surfaces that need a brand anchor without pulling in the full app
-/// icon. Drawn rather than imaged so it stays crisp at any scale and holds
-/// up in both appearances.
+/// The official brand mark of Lens, displaying the project's actual AppIcon.
 struct LensBrandMark: View {
-    var diameter: CGFloat = 20
+    var diameter: CGFloat = 38
 
     var body: some View {
-        ZStack {
-            // The orb body: the brand ice→blue sweep.
+        if let icon = Self.projectIcon {
+            Image(nsImage: icon)
+                .resizable()
+                .scaledToFit()
+                .frame(width: diameter, height: diameter)
+                .clipShape(RoundedRectangle(cornerRadius: diameter * 0.224, style: .continuous))
+                .accessibilityHidden(true)
+        } else {
             Circle()
                 .fill(LensGlassPalette.brandGradient)
-            // The icon's sphere falls into shadow below the equator.
-            Circle()
-                .fill(
-                    LinearGradient(
-                        colors: [.clear, .black.opacity(0.25)],
-                        startPoint: .center,
-                        endPoint: .bottom
-                    )
-                )
-            // Its window reflection reads as one soft pool above the
-            // equator; an ellipse (not a circle) keeps it lens-like.
-            Ellipse()
-                .fill(
-                    LinearGradient(
-                        colors: [.white.opacity(0.85), .white.opacity(0)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(width: diameter * 0.72, height: diameter * 0.44)
-                .offset(y: -diameter * 0.15)
-            // Rim light keeps the sphere legible on light backgrounds.
-            Circle()
-                .strokeBorder(.white.opacity(0.5), lineWidth: max(0.8, diameter * 0.045))
+                .frame(width: diameter, height: diameter)
+                .accessibilityHidden(true)
         }
-        .frame(width: diameter, height: diameter)
-        .accessibilityHidden(true)
     }
+
+    private static let projectIcon: NSImage? = {
+        if let icon = NSApp?.applicationIconImage, icon.isValid {
+            return icon
+        }
+        if let icon = NSImage(named: NSImage.applicationIconName), icon.isValid {
+            return icon
+        }
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
+           let icon = NSImage(contentsOf: url), icon.isValid {
+            return icon
+        }
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let icon = NSImage(contentsOf: url), icon.isValid {
+            return icon
+        }
+        let candidate = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Assets/AppIcon.png")
+        if let icon = NSImage(contentsOf: candidate), icon.isValid {
+            return icon
+        }
+        return nil
+    }()
 }
 
 extension View {

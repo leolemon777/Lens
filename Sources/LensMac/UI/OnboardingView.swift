@@ -22,12 +22,12 @@ struct OnboardingView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 18)
+                .padding(.vertical, LensSpacing.section)
             }
             Divider().opacity(0.45)
             footer
         }
-        .padding(20)
+        .padding(LensSpacing.panel)
         .frame(width: 610, height: 440)
         .lensGlassSurface(role: .window, cornerRadius: LensGlassMetrics.windowCornerRadius)
         .padding(34)
@@ -110,7 +110,7 @@ struct OnboardingView: View {
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(.top, 14)
+        .padding(.top, LensSpacing.card)
     }
 
     // MARK: - Steps
@@ -161,7 +161,7 @@ struct OnboardingView: View {
                     systemImage: "arrow.clockwise.circle"
                 )
                 .font(.system(size: 11))
-                .foregroundStyle(.orange)
+                .foregroundStyle(LensGlassPalette.warning)
                 .fixedSize(horizontal: false, vertical: true)
 
                 Button("退出 Lens", action: onQuit)
@@ -194,14 +194,14 @@ struct OnboardingView: View {
             if model.areEssentialsSatisfied {
                 Label("必需权限已就绪", systemImage: "checkmark.circle.fill")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.green)
+                    .foregroundStyle(LensGlassPalette.success)
             } else {
                 Label(
                     "还有必需权限没有开启，快捷键可能不会有反应。你可以随时在设置与权限中补上。",
                     systemImage: "exclamationmark.triangle.fill"
                 )
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.orange)
+                .foregroundStyle(LensGlassPalette.warning)
                 .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -279,11 +279,11 @@ struct OnboardingView: View {
     private func permissionStateColor(_ state: PermissionAccessState) -> Color {
         switch state {
         case .granted:
-            .green
+            LensGlassPalette.success
         case .notDetermined:
-            .orange
+            LensGlassPalette.warning
         case .denied, .restricted:
-            .red
+            LensGlassPalette.recording
         }
     }
 
@@ -296,7 +296,7 @@ struct OnboardingView: View {
             Text(shortcut.displayName)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .monospacedDigit()
-                .padding(.horizontal, 10)
+                .padding(.horizontal, LensSpacing.inset)
                 .padding(.vertical, 6)
                 .background(.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {

@@ -24,6 +24,7 @@ public enum RecordingHealthWarning: String, Codable, Equatable, Hashable, Sendab
     case renderedEffectNotVerified
     case requestedMediaTrackMissing
     case rawTrackDurationDrift
+    case rawTrackStartOffset
     case microphoneInterrupted
     case cameraInterrupted
 }
@@ -55,6 +56,9 @@ public struct RecordingTrackIntegrityReport: Codable, Equatable, Sendable {
     public let requestedMicrophone: Bool
     public let requestedCamera: Bool
     public let durationToleranceSeconds: Double
+    public let systemAudioStartOffsetSeconds: Double?
+    public let microphoneStartOffsetSeconds: Double?
+    public let cameraStartOffsetSeconds: Double?
 
     public init(
         screenVideoDurationSeconds: Double?,
@@ -64,7 +68,10 @@ public struct RecordingTrackIntegrityReport: Codable, Equatable, Sendable {
         requestedSystemAudio: Bool,
         requestedMicrophone: Bool,
         requestedCamera: Bool,
-        durationToleranceSeconds: Double = 0.15
+        durationToleranceSeconds: Double = 0.15,
+        systemAudioStartOffsetSeconds: Double? = nil,
+        microphoneStartOffsetSeconds: Double? = nil,
+        cameraStartOffsetSeconds: Double? = nil
     ) {
         self.screenVideoDurationSeconds = Self.positive(screenVideoDurationSeconds)
         self.systemAudioDurationSeconds = Self.positive(systemAudioDurationSeconds)
@@ -77,6 +84,9 @@ public struct RecordingTrackIntegrityReport: Codable, Equatable, Sendable {
             durationToleranceSeconds.isFinite ? durationToleranceSeconds : 0.15,
             0
         )
+        self.systemAudioStartOffsetSeconds = Self.finite(systemAudioStartOffsetSeconds)
+        self.microphoneStartOffsetSeconds = Self.finite(microphoneStartOffsetSeconds)
+        self.cameraStartOffsetSeconds = Self.finite(cameraStartOffsetSeconds)
     }
 
     public var missingRequestedTracks: [RecordingRawTrackKind] {
@@ -124,10 +134,19 @@ public struct RecordingTrackIntegrityReport: Codable, Equatable, Sendable {
         return durations.map { abs($0 - screenVideoDurationSeconds) }.max()
     }
 
+    public var startOffsetTracks: [RecordingRawTrackKind] {
+        [
+            offset(.systemAudio, offset: systemAudioStartOffsetSeconds, requested: requestedSystemAudio),
+            offset(.microphone, offset: microphoneStartOffsetSeconds, requested: requestedMicrophone),
+            offset(.camera, offset: cameraStartOffsetSeconds, requested: requestedCamera)
+        ].compactMap { $0 }
+    }
+
     public var isVerified: Bool {
         screenVideoDurationSeconds != nil
             && missingRequestedTracks.isEmpty
             && outOfSyncTracks.isEmpty
+            && startOffsetTracks.isEmpty
     }
 
     private func drifted(
@@ -142,8 +161,21 @@ public struct RecordingTrackIntegrityReport: Codable, Equatable, Sendable {
             : nil
     }
 
+    private func offset(
+        _ track: RecordingRawTrackKind,
+        offset: Double?,
+        requested: Bool
+    ) -> RecordingRawTrackKind? {
+        guard requested, let offset else { return nil }
+        return abs(offset) > durationToleranceSeconds ? track : nil
+    }
+
     private static func positive(_ value: Double?) -> Double? {
         value.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+    }
+
+    private static func finite(_ value: Double?) -> Double? {
+        value.flatMap { $0.isFinite ? $0 : nil }
     }
 }
 

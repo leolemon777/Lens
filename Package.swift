@@ -6,17 +6,42 @@ let package = Package(
     name: "Lens",
     defaultLocalization: "zh-Hans",
     platforms: [
-        .macOS(.v15)
+        .macOS("15.2")
     ],
     products: [
         .library(name: "LensCore", targets: ["LensCore"]),
-        .executable(name: "Lens", targets: ["LensMac"])
+        .library(name: "LensMac", targets: ["LensMac"]),
+        .executable(name: "Lens", targets: ["Lens"]),
+        .executable(name: "LensG1", targets: ["LensG1"]),
+        .executable(name: "LensG2", targets: ["LensG2"]),
+        .executable(name: "LensG3", targets: ["LensG3"]),
+        .executable(name: "LensG4", targets: ["LensG4"])
     ],
     targets: [
         .target(name: "LensCore"),
-        .executableTarget(
+        .target(
             name: "LensMac",
             dependencies: ["LensCore"]
+        ),
+        .executableTarget(
+            name: "Lens",
+            dependencies: ["LensMac"]
+        ),
+        .executableTarget(
+            name: "LensG1",
+            dependencies: ["LensMac"]
+        ),
+        .executableTarget(
+            name: "LensG2",
+            dependencies: ["LensMac"]
+        ),
+        .executableTarget(
+            name: "LensG3",
+            dependencies: ["LensMac"]
+        ),
+        .executableTarget(
+            name: "LensG4",
+            dependencies: ["LensMac"]
         ),
         .testTarget(
             name: "LensCoreTests",

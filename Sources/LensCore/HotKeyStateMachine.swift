@@ -47,6 +47,7 @@ public enum HotKeyIntent: String, Codable, CaseIterable, Equatable, Hashable, Se
     case quickScreenshot
     case toggleActionCenter
     case conversationInbox
+    case stopRecording
 }
 
 public enum HotKeyShortcutValidationError: String, Error, Equatable, Sendable {
@@ -109,6 +110,14 @@ public struct HotKeyShortcut: Codable, Equatable, Hashable, Sendable {
         keyCode: 20,
         modifiers: [.control, .option]
     )
+    public static let defaultStopRecording = HotKeyShortcut(
+        keyCode: 53,
+        modifiers: [.function]
+    )
+    public static let fallbackStopRecording = HotKeyShortcut(
+        keyCode: 21,
+        modifiers: [.control, .option]
+    )
 }
 
 public struct HotKeyBinding: Equatable, Sendable {
@@ -127,33 +136,38 @@ public enum HotKeyConfigurationError: String, Error, Equatable, Sendable {
     case actionCenterConflictsWithQuickScreenshotFallback
     case conversationInboxConflictsWithFallback
     case primaryConflictsWithConversationInboxFallback
+    case stopRecordingConflictsWithFallback
     case invalidQuickScreenshot
     case invalidActionCenter
     case invalidConversationInbox
+    case invalidStopRecording
 }
 
 public struct HotKeyConfiguration: Equatable, Sendable {
     public let quickScreenshot: HotKeyShortcut
     public let actionCenter: HotKeyShortcut
     public let conversationInbox: HotKeyShortcut
+    public let stopRecording: HotKeyShortcut
 
     public init(
         quickScreenshot: HotKeyShortcut = .defaultQuickScreenshot,
         actionCenter: HotKeyShortcut = .defaultActionCenter,
-        conversationInbox: HotKeyShortcut = .defaultConversationInbox
+        conversationInbox: HotKeyShortcut = .defaultConversationInbox,
+        stopRecording: HotKeyShortcut = .defaultStopRecording
     ) {
         self.quickScreenshot = quickScreenshot
         self.actionCenter = actionCenter
         self.conversationInbox = conversationInbox
+        self.stopRecording = stopRecording
     }
 
     public var validationError: HotKeyConfigurationError? {
         guard quickScreenshot.isValid else { return .invalidQuickScreenshot }
         guard actionCenter.isValid else { return .invalidActionCenter }
         guard conversationInbox.isValid else { return .invalidConversationInbox }
-        guard quickScreenshot != actionCenter,
-              quickScreenshot != conversationInbox,
-              actionCenter != conversationInbox else {
+        guard stopRecording.isValid else { return .invalidStopRecording }
+        let primaries = [quickScreenshot, actionCenter, conversationInbox, stopRecording]
+        guard Set(primaries).count == primaries.count else {
             return .duplicatePrimaryShortcut
         }
         guard quickScreenshot != .fallbackActionCenter else {
@@ -170,6 +184,16 @@ public struct HotKeyConfiguration: Equatable, Sendable {
               actionCenter != .fallbackConversationInbox else {
             return .primaryConflictsWithConversationInboxFallback
         }
+        let reservedFallbacks: Set<HotKeyShortcut> = [
+            .fallbackQuickScreenshot,
+            .fallbackActionCenter,
+            .fallbackConversationInbox,
+            .fallbackStopRecording
+        ]
+        if reservedFallbacks.contains(stopRecording)
+            || primaries.contains(.fallbackStopRecording) {
+            return .stopRecordingConflictsWithFallback
+        }
         return nil
     }
 
@@ -180,9 +204,11 @@ public struct HotKeyConfiguration: Equatable, Sendable {
             HotKeyBinding(intent: .quickScreenshot, shortcut: quickScreenshot),
             HotKeyBinding(intent: .toggleActionCenter, shortcut: actionCenter),
             HotKeyBinding(intent: .conversationInbox, shortcut: conversationInbox),
+            HotKeyBinding(intent: .stopRecording, shortcut: stopRecording),
             HotKeyBinding(intent: .quickScreenshot, shortcut: .fallbackQuickScreenshot),
             HotKeyBinding(intent: .toggleActionCenter, shortcut: .fallbackActionCenter),
-            HotKeyBinding(intent: .conversationInbox, shortcut: .fallbackConversationInbox)
+            HotKeyBinding(intent: .conversationInbox, shortcut: .fallbackConversationInbox),
+            HotKeyBinding(intent: .stopRecording, shortcut: .fallbackStopRecording)
         ]
         var seen: Set<HotKeyBindingIdentity> = []
         return candidates.filter {

@@ -94,7 +94,9 @@ struct LensLibraryPersistentIndexStore: Sendable {
         records.sort { $0.cacheKey < $1.cacheKey }
         let refreshedIndex = LensLibraryPersistentIndex(records: records)
         if refreshedIndex != cachedIndex {
-            try? writeIndex(refreshedIndex)
+            LensCoreLog.ignoringFailure("libraryIndex.write") {
+                try writeIndex(refreshedIndex)
+            }
         }
         return entries.sorted(by: Self.newestFirst)
     }

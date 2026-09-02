@@ -17,17 +17,18 @@ struct PermissionCenterView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     shortcutsSection
+                    recordingPreferencesSection
                     conversationInboxSection
                     permissionsSection
                     buildIdentitySection
                     diagnosticsSection
                     privacyNote
                 }
-                .padding(.vertical, 18)
+                .padding(.vertical, LensSpacing.section)
             }
         }
-        .padding(20)
-        .frame(width: 610, height: 560)
+        .padding(LensSpacing.panel)
+        .frame(width: 610, height: 640)
         .lensGlassSurface(role: .window, cornerRadius: LensGlassMetrics.windowCornerRadius)
         .padding(34)
     }
@@ -96,8 +97,10 @@ struct PermissionCenterView: View {
                     forbidden: [
                         appModel.actionCenterShortcut,
                         appModel.conversationInboxShortcut,
+                        appModel.stopRecordingShortcut,
                         .fallbackActionCenter,
-                        .fallbackConversationInbox
+                        .fallbackConversationInbox,
+                        .fallbackStopRecording
                     ]
                 )
                 Divider().padding(.leading, 122).opacity(0.4)
@@ -108,8 +111,10 @@ struct PermissionCenterView: View {
                     forbidden: [
                         appModel.quickScreenshotShortcut,
                         appModel.conversationInboxShortcut,
+                        appModel.stopRecordingShortcut,
                         .fallbackQuickScreenshot,
-                        .fallbackConversationInbox
+                        .fallbackConversationInbox,
+                        .fallbackStopRecording
                     ]
                 )
                 Divider().padding(.leading, 122).opacity(0.4)
@@ -120,15 +125,54 @@ struct PermissionCenterView: View {
                     forbidden: [
                         appModel.quickScreenshotShortcut,
                         appModel.actionCenterShortcut,
+                        appModel.stopRecordingShortcut,
                         .fallbackQuickScreenshot,
-                        .fallbackActionCenter
+                        .fallbackActionCenter,
+                        .fallbackStopRecording
+                    ]
+                )
+                Divider().padding(.leading, 122).opacity(0.4)
+                shortcutRow(
+                    title: "停止录制",
+                    detail: "录制中随时结束并保存",
+                    shortcut: $appModel.stopRecordingShortcut,
+                    forbidden: [
+                        appModel.quickScreenshotShortcut,
+                        appModel.actionCenterShortcut,
+                        appModel.conversationInboxShortcut,
+                        .fallbackQuickScreenshot,
+                        .fallbackActionCenter,
+                        .fallbackConversationInbox
                     ]
                 )
             }
             .padding(11)
             .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
-            Text("无 Fn 备用：Control + Option + 1 快速截图，2 打开操作中心，3 终端截屏。录入快捷键时会暂停全局热键，避免误触发截屏。")
+            Text("无 Fn 备用：Control + Option + 1 快速截图，2 打开操作中心，3 终端截屏，4 停止录制。录入快捷键时会暂停全局热键，避免误触发截屏。")
                 .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var recordingPreferencesSection: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            sectionTitle("录屏偏好", symbol: "record.circle")
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle("系统声音", isOn: $appModel.capturesSystemAudio)
+                Toggle("麦克风", isOn: $appModel.capturesMicrophone)
+                Toggle("开始前倒计时", isOn: $appModel.showsRecordingCountdown)
+                Toggle("结束后自动转写", isOn: $appModel.automaticallyTranscribesRecordings)
+                Picker("帧率", selection: $appModel.recordingFrameRate) {
+                    Text("30 FPS").tag(RecordingFrameRate.fps30)
+                    Text("60 FPS").tag(RecordingFrameRate.fps60)
+                }
+                .pickerStyle(.segmented)
+            }
+            .padding(LensSpacing.m)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
+            Text("摄像头仍只在每次开始录制时显式选择，不会从这里记住。")
+                .font(.system(size: LensType.micro, weight: .medium))
                 .foregroundStyle(.secondary)
         }
     }
@@ -169,7 +213,7 @@ struct PermissionCenterView: View {
                     .controlSize(.small)
                 }
             }
-            .padding(12)
+            .padding(LensSpacing.m)
             .frame(maxWidth: .infinity, alignment: .leading)
             .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
         }
@@ -214,7 +258,7 @@ struct PermissionCenterView: View {
     private var privacyNote: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "lock.shield.fill")
-                .foregroundStyle(.green)
+                .foregroundStyle(LensGlassPalette.success)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 3) {
                 Text("本地优先")
@@ -227,7 +271,7 @@ struct PermissionCenterView: View {
             Spacer()
         }
         .padding(13)
-        .background(.green.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(LensGlassPalette.success.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var diagnosticsSection: some View {
@@ -247,7 +291,7 @@ struct PermissionCenterView: View {
                 if let message = model.diagnosticStatusMessage {
                     Label(message, systemImage: message.contains("已复制") ? "checkmark.circle.fill" : "xmark.circle.fill")
                         .font(.system(size: LensType.micro, weight: .semibold))
-                        .foregroundStyle(message.contains("已复制") ? .green : .red)
+                        .foregroundStyle(message.contains("已复制") ? LensGlassPalette.success : LensGlassPalette.recording)
                 }
             }
             Spacer(minLength: 10)
@@ -258,7 +302,7 @@ struct PermissionCenterView: View {
             .controlSize(.small)
             .disabled(model.isPreparingDiagnosticSummary)
         }
-        .padding(12)
+        .padding(LensSpacing.m)
         .background(
             .primary.opacity(0.04),
             in: RoundedRectangle(cornerRadius: LensGlassMetrics.cardCornerRadius, style: .continuous)
@@ -290,7 +334,7 @@ struct PermissionCenterView: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(12)
+            .padding(LensSpacing.m)
             .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
         }
         .accessibilityElement(children: .combine)
@@ -366,15 +410,15 @@ struct PermissionCenterView: View {
                 )
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, LensSpacing.m)
+        .padding(.vertical, LensSpacing.inset)
     }
 
     private func stateColor(_ state: PermissionAccessState) -> Color {
         switch state {
-        case .granted: .green
-        case .notDetermined: .orange
-        case .denied, .restricted: .red
+        case .granted: LensGlassPalette.success
+        case .notDetermined: LensGlassPalette.warning
+        case .denied, .restricted: LensGlassPalette.recording
         }
     }
 

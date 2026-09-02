@@ -251,6 +251,7 @@ final class AppModel: ObservableObject {
         static let quickScreenshotShortcut = "shortcuts.quickScreenshot"
         static let actionCenterShortcut = "shortcuts.actionCenter"
         static let conversationInboxShortcut = "shortcuts.conversationInbox"
+        static let stopRecordingShortcut = "shortcuts.stopRecording"
         static let conversationInboxDirectory = "inbox.directoryPath"
     }
 
@@ -301,6 +302,9 @@ final class AppModel: ObservableObject {
     @Published var conversationInboxShortcut: HotKeyShortcut {
         didSet { persistShortcut(conversationInboxShortcut, forKey: PreferenceKey.conversationInboxShortcut) }
     }
+    @Published var stopRecordingShortcut: HotKeyShortcut {
+        didSet { persistShortcut(stopRecordingShortcut, forKey: PreferenceKey.stopRecordingShortcut) }
+    }
     @Published var conversationInboxDirectory: URL {
         didSet {
             defaults.set(
@@ -344,12 +348,17 @@ final class AppModel: ObservableObject {
             conversationInbox: Self.loadShortcut(
                 from: defaults,
                 key: PreferenceKey.conversationInboxShortcut
-            ) ?? .defaultConversationInbox
+            ) ?? .defaultConversationInbox,
+            stopRecording: Self.loadShortcut(
+                from: defaults,
+                key: PreferenceKey.stopRecordingShortcut
+            ) ?? .defaultStopRecording
         )
         let configuration = storedConfiguration.isValid ? storedConfiguration : .default
         quickScreenshotShortcut = configuration.quickScreenshot
         actionCenterShortcut = configuration.actionCenter
         conversationInboxShortcut = configuration.conversationInbox
+        stopRecordingShortcut = configuration.stopRecording
         conversationInboxDirectory = ConversationInboxStore.resolvedDirectory(
             storedPath: defaults.string(forKey: PreferenceKey.conversationInboxDirectory)
         )
@@ -359,7 +368,8 @@ final class AppModel: ObservableObject {
         HotKeyConfiguration(
             quickScreenshot: quickScreenshotShortcut,
             actionCenter: actionCenterShortcut,
-            conversationInbox: conversationInboxShortcut
+            conversationInbox: conversationInboxShortcut,
+            stopRecording: stopRecordingShortcut
         )
     }
 
@@ -367,6 +377,7 @@ final class AppModel: ObservableObject {
         quickScreenshotShortcut = .defaultQuickScreenshot
         actionCenterShortcut = .defaultActionCenter
         conversationInboxShortcut = .defaultConversationInbox
+        stopRecordingShortcut = .defaultStopRecording
     }
 
     func restoreDefaultConversationInboxDirectory() {
@@ -374,13 +385,17 @@ final class AppModel: ObservableObject {
     }
 
     private func persistShortcut(_ shortcut: HotKeyShortcut, forKey key: String) {
-        guard let data = try? JSONEncoder().encode(shortcut) else { return }
-        defaults.set(data, forKey: key)
+        LensFailureLog.ignoringFailure("preferences.shortcut_encode_failed") {
+            let data = try JSONEncoder().encode(shortcut)
+            defaults.set(data, forKey: key)
+        }
     }
 
     private static func loadShortcut(from defaults: UserDefaults, key: String) -> HotKeyShortcut? {
         guard let data = defaults.data(forKey: key),
-              let shortcut = try? JSONDecoder().decode(HotKeyShortcut.self, from: data),
+              let shortcut = LensFailureLog.optional("preferences.shortcut_decode_failed", {
+                  try JSONDecoder().decode(HotKeyShortcut.self, from: data)
+              }),
               shortcut.isValid else { return nil }
         return shortcut
     }

@@ -4,17 +4,15 @@ import SwiftUI
 @MainActor
 final class RecordingSetupWindowController {
     private let model: AppModel
-    private let window: RecordingSetupPanel
+    private let window: LensGlassPanel
     private let onStart: (RecordingSetupStartRequest) -> Void
 
     init(model: AppModel, onStart: @escaping (RecordingSetupStartRequest) -> Void) {
         self.model = model
         self.onStart = onStart
-        window = RecordingSetupPanel(
+        window = LensGlassPanel(
             contentRect: NSRect(x: 0, y: 0, width: 844, height: 724),
-            styleMask: [.borderless, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
+            placement: .center
         )
         configureWindow()
     }
@@ -35,8 +33,6 @@ final class RecordingSetupWindowController {
     }
 
     private func hideForRecordingStart() {
-        // Preserve this one explicit camera opt-in until the asynchronous source
-        // selection reaches ScreenRecordingOptions. A successful start resets it.
         LensPanelPresenter.dismiss(window)
     }
 
@@ -66,20 +62,5 @@ final class RecordingSetupWindowController {
             )
             .padding(32)
         )
-    }
-}
-
-private final class RecordingSetupPanel: NSWindow {
-    var onEscape: (() -> Void)?
-
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-
-    override func cancelOperation(_ sender: Any?) {
-        onEscape?()
-    }
-
-    override func performClose(_ sender: Any?) {
-        onEscape?()
     }
 }

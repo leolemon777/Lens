@@ -4,7 +4,7 @@ import SwiftUI
 @MainActor
 final class PermissionCenterWindowController {
     private let model: PermissionCenterModel
-    private let window: PermissionPanel
+    private let window: LensChromeWindow
     private let appModel: AppModel
     private let onShortcutsChanged: () -> Void
     private let onShortcutCaptureActiveChange: (Bool) -> Void
@@ -21,9 +21,9 @@ final class PermissionCenterWindowController {
         model = PermissionCenterModel(
             diagnosticSummaryProvider: diagnosticSummaryProvider
         )
-        window = PermissionPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 678, height: 628),
-            styleMask: [.borderless, .fullSizeContentView],
+        window = LensChromeWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 678, height: 720),
+            styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -50,11 +50,13 @@ final class PermissionCenterWindowController {
     }
 
     private func configureWindow() {
+        window.title = "设置与权限"
+        window.titleVisibility = .visible
         window.isOpaque = false
         window.backgroundColor = .clear
-        window.hasShadow = false
-        window.level = .floating
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        window.hasShadow = true
+        window.level = .normal
+        window.collectionBehavior = [.moveToActiveSpace]
         window.isMovableByWindowBackground = true
         window.onEscape = { [weak self] in self?.hide() }
 
@@ -69,16 +71,5 @@ final class PermissionCenterWindowController {
         hostingView.frame = window.contentView?.bounds ?? .zero
         hostingView.autoresizingMask = [.width, .height]
         window.contentView = hostingView
-    }
-}
-
-private final class PermissionPanel: NSPanel {
-    var onEscape: (() -> Void)?
-
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-
-    override func cancelOperation(_ sender: Any?) {
-        onEscape?()
     }
 }

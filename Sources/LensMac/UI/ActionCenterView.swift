@@ -40,6 +40,29 @@ enum ActionCenterAction: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Status-menu wording. Keeps the action-center title when it already
+    /// names the job, and expands the short tile labels that would be
+    /// ambiguous next to other menu items.
+    var menuTitle: String {
+        switch self {
+        case .screenshot: "快速区域截图"
+        case .windowScreenshot: "窗口截图"
+        case .multiWindowScreenshot: "多窗口截图"
+        case .displayScreenshot: "当前屏幕截图"
+        case .conversationInbox: "终端截屏"
+        case .recordingSetup: "录屏设置"
+        case .recording: "快速录制当前屏幕"
+        case .regionRecording: "快速录制区域"
+        case .windowRecording: "快速录制窗口"
+        case .ocr: "选区 OCR"
+        case .scrollingCapture: "滚动长截图"
+        case .pin: "贴上剪贴板"
+        case .openLibrary: "打开 Lens 库"
+        case .openSettings: "设置与权限"
+        case .enableHotKeys: "开启快捷键…"
+        }
+    }
+
     var subtitle: String {
         switch self {
         case .screenshot: "松手就已复制"
@@ -134,7 +157,7 @@ struct ActionCenterView: View {
             footer
         }
         .frame(width: 620)
-        .padding(16)
+        .padding(LensSpacing.l)
         .lensGlassSurface(role: .window, cornerRadius: LensGlassMetrics.windowCornerRadius)
         .padding(34)
     }
@@ -150,7 +173,7 @@ struct ActionCenterView: View {
                 .font(.system(size: 15, weight: .semibold))
             Spacer()
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, LensSpacing.xs)
         .padding(.bottom, 13)
     }
 
@@ -163,9 +186,9 @@ struct ActionCenterView: View {
                 Label("快捷键还不能用，点这里开启辅助功能", systemImage: "keyboard")
                     .font(.system(size: LensType.caption, weight: .semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
+                    .padding(LensSpacing.inset)
                     .background(
-                        .orange.opacity(0.12),
+                        LensGlassPalette.warning.opacity(0.12),
                         in: RoundedRectangle(
                             cornerRadius: LensGlassMetrics.controlCornerRadius,
                             style: .continuous
@@ -174,7 +197,7 @@ struct ActionCenterView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("开启快捷键")
-            .padding(.bottom, 8)
+            .padding(.bottom, LensSpacing.s)
         }
     }
 
@@ -187,7 +210,7 @@ struct ActionCenterView: View {
                 moreMenu
             }
         }
-        .padding(.vertical, 14)
+        .padding(.vertical, LensSpacing.card)
     }
 
     private var moreMenu: some View {
@@ -234,7 +257,7 @@ struct ActionCenterView: View {
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
+            .padding(.vertical, LensSpacing.m)
             .contentShape(RoundedRectangle(cornerRadius: LensGlassMetrics.tileCornerRadius, style: .continuous))
         }
         .menuStyle(.button)
@@ -317,7 +340,7 @@ struct ActionCenterView: View {
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .padding(.vertical, LensSpacing.m)
         .contentShape(RoundedRectangle(cornerRadius: LensGlassMetrics.tileCornerRadius, style: .continuous))
     }
 
@@ -364,9 +387,9 @@ struct ActionCenterView: View {
                     .accessibilityLabel("打开最近记录")
                     .accessibilityHint("在 Lens 库中查看这条记录")
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(LensGlassPalette.success)
                 }
-                .padding(10)
+                .padding(LensSpacing.inset)
                 .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
             } else {
                 HStack(spacing: 10) {
@@ -377,7 +400,7 @@ struct ActionCenterView: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
-                .padding(12)
+                .padding(LensSpacing.m)
                 .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
             }
         }
@@ -400,7 +423,7 @@ struct ActionCenterView: View {
         }
         .font(.system(size: LensType.caption, weight: .medium))
         .foregroundStyle(.tertiary)
-        .padding(.horizontal, 4)
+        .padding(.horizontal, LensSpacing.xs)
         .padding(.top, 1)
     }
 }

@@ -20,6 +20,12 @@ final class VideoEditorCursorOverlayNSView: NSView {
     private var systemAssets: [PointerCursorShape: VideoEditorCursorAsset] = [:]
     private var highContrastAsset: VideoEditorCursorAsset?
     private var minimalDotAsset: VideoEditorCursorAsset?
+    private var magicWandAsset: VideoEditorCursorAsset?
+    private var laserAsset: VideoEditorCursorAsset?
+    private var pixelHandAsset: VideoEditorCursorAsset?
+    private var highlighterPencilAsset: VideoEditorCursorAsset?
+    private var crosshairHUDAsset: VideoEditorCursorAsset?
+    private var rocketAsset: VideoEditorCursorAsset?
 
     private let haloLayer = CAShapeLayer()
     private let dragLayer = CAShapeLayer()
@@ -115,8 +121,8 @@ final class VideoEditorCursorOverlayNSView: NSView {
               let position = EffectTimeline.cursorPosition(
                   at: sourceTime,
                   keyframes: cursor.keyframes,
-                  smoothing: cursor.smoothing,
-                  smoothingWindowMilliseconds: cursor.smoothingWindowMilliseconds
+                  smoothing: cursor.resolvedSmoothingParameters.smoothing,
+                  smoothingWindowMilliseconds: cursor.resolvedSmoothingParameters.windowMilliseconds
               ) else {
             hideCursorVisuals()
             return
@@ -129,21 +135,19 @@ final class VideoEditorCursorOverlayNSView: NSView {
         }
         let point = outputPoint(position, cameraState: cameraState)
         let asset = resolvedAsset(at: sourceTime, cursor: cursor)
-        let sourcePixelWidth = max(
-            requestedSourcePixelWidth?.isFinite == true
-                ? requestedSourcePixelWidth ?? bounds.width
-                : bounds.width,
-            1
+        let frame = CameraPresentationMapping.cursorFrame(
+            at: point,
+            sourcePixelWidth: bounds.width,
+            userScale: cursor.scale,
+            relativeWidth: asset.relativeWidth,
+            imageSize: CGSize(
+                width: CGFloat(asset.image.width),
+                height: CGFloat(asset.image.height)
+            ),
+            hotSpot: asset.hotSpot
         )
-        // Match AutoPreviewRenderer's source-pixel rule exactly so completing a
-        // background render cannot make a customized cursor suddenly shrink or
-        // look like the original system capture.
-        let baseWidth = AutoPreviewRenderer.baseCursorWidth(
-            sourcePixelWidth: sourcePixelWidth
-        )
-            / sourcePixelWidth * bounds.width
-        let width = baseWidth * CGFloat(cursor.scale) * asset.relativeWidth
-        let height = width * CGFloat(asset.image.height) / max(CGFloat(asset.image.width), 1)
+        let width = frame.width
+        let height = frame.height
 
         cursorLayer.isHidden = false
         cursorLayer.opacity = Float(opacity)
@@ -151,12 +155,7 @@ final class VideoEditorCursorOverlayNSView: NSView {
         cursorLayer.backgroundColor = nil
         cursorLayer.cornerRadius = 0
         cursorLayer.borderWidth = 0
-        cursorLayer.frame = CGRect(
-            x: point.x - width * asset.hotSpot.x,
-            y: point.y - height * asset.hotSpot.y,
-            width: width,
-            height: height
-        )
+        cursorLayer.frame = frame
         if cursor.appearance == .minimalDot {
             cursorLayer.contents = nil
             cursorLayer.backgroundColor = color(
@@ -240,7 +239,7 @@ final class VideoEditorCursorOverlayNSView: NSView {
             styleOverlayLayer.shadowColor = accent.cgColor
             styleOverlayLayer.shadowOpacity = 0.55
             styleOverlayLayer.shadowRadius = radius * 1.1
-        case .recorded, .macOS, .highContrast, .minimalDot:
+        case .recorded, .macOS, .highContrast, .minimalDot, .pointingHand, .magicWand, .laser, .pixelHand, .highlighterPencil, .crosshairHUD, .rocket:
             styleOverlayLayer.isHidden = true
         }
     }
@@ -307,13 +306,14 @@ final class VideoEditorCursorOverlayNSView: NSView {
         let samples: [(Double, Float)] = isDragging
             ? [(0.035, 0.28), (0.075, 0.19), (0.12, 0.12), (0.17, 0.07)]
             : [(0.025, 0.25), (0.055, 0.17), (0.09, 0.10), (0.13, 0.05)]
+        let followParameters = cursor.resolvedSmoothingParameters
         for (index, layer) in trailLayers.enumerated() {
             guard showsTrail,
                   let previous = EffectTimeline.cursorPosition(
                       at: max(sourceTime - samples[index].0, 0),
                       keyframes: cursor.keyframes,
-                      smoothing: cursor.smoothing,
-                      smoothingWindowMilliseconds: cursor.smoothingWindowMilliseconds
+                      smoothing: followParameters.smoothing,
+                      smoothingWindowMilliseconds: followParameters.windowMilliseconds
                   ),
                   hypot(
                       previous.x - currentPosition.x,
@@ -444,6 +444,20 @@ final class VideoEditorCursorOverlayNSView: NSView {
             return highContrastAsset ?? fallbackAsset()
         case .minimalDot:
             return minimalDotAsset ?? fallbackAsset()
+        case .pointingHand:
+            return systemAssets[.pointingHand] ?? fallbackAsset()
+        case .magicWand:
+            return magicWandAsset ?? fallbackAsset()
+        case .laser:
+            return laserAsset ?? fallbackAsset()
+        case .pixelHand:
+            return pixelHandAsset ?? fallbackAsset()
+        case .highlighterPencil:
+            return highlighterPencilAsset ?? fallbackAsset()
+        case .crosshairHUD:
+            return crosshairHUDAsset ?? fallbackAsset()
+        case .rocket:
+            return rocketAsset ?? fallbackAsset()
         case .ring, .glowDot:
             // The live editor approximates the procedural final-render
             // overlays with the closest bitmap glyph.
@@ -494,18 +508,60 @@ final class VideoEditorCursorOverlayNSView: NSView {
                 relativeWidth: width / arrowWidth
             )
         }
-        if let image = highContrastCursorImage() {
+        if let image = CursorGlyphFactory.image(.highContrast) {
             highContrastAsset = VideoEditorCursorAsset(
                 image: image,
                 hotSpot: CGPoint(x: 0.10, y: 4.0 / 48.0),
                 relativeWidth: 1
             )
         }
-        if let image = dotCursorImage() {
+        if let image = CursorGlyphFactory.image(.minimalDot) {
             minimalDotAsset = VideoEditorCursorAsset(
                 image: image,
                 hotSpot: CGPoint(x: 0.5, y: 0.5),
                 relativeWidth: 0.72
+            )
+        }
+        if let image = CursorGlyphFactory.image(.magicWand) {
+            magicWandAsset = VideoEditorCursorAsset(
+                image: image,
+                hotSpot: CGPoint(x: 18.0 / 64.0, y: 18.0 / 64.0),
+                relativeWidth: 1.15
+            )
+        }
+        if let image = CursorGlyphFactory.image(.laser) {
+            laserAsset = VideoEditorCursorAsset(
+                image: image,
+                hotSpot: CGPoint(x: 0.5, y: 0.5),
+                relativeWidth: 0.75
+            )
+        }
+        if let image = CursorGlyphFactory.image(.pixelHand) {
+            pixelHandAsset = VideoEditorCursorAsset(
+                image: image,
+                hotSpot: CGPoint(x: 16.0 / 48.0, y: 8.0 / 48.0),
+                relativeWidth: 1.0
+            )
+        }
+        if let image = CursorGlyphFactory.image(.highlighterPencil) {
+            highlighterPencilAsset = VideoEditorCursorAsset(
+                image: image,
+                hotSpot: CGPoint(x: 12.0 / 56.0, y: 12.0 / 56.0),
+                relativeWidth: 1.15
+            )
+        }
+        if let image = CursorGlyphFactory.image(.crosshairHUD) {
+            crosshairHUDAsset = VideoEditorCursorAsset(
+                image: image,
+                hotSpot: CGPoint(x: 0.5, y: 0.5),
+                relativeWidth: 0.95
+            )
+        }
+        if let image = CursorGlyphFactory.image(.rocket) {
+            rocketAsset = VideoEditorCursorAsset(
+                image: image,
+                hotSpot: CGPoint(x: 14.0 / 56.0, y: 14.0 / 56.0),
+                relativeWidth: 1.15
             )
         }
     }
@@ -513,7 +569,8 @@ final class VideoEditorCursorOverlayNSView: NSView {
     private func fallbackAsset() -> VideoEditorCursorAsset {
         if let asset = highContrastAsset { return asset }
         if let asset = systemAssets[.arrow] { return asset }
-        let image = highContrastCursorImage() ?? dotCursorImage()!
+        let image = CursorGlyphFactory.image(.highContrast)
+            ?? CursorGlyphFactory.image(.minimalDot)!
         return VideoEditorCursorAsset(
             image: image,
             hotSpot: CGPoint(x: 0.1, y: 4.0 / 48.0),
@@ -524,49 +581,6 @@ final class VideoEditorCursorOverlayNSView: NSView {
     private func cgImage(from image: NSImage) -> CGImage? {
         var rect = CGRect(origin: .zero, size: image.size)
         return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
-    }
-
-    private func highContrastCursorImage() -> CGImage? {
-        guard let context = CGContext(
-            data: nil,
-            width: 40,
-            height: 48,
-            bitsPerComponent: 8,
-            bytesPerRow: 40 * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: 4, y: 44))
-        path.addLine(to: CGPoint(x: 4, y: 8))
-        path.addLine(to: CGPoint(x: 13, y: 17))
-        path.addLine(to: CGPoint(x: 20, y: 3))
-        path.addLine(to: CGPoint(x: 26, y: 6))
-        path.addLine(to: CGPoint(x: 19, y: 20))
-        path.addLine(to: CGPoint(x: 33, y: 20))
-        path.closeSubpath()
-        context.addPath(path)
-        context.setFillColor(NSColor.white.cgColor)
-        context.setStrokeColor(NSColor.black.withAlphaComponent(0.94).cgColor)
-        context.setLineWidth(4)
-        context.setLineJoin(.round)
-        context.drawPath(using: .fillStroke)
-        return context.makeImage()
-    }
-
-    private func dotCursorImage() -> CGImage? {
-        guard let context = CGContext(
-            data: nil,
-            width: 48,
-            height: 48,
-            bitsPerComponent: 8,
-            bytesPerRow: 48 * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-        context.setFillColor(NSColor.white.cgColor)
-        context.fillEllipse(in: CGRect(x: 4, y: 4, width: 40, height: 40))
-        return context.makeImage()
     }
 
     private func color(hex: String, fallback: NSColor) -> NSColor {

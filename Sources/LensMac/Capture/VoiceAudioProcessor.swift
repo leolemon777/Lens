@@ -1,3 +1,4 @@
+import Accelerate
 @preconcurrency import AVFoundation
 import Foundation
 import LensCore
@@ -98,8 +99,9 @@ final class VoiceAudioProcessor: @unchecked Sendable {
         defer { try? FileManager.default.removeItem(at: stageURL) }
 
         let normalizationInput: URL
+        let processedMetrics: AudioSignalMetrics
         if plan.reducesMicrophoneNoise, plan.noiseReductionAmount > 0.001 {
-            try filterVoice(
+            processedMetrics = try filterVoice(
                 inputURL: inputURL,
                 outputURL: stageURL,
                 noiseFloorDecibels: before.noiseFloorDecibels,
@@ -108,10 +110,9 @@ final class VoiceAudioProcessor: @unchecked Sendable {
             normalizationInput = stageURL
         } else {
             normalizationInput = inputURL
+            processedMetrics = before
         }
-        let processedMetrics = normalizationInput == inputURL
-            ? before
-            : try analyzeSynchronously(url: normalizationInput)
+
         let gainDecibels = plan.normalizesLoudness
             ? recommendedGainDecibels(
                 measuredLoudnessLUFS: processedMetrics.integratedLoudnessLUFS,
@@ -119,12 +120,13 @@ final class VoiceAudioProcessor: @unchecked Sendable {
                 peakAmplitude: processedMetrics.peakAmplitude
             )
             : 0
-        try copyPCM(
+
+        let after = try copyPCM(
             inputURL: normalizationInput,
             outputURL: outputURL,
             gain: linearGain(decibels: gainDecibels)
         )
-        let after = try analyzeSynchronously(url: outputURL)
+
         return VoiceAudioProcessingResult(
             outputURL: outputURL,
             before: before,
@@ -147,16 +149,11 @@ final class VoiceAudioProcessor: @unchecked Sendable {
             throw VoiceAudioProcessorError.bufferUnavailable
         }
 
-        var blockEnergies: [Double] = []
-        var noiseBlockEnergies: [Double] = []
-        var blockEnergy = 0.0
-        var noiseBlockEnergy = 0.0
-        var blockFrameCount = 0
-        var totalFrames: Int64 = 0
-        var peak = 0.0
-        var loudnessFilters = (0..<channelCount).map { _ in
-            KWeightingFilter(sampleRate: sampleRate)
-        }
+        var collector = AudioStreamMetricsCollector(
+            sampleRate: sampleRate,
+            channelCount: channelCount
+        )
+
         while file.framePosition < file.length {
             try Task.checkCancellation()
             buffer.frameLength = 0
@@ -170,59 +167,13 @@ final class VoiceAudioProcessor: @unchecked Sendable {
             guard let channels = buffer.floatChannelData else {
                 throw VoiceAudioProcessorError.unsupportedFormat
             }
-            totalFrames += Int64(frameCount)
-            for frame in 0..<frameCount {
-                var frameEnergy = 0.0
-                for channel in 0..<channelCount {
-                    let sample = Double(channels[channel][frame])
-                    peak = max(peak, abs(sample))
-                    noiseBlockEnergy += sample * sample
-                    let weighted = loudnessFilters[channel].process(sample)
-                    frameEnergy += weighted * weighted
-                }
-                blockEnergy += frameEnergy
-                blockFrameCount += 1
-                if blockFrameCount == framesPerBlock {
-                    blockEnergies.append(blockEnergy / Double(blockFrameCount))
-                    noiseBlockEnergies.append(
-                        noiseBlockEnergy / Double(blockFrameCount)
-                    )
-                    blockEnergy = 0
-                    noiseBlockEnergy = 0
-                    blockFrameCount = 0
-                }
-            }
-        }
-        if blockFrameCount > 0 {
-            blockEnergies.append(blockEnergy / Double(blockFrameCount))
-            noiseBlockEnergies.append(noiseBlockEnergy / Double(blockFrameCount))
+            collector.append(channels: channels, frameCount: frameCount)
         }
 
-        let integrated = integratedLoudness(from: blockEnergies)
-        let channelDivisor = Double(max(channelCount, 1))
-        let audibleLevels = noiseBlockEnergies
-            .map { 10 * log10(max($0 / channelDivisor, 1e-12)) }
-            .filter { $0 > -90 }
-            .sorted()
-        let noiseFloor: Double
-        if audibleLevels.isEmpty {
-            noiseFloor = -90
-        } else {
-            let index = min(
-                Int(Double(audibleLevels.count - 1) * 0.20),
-                audibleLevels.count - 1
-            )
-            noiseFloor = audibleLevels[index]
-        }
-        return AudioSignalMetrics(
-            durationSeconds: sampleRate > 0 ? Double(totalFrames) / sampleRate : 0,
-            integratedLoudnessLUFS: integrated,
-            noiseFloorDecibels: noiseFloor,
-            peakAmplitude: peak
-        )
+        return collector.finish()
     }
 
-    private static func integratedLoudness(from energies: [Double]) -> Double {
+    fileprivate static func integratedLoudness(from energies: [Double]) -> Double {
         guard !energies.isEmpty else { return -120 }
         let gatedBlocks: [Double]
         if energies.count >= 4 {
@@ -249,12 +200,13 @@ final class VoiceAudioProcessor: @unchecked Sendable {
         -0.691 + 10 * log10(max(energy, 1e-12))
     }
 
+    @discardableResult
     private static func filterVoice(
         inputURL: URL,
         outputURL: URL,
         noiseFloorDecibels: Double,
         amount: Double
-    ) throws {
+    ) throws -> AudioSignalMetrics {
         let input = try AVAudioFile(forReading: inputURL)
         let format = try supportedFormat(input.processingFormat)
         try prepareOutputURL(outputURL)
@@ -289,6 +241,11 @@ final class VoiceAudioProcessor: @unchecked Sendable {
         let gainRelease = exp(-1 / (0.16 * sampleRate))
         var envelope = 0.0
         var smoothedGain = 1.0
+
+        var collector = AudioStreamMetricsCollector(
+            sampleRate: format.sampleRate,
+            channelCount: channelCount
+        )
 
         while input.framePosition < input.length {
             try Task.checkCancellation()
@@ -339,15 +296,18 @@ final class VoiceAudioProcessor: @unchecked Sendable {
                     channels[channel][frame] *= Float(smoothedGain)
                 }
             }
+            collector.append(channels: channels, frameCount: frameCount)
             try output.write(from: buffer)
         }
+        return collector.finish()
     }
 
+    @discardableResult
     private static func copyPCM(
         inputURL: URL,
         outputURL: URL,
         gain: Double
-    ) throws {
+    ) throws -> AudioSignalMetrics {
         let input = try AVAudioFile(forReading: inputURL)
         let format = try supportedFormat(input.processingFormat)
         try prepareOutputURL(outputURL)
@@ -366,6 +326,13 @@ final class VoiceAudioProcessor: @unchecked Sendable {
         }
         let channelCount = Int(format.channelCount)
         let safeGain = gain.isFinite ? max(gain, 0) : 1
+        var collector = AudioStreamMetricsCollector(
+            sampleRate: format.sampleRate,
+            channelCount: channelCount
+        )
+        let floatGain = Float(safeGain)
+        var lowerBound: Float = -0.98
+        var upperBound: Float = 0.98
         while input.framePosition < input.length {
             try Task.checkCancellation()
             buffer.frameLength = 0
@@ -380,13 +347,13 @@ final class VoiceAudioProcessor: @unchecked Sendable {
                 throw VoiceAudioProcessorError.unsupportedFormat
             }
             for channel in 0..<channelCount {
-                for frame in 0..<frameCount {
-                    let amplified = Double(channels[channel][frame]) * safeGain
-                    channels[channel][frame] = Float(min(max(amplified, -0.98), 0.98))
-                }
+                vDSP_vsmul(channels[channel], 1, [floatGain], channels[channel], 1, vDSP_Length(frameCount))
+                vDSP_vclip(channels[channel], 1, &lowerBound, &upperBound, channels[channel], 1, vDSP_Length(frameCount))
             }
+            collector.append(channels: channels, frameCount: frameCount)
             try output.write(from: buffer)
         }
+        return collector.finish()
     }
 
     private static func supportedFormat(_ format: AVAudioFormat) throws -> AVAudioFormat {
@@ -513,3 +480,81 @@ private struct BiquadFilter {
         return output
     }
 }
+
+private struct AudioStreamMetricsCollector {
+    let sampleRate: Double
+    let channelCount: Int
+    let framesPerBlock: Int
+    var blockEnergies: [Double] = []
+    var noiseBlockEnergies: [Double] = []
+    var blockEnergy = 0.0
+    var noiseBlockEnergy = 0.0
+    var blockFrameCount = 0
+    var totalFrames: Int64 = 0
+    var peak = 0.0
+    var loudnessFilters: [KWeightingFilter]
+
+    init(sampleRate: Double, channelCount: Int) {
+        self.sampleRate = sampleRate
+        self.channelCount = channelCount
+        self.framesPerBlock = max(Int(sampleRate * 0.1), 1)
+        self.loudnessFilters = (0..<channelCount).map { _ in
+            KWeightingFilter(sampleRate: sampleRate)
+        }
+    }
+
+    mutating func append(channels: UnsafePointer<UnsafeMutablePointer<Float>>, frameCount: Int) {
+        totalFrames += Int64(frameCount)
+        for frame in 0..<frameCount {
+            var frameEnergy = 0.0
+            for channel in 0..<channelCount {
+                let sample = Double(channels[channel][frame])
+                peak = max(peak, abs(sample))
+                noiseBlockEnergy += sample * sample
+                let weighted = loudnessFilters[channel].process(sample)
+                frameEnergy += weighted * weighted
+            }
+            blockEnergy += frameEnergy
+            blockFrameCount += 1
+            if blockFrameCount == framesPerBlock {
+                blockEnergies.append(blockEnergy / Double(blockFrameCount))
+                noiseBlockEnergies.append(noiseBlockEnergy / Double(blockFrameCount))
+                blockEnergy = 0
+                noiseBlockEnergy = 0
+                blockFrameCount = 0
+            }
+        }
+    }
+
+    func finish() -> AudioSignalMetrics {
+        var finalBlockEnergies = blockEnergies
+        var finalNoiseBlockEnergies = noiseBlockEnergies
+        if blockFrameCount > 0 {
+            finalBlockEnergies.append(blockEnergy / Double(blockFrameCount))
+            finalNoiseBlockEnergies.append(noiseBlockEnergy / Double(blockFrameCount))
+        }
+        let integrated = VoiceAudioProcessor.integratedLoudness(from: finalBlockEnergies)
+        let channelDivisor = Double(max(channelCount, 1))
+        let audibleLevels = finalNoiseBlockEnergies
+            .map { 10 * log10(max($0 / channelDivisor, 1e-12)) }
+            .filter { $0 > -90 }
+            .sorted()
+        let noiseFloor: Double
+        if audibleLevels.isEmpty {
+            noiseFloor = -90
+        } else {
+            let index = min(
+                Int(Double(audibleLevels.count - 1) * 0.20),
+                audibleLevels.count - 1
+            )
+            noiseFloor = audibleLevels[index]
+        }
+        return AudioSignalMetrics(
+            durationSeconds: sampleRate > 0 ? Double(totalFrames) / sampleRate : 0,
+            integratedLoudnessLUFS: integrated,
+            noiseFloorDecibels: noiseFloor,
+            peakAmplitude: peak
+        )
+    }
+}
+

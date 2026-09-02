@@ -1,7 +1,9 @@
 import Foundation
 import LensCore
+import os
 
 actor LocalDiagnosticLog {
+    private static let logger = Logger(subsystem: "app.lens", category: "diagnostics")
     static let defaultDirectory = FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Lens/diagnostics", isDirectory: true)
@@ -37,7 +39,19 @@ actor LocalDiagnosticLog {
         level: DiagnosticLevel = .info,
         metadata: [String: String] = [:]
     ) {
-        try? append(DiagnosticEvent(level: level, code: code, metadata: metadata))
+        do {
+            try append(DiagnosticEvent(level: level, code: code, metadata: metadata))
+        } catch {
+            Self.logger.error("Failed to persist diagnostic \(code, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
+        switch level {
+        case .error:
+            Self.logger.error("\(code, privacy: .public)")
+        case .warning:
+            Self.logger.warning("\(code, privacy: .public)")
+        case .info:
+            Self.logger.info("\(code, privacy: .public)")
+        }
     }
 
     func append(_ event: DiagnosticEvent) throws {

@@ -132,6 +132,9 @@ private final class ScreenCaptureOutputRouter: NSObject, SCStreamOutput,
                 didOutputSampleBuffer: sampleBuffer,
                 of: type
             )
+            if let start = videoWriter.synchronizedFirstVideoTime() {
+                systemAudioWriter?.setVideoStartTime(start)
+            }
         case .audio:
             metricsLock.withLock { rawAudioCallbackCount += 1 }
             systemAudioWriter?.stream(
@@ -351,7 +354,9 @@ final class ScreenRecordingService: NSObject {
             )
             return session
         } catch {
-            try? store.markRecordingInterrupted(session)
+            LensFailureLog.ignoringFailure("recording.mark_interrupted_failed") {
+                try store.markRecordingInterrupted(session)
+            }
             clearSession()
             throw error
         }
@@ -420,7 +425,9 @@ final class ScreenRecordingService: NSObject {
             isPaused = false
         } catch {
             if !paths.containsNonemptyFile {
-                try? store.discardRecordingSegment(index: segmentIndex, from: session)
+                LensFailureLog.ignoringFailure("recording.discard_segment_failed") {
+                    try store.discardRecordingSegment(index: segmentIndex, from: session)
+                }
             }
             throw error
         }
@@ -454,7 +461,9 @@ final class ScreenRecordingService: NSObject {
                 $0 + ($1.durationSeconds ?? 0)
             }
             // 自动处理失败绝不能让已经完成的原始录屏变成失败状态。
-            _ = try? store.writeAutoEditPlan(for: session, durationSeconds: duration)
+            _ = LensFailureLog.optional("recording.edit_plan_write_failed") {
+                try store.writeAutoEditPlan(for: session, durationSeconds: duration)
+            }
             let saved = try store.finalizeRecording(session, durationSeconds: duration)
             let report = await artifactValidator.validate(
                 session: session,
@@ -467,17 +476,21 @@ final class ScreenRecordingService: NSObject {
                 interruptedOptionalTracks: interruptedRawTrackKinds
             )
             lastRecordingHealthReport = report
-            let validated = (try? store.writeRecordingHealthReport(
-                report,
-                to: session.packageURL
-            )) ?? saved
+            let validated = LensFailureLog.optional("recording.health_report_write_failed") {
+                try store.writeRecordingHealthReport(
+                    report,
+                    to: session.packageURL
+                )
+            } ?? saved
             clearSession()
             return validated
         } catch {
             await pointerRecorder.stop()
             await cameraRecorder.cancel()
             microphoneRecorder.cancel()
-            try? store.markRecordingInterrupted(session)
+            LensFailureLog.ignoringFailure("recording.mark_interrupted_failed") {
+                try store.markRecordingInterrupted(session)
+            }
             clearSession()
             throw error
         }
@@ -507,7 +520,9 @@ final class ScreenRecordingService: NSObject {
             await pointerRecorder.stop()
             await cameraRecorder.cancel()
             microphoneRecorder.cancel()
-            try? store.markRecordingInterrupted(session)
+            LensFailureLog.ignoringFailure("recording.mark_interrupted_failed") {
+                try store.markRecordingInterrupted(session)
+            }
             clearSession()
             throw error
         }
@@ -563,9 +578,11 @@ final class ScreenRecordingService: NSObject {
                 // later launch. Preserve the package but quarantine it from the
                 // retry queue; nonempty yet currently unreadable media remains
                 // interrupted so a future app update can try again.
-                try? store.markRecordingRecoveryFailed(
-                    packageURL: candidate.packageURL
-                )
+                LensFailureLog.ignoringFailure("recording.mark_recovery_failed") {
+                    try store.markRecordingRecoveryFailed(
+                        packageURL: candidate.packageURL
+                    )
+                }
             }
             throw ScreenRecordingError.recordingDidNotFinalize
         }
@@ -579,7 +596,9 @@ final class ScreenRecordingService: NSObject {
         let duration = completedSegments.reduce(0) {
             $0 + ($1.durationSeconds ?? 0)
         }
-        _ = try? store.writeAutoEditPlan(for: session, durationSeconds: duration)
+        _ = LensFailureLog.optional("recording.recovery_edit_plan_write_failed") {
+            try store.writeAutoEditPlan(for: session, durationSeconds: duration)
+        }
         let saved = try store.finalizeRecording(session, durationSeconds: duration)
         let report = await artifactValidator.validate(
             session: session,
@@ -596,10 +615,12 @@ final class ScreenRecordingService: NSObject {
             ),
             capturePerformance: nil
         )
-        return (try? store.writeRecordingHealthReport(
-            report,
-            to: session.packageURL
-        )) ?? saved
+        return LensFailureLog.optional("recording.recovery_health_report_write_failed") {
+            try store.writeRecordingHealthReport(
+                report,
+                to: session.packageURL
+            )
+        } ?? saved
     }
 
     private func startActiveSegment(
@@ -654,11 +675,11 @@ final class ScreenRecordingService: NSObject {
                     )
                 }
             }
-            try await startCapture(pipeline.stream)
             stream = pipeline.stream
             recordingWriter = pipeline.writer
             systemAudioWriter = pipeline.systemAudioWriter
             captureOutputRouter = pipeline.outputRouter
+            try await startCapture(pipeline.stream)
             currentSegmentPaths = paths
             activeSegmentStartedAtUptime = ProcessInfo.processInfo.systemUptime
             startWindowSourceMonitoring(
@@ -671,6 +692,10 @@ final class ScreenRecordingService: NSObject {
             await cameraRecorder.cancel()
             microphoneRecorder.cancel()
             await pointerRecorder.stop()
+            stream = nil
+            recordingWriter = nil
+            systemAudioWriter = nil
+            captureOutputRouter = nil
             removeEmptyOptionalTracks(paths: paths, session: session)
             throw error
         }
@@ -804,6 +829,23 @@ final class ScreenRecordingService: NSObject {
             if let cameraError = await cameraStopTask.value {
                 recordOptionalTrackInterruption(.camera, error: cameraError)
                 removeEmptyOptionalTrack(role: .camera, paths: paths, session: session)
+            }
+            // Keep a durable playable prefix when the last fragment's trailer
+            // is unreadable instead of failing the whole stop.
+            if let recovered = try? await playableVideoDuration(at: paths.screenURL),
+               recovered >= VideoEditTimeline.minimumSegmentDurationSeconds {
+                _ = LensFailureLog.optional("recording.complete_recovered_segment_failed") {
+                    try store.completeRecordingSegment(
+                    index: paths.index,
+                    durationSeconds: recovered,
+                    in: session
+                    )
+                }
+                accumulatedActiveDuration += recovered
+                systemAudioMeter.reset()
+                microphoneMeter.reset()
+                clearActiveSegment()
+                return
             }
             clearActiveSegment()
             throw error
@@ -1064,7 +1106,8 @@ final class ScreenRecordingService: NSObject {
                     _ = try await segmentAssembler.assembleAudioSegments(
                         urls,
                         outputURL: microphoneURL,
-                        maximumDurations: sources.map(\.1)
+                        maximumDurations: sources.map(\.1),
+                        allowsTrailingCorruption: true
                     )
                     try store.upsertAsset(
                         LensAsset(role: .microphone, relativePath: "raw/microphone.caf"),
@@ -1144,11 +1187,13 @@ final class ScreenRecordingService: NSObject {
     ) {
         let url = role == .microphone ? paths.microphoneURL : paths.cameraURL
         guard let url, !url.isNonemptyFile else { return }
-        try? store.removeRecordingSegmentMedia(
+        LensFailureLog.ignoringFailure("recording.remove_empty_optional_track_failed") {
+            try store.removeRecordingSegmentMedia(
             role: role,
             segmentIndex: paths.index,
             from: session
-        )
+            )
+        }
     }
 
     /// A recorder can create a nonempty but unusable container before its
@@ -1160,11 +1205,13 @@ final class ScreenRecordingService: NSObject {
         paths: RecordingSegmentPaths,
         session: RecordingLensSession
     ) {
-        try? store.removeRecordingSegmentMedia(
+        LensFailureLog.ignoringFailure("recording.remove_empty_optional_track_failed") {
+            try store.removeRecordingSegmentMedia(
             role: role,
             segmentIndex: paths.index,
             from: session
-        )
+            )
+        }
     }
 
     private func validateNonemptyFile(at url: URL) throws {

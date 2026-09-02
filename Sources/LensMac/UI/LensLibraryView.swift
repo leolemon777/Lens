@@ -37,27 +37,8 @@ struct LensLibraryView: View {
 
     private var header: some View {
         HStack(spacing: 11) {
-            // A neutral glass chip carrying the drawn orb mark, so the header
-            // anchors to the app icon's lens instead of a generic grid glyph.
-            ZStack {
-                Circle()
-                    .fill(.primary.opacity(0.06))
-                Circle()
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [
-                                .white.opacity(0.20),
-                                .white.opacity(0.05),
-                                LensGlassPalette.ice.opacity(0.16)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-                LensBrandMark()
-            }
-            .frame(width: 38, height: 38)
+            LensBrandMark(diameter: 38)
+                .frame(width: 38, height: 38)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Lens 库")
                     .font(.system(size: LensType.title, weight: .semibold))
@@ -86,7 +67,7 @@ struct LensLibraryView: View {
                     .accessibilityLabel("清除搜索")
                 }
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, LensSpacing.inset)
             .padding(.vertical, 7)
             .background(.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 10))
             Button(action: model.reload) {
@@ -129,7 +110,7 @@ struct LensLibraryView: View {
             .accessibilityLabel("关闭 Lens 库")
             .keyboardShortcut(.cancelAction)
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, LensSpacing.section)
         .padding(.vertical, 13)
         .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius)
     }
@@ -166,7 +147,7 @@ struct LensLibraryView: View {
             }
         }
         .font(.system(size: LensType.caption, weight: .medium))
-        .padding(.horizontal, 18)
+        .padding(.horizontal, LensSpacing.section)
         .padding(.vertical, 9)
         .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius)
     }
@@ -207,7 +188,7 @@ struct LensLibraryView: View {
                         )
                     }
                 }
-                .padding(18)
+                .padding(LensSpacing.section)
             }
             .background(Color.black.opacity(0.035))
         }
@@ -288,7 +269,7 @@ private struct LensLibraryCard: View {
             } icon: {
                 Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
             }
-            .foregroundStyle(.orange)
+            .foregroundStyle(LensGlassPalette.warning)
 
             Text(recoveryDetail(recovery))
                 .font(.system(size: LensType.micro, weight: .medium))
@@ -308,7 +289,7 @@ private struct LensLibraryCard: View {
         }
         .padding(7)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(LensGlassPalette.warning.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .accessibilityElement(children: .contain)
     }
 
@@ -397,6 +378,63 @@ private struct LensLibraryCard: View {
                 // the slack here pins every card's actions to its bottom edge.
                 Spacer(minLength: 0)
 
+                // Secondary actions live on an independent row above the primary tools
+                // so revealing them never inflates the card width past its grid cell.
+                HStack(spacing: 5) {
+                    if entry.manifest.kind == .screenshot {
+                        cardButton("复制", symbol: "doc.on.doc", action: onCopy)
+                            .focused($focusedSecondaryAction, equals: .copy)
+                        if let fileURL = QuickAccessFileTransfer.bestFileURL(for: entry) {
+                            cardButton("分享", symbol: "square.and.arrow.up") {
+                                LensFileSharing.present(fileURL: fileURL)
+                            }
+                            .help("打开 macOS 系统分享面板发送当前 PNG，不会自动上传")
+                            .accessibilityHint("打开 macOS 系统分享面板发送当前 PNG，不会自动上传")
+                            .focused($focusedSecondaryAction, equals: .share)
+                        }
+                        cardButton("标注", symbol: "pencil.tip", action: onAnnotate)
+                            .focused($focusedSecondaryAction, equals: .annotate)
+                        if entry.ocrText?.isEmpty == false {
+                            cardButton("文字", symbol: "text.viewfinder", action: onShowOCR)
+                                .focused($focusedSecondaryAction, equals: .ocr)
+                        }
+                    } else {
+                        cardButton("复制文件", symbol: "doc.on.doc", action: onCopy)
+                            .focused($focusedSecondaryAction, equals: .copy)
+                        if let fileURL = QuickAccessFileTransfer.bestFileURL(for: entry) {
+                            cardButton("分享", symbol: "square.and.arrow.up") {
+                                LensFileSharing.present(fileURL: fileURL)
+                            }
+                            .help("打开 macOS 系统分享面板发送当前视频，不会自动上传")
+                            .accessibilityHint("打开 macOS 系统分享面板发送当前视频，不会自动上传")
+                            .focused($focusedSecondaryAction, equals: .share)
+                        }
+                        Button(action: onTranscribe) {
+                            HStack(spacing: 4) {
+                                if isTranscribing {
+                                    ProgressView()
+                                        .controlSize(.mini)
+                                } else {
+                                    Image(systemName: "waveform.badge.magnifyingglass")
+                                }
+                                Text(entry.transcriptText?.isEmpty == false ? "重转写" : "转写")
+                            }
+                            .font(.system(size: LensType.micro, weight: .semibold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 5)
+                            .background(.primary.opacity(0.055), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(isTranscribing)
+                        .focused($focusedSecondaryAction, equals: .transcribe)
+                    }
+                }
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: showsSecondaryActions ? nil : 0, alignment: .leading)
+                .clipped()
+                .opacity(showsSecondaryActions ? 1 : 0)
+
                 HStack(spacing: 7) {
                     cardButton(
                         entry.manifest.kind == .screenshot ? "打开" : "编辑",
@@ -405,64 +443,6 @@ private struct LensLibraryCard: View {
                             : "timeline.selection",
                         action: onOpen
                     )
-                    HStack(spacing: 7) {
-                        if entry.manifest.kind == .screenshot {
-                            cardButton("复制", symbol: "doc.on.doc", action: onCopy)
-                                .focused($focusedSecondaryAction, equals: .copy)
-                            if let fileURL = QuickAccessFileTransfer.bestFileURL(for: entry) {
-                                cardButton("分享", symbol: "square.and.arrow.up") {
-                                    LensFileSharing.present(fileURL: fileURL)
-                                }
-                                .help("打开 macOS 系统分享面板发送当前 PNG，不会自动上传")
-                                .accessibilityHint("打开 macOS 系统分享面板发送当前 PNG，不会自动上传")
-                                .focused($focusedSecondaryAction, equals: .share)
-                            }
-                            cardButton("标注", symbol: "pencil.tip", action: onAnnotate)
-                                .focused($focusedSecondaryAction, equals: .annotate)
-                            if entry.ocrText?.isEmpty == false {
-                                cardButton("文字", symbol: "text.viewfinder", action: onShowOCR)
-                                    .focused($focusedSecondaryAction, equals: .ocr)
-                            }
-                        } else {
-                            cardButton("复制文件", symbol: "doc.on.doc", action: onCopy)
-                                .focused($focusedSecondaryAction, equals: .copy)
-                            if let fileURL = QuickAccessFileTransfer.bestFileURL(for: entry) {
-                                cardButton("分享", symbol: "square.and.arrow.up") {
-                                    LensFileSharing.present(fileURL: fileURL)
-                                }
-                                .help("打开 macOS 系统分享面板发送当前视频，不会自动上传")
-                                .accessibilityHint("打开 macOS 系统分享面板发送当前视频，不会自动上传")
-                                .focused($focusedSecondaryAction, equals: .share)
-                            }
-                            Button(action: onTranscribe) {
-                                HStack(spacing: 4) {
-                                    if isTranscribing {
-                                        ProgressView()
-                                            .controlSize(.mini)
-                                    } else {
-                                        Image(systemName: "waveform.badge.magnifyingglass")
-                                    }
-                                    Text(entry.transcriptText?.isEmpty == false ? "重转写" : "转写")
-                                }
-                                .font(.system(size: LensType.micro, weight: .semibold))
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 5)
-                                .background(.primary.opacity(0.055), in: Capsule())
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(isTranscribing)
-                            .focused($focusedSecondaryAction, equals: .transcribe)
-                        }
-                    }
-                    // Hidden actions must not reserve layout width: four
-                    // buttons held the row at ~290pt, which became the card's
-                    // minimum width and pushed the trailing tools into the
-                    // neighbouring card. Collapsing to zero width keeps them
-                    // in the tree for focus/VoiceOver, and focus or hover
-                    // reopens the group (see `showsSecondaryActions`).
-                    .frame(width: showsSecondaryActions ? nil : 0, alignment: .leading)
-                    .clipped()
-                    .opacity(showsSecondaryActions ? 1 : 0)
                     Spacer(minLength: 0)
                     organizationButton
                     Button(action: onReveal) {
@@ -476,7 +456,7 @@ private struct LensLibraryCard: View {
                         Image(systemName: "trash")
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.red.opacity(canDelete ? 0.90 : 0.35))
+                    .foregroundStyle(LensGlassPalette.recording.opacity(canDelete ? 0.90 : 0.35))
                     .disabled(!canDelete)
                     .help(canDelete ? "移到废纸篓" : "正在录制或处理，暂时不能删除")
                     .accessibilityLabel("删除：\(displayTitle)")
@@ -484,8 +464,9 @@ private struct LensLibraryCard: View {
             }
             .padding(11)
         }
-        // Stretch to the grid row's height so every card in a row shares one
-        // baseline instead of being centred at its own natural height.
+        // Strict boundary: stretch to grid row height, but cap at the maximum
+        // cell width so cards can never overflow horizontally into neighbours.
+        .frame(maxWidth: 270)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
@@ -542,43 +523,56 @@ private struct LensLibraryCard: View {
     private var preview: some View {
         if let fileURL = QuickAccessFileTransfer.bestFileURL(for: entry) {
             basePreview
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onOpen)
                 .overlay(alignment: .bottomTrailing) {
                     Image(systemName: "arrow.up.forward.app.fill")
                         .font(.system(size: LensIcon.small, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(5)
-                        .background(.black.opacity(0.58), in: Circle())
+                        .background(.black.opacity(0.68), in: Circle())
                         .padding(7)
-                        .accessibilityHidden(true)
-                }
-                .onDrag {
-                    let fallbackImage = NSImage(contentsOf: entry.displayAssetURL)
-                        ?? NSWorkspace.shared.icon(forFile: fileURL.path)
-                    return QuickAccessFileTransfer.itemProvider(
-                        fileURL: fileURL,
-                        suggestedName: QuickAccessFileTransfer.suggestedFileName(
-                            for: entry,
-                            fileURL: fileURL
-                        ),
-                        fallbackImage: fallbackImage
-                    )
-                } preview: {
-                    let fallbackImage = NSImage(contentsOf: entry.displayAssetURL)
-                        ?? NSWorkspace.shared.icon(forFile: fileURL.path)
-                    Image(nsImage: fallbackImage)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 180, height: 110)
-                        .clipShape(RoundedRectangle(cornerRadius: LensGlassMetrics.controlCornerRadius, style: .continuous))
+                        .contentShape(Circle())
+                        .onDrag {
+                            let fallbackImage = NSImage(contentsOf: entry.displayAssetURL)
+                                ?? NSWorkspace.shared.icon(forFile: fileURL.path)
+                            return QuickAccessFileTransfer.itemProvider(
+                                fileURL: fileURL,
+                                suggestedName: QuickAccessFileTransfer.suggestedFileName(
+                                    for: entry,
+                                    fileURL: fileURL
+                                ),
+                                fallbackImage: fallbackImage
+                            )
+                        } preview: {
+                            let fallbackImage = NSImage(contentsOf: entry.displayAssetURL)
+                                ?? NSWorkspace.shared.icon(forFile: fileURL.path)
+                            Image(nsImage: fallbackImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 180, height: 110)
+                                .clipShape(RoundedRectangle(cornerRadius: LensGlassMetrics.controlCornerRadius, style: .continuous))
+                        }
+                        .help(entry.manifest.kind == .recording
+                            ? "拖到 Finder、聊天或文档中发送视频"
+                            : "拖到 Finder、聊天或文档中发送 PNG")
+                        .accessibilityLabel(entry.manifest.kind == .recording
+                            ? "拖到 Finder、聊天或文档中发送视频"
+                            : "拖到 Finder、聊天或文档中发送 PNG")
+                        .accessibilityHint(entry.manifest.kind == .recording
+                            ? "按住并拖动此图标可发送视频文件"
+                            : "按住并拖动此图标可发送 PNG 文件")
                 }
                 .help(entry.manifest.kind == .recording
-                    ? "拖到 Finder、聊天或文档中发送视频"
-                    : "拖到 Finder、聊天或文档中发送 PNG")
-                .accessibilityHint(entry.manifest.kind == .recording
-                    ? "按住并拖动预览可发送视频文件"
-                    : "按住并拖动预览可发送 PNG 文件")
+                    ? "点击查看或编辑录屏"
+                    : "点击查看原图")
         } else {
             basePreview
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onOpen)
+                .help(entry.manifest.kind == .recording
+                    ? "点击查看或编辑录屏"
+                    : "点击查看原图")
         }
     }
 
@@ -630,7 +624,7 @@ private struct LensLibraryCard: View {
             }
             ForEach(Array(metadataBadges.prefix(badgeLimit)), id: \.text) { badge in
                 Label(badge.text, systemImage: badge.symbol)
-                    .foregroundStyle(badge.isWarning ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(badge.isWarning ? AnyShapeStyle(LensGlassPalette.warning) : AnyShapeStyle(.secondary))
             }
         }
         .lineLimit(1)
@@ -665,9 +659,9 @@ private struct LensLibraryCard: View {
 
     private var stateColor: Color {
         switch entry.manifest.state {
-        case .ready: .green
-        case .capturing, .processing: .orange
-        case .interrupted, .failed: .red
+        case .ready: LensGlassPalette.success
+        case .capturing, .processing: LensGlassPalette.warning
+        case .interrupted, .failed: LensGlassPalette.recording
         }
     }
 
@@ -899,7 +893,7 @@ struct LensInsightsPopover: View {
                                 }
                             }
                         }
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(LensGlassPalette.warning)
                     }
                 }
 
@@ -947,7 +941,7 @@ struct LensInsightsPopover: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(LensSpacing.l)
         }
         .frame(width: 380, height: 520)
         .lensGlassSurface(role: .window, cornerRadius: LensGlassMetrics.windowCornerRadius)
@@ -977,7 +971,7 @@ struct LensInsightsPopover: View {
                 .font(.system(size: LensType.micro, weight: .medium))
                 .foregroundStyle(.secondary)
         }
-        .padding(10)
+        .padding(LensSpacing.inset)
         .background(LensGlassPalette.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: LensGlassMetrics.controlCornerRadius))
     }
 
@@ -1010,7 +1004,7 @@ struct LensInsightsPopover: View {
                 .foregroundStyle(.secondary)
             content()
         }
-        .padding(10)
+        .padding(LensSpacing.inset)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: LensGlassMetrics.controlCornerRadius))
     }

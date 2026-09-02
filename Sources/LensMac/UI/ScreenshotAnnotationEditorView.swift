@@ -76,7 +76,7 @@ struct ScreenshotAnnotationEditorView: View {
                         : "exclamationmark.triangle.fill"
                 )
                 .font(.system(size: LensType.micro, weight: .semibold))
-                .foregroundStyle(feedback == .copied ? .green : .orange)
+                .foregroundStyle(feedback == .copied ? LensGlassPalette.success : LensGlassPalette.warning)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 6)
                 .background(.primary.opacity(0.055), in: Capsule())
@@ -144,8 +144,8 @@ struct ScreenshotAnnotationEditorView: View {
             .disabled(model.isRendering)
             .keyboardShortcut(.return, modifiers: .command)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        .padding(.horizontal, LensSpacing.section)
+        .padding(.vertical, LensSpacing.m)
         .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius)
     }
 
@@ -180,10 +180,10 @@ struct ScreenshotAnnotationEditorView: View {
                         .font(.system(size: LensType.micro, weight: .semibold))
                         .padding(.horizontal, 7)
                         .padding(.vertical, 6)
-                        .background(Color.orange.opacity(0.18), in: Capsule())
+                        .background(Color.orange.opacity(0.18), in: Capsule()) // lens-token-exempt: 敏感信息建议是内容状态
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.orange)
+                .foregroundStyle(.orange) // lens-token-exempt: 敏感信息建议是内容状态
                 .accessibilityLabel("复核 \(model.suggestedRedactionCount) 处可能的敏感信息")
                 .accessibilityHint("打开逐项复核面板；确认后才会加入可移动、可撤销的像素化标注")
                 .help("对 OCR 识别到的邮箱、电话、证件号、卡号与凭据生成可撤销的像素化标注；像素化仅适合演示，不等于安全脱敏")
@@ -310,7 +310,7 @@ struct ScreenshotAnnotationEditorView: View {
             .buttonStyle(.borderless)
             .disabled(model.annotations.isEmpty)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, LensSpacing.l)
         .padding(.vertical, 9)
         .lensGlassSurface(role: .chrome, cornerRadius: LensGlassMetrics.chromeCornerRadius)
     }
@@ -331,7 +331,7 @@ struct ScreenshotAnnotationEditorView: View {
 
     private var annotationPrivacySubtitleColor: Color {
         model.suggestedRedactionCount > 0 || model.annotations.contains(where: { $0.kind == .pixelate })
-            ? .orange
+            ? LensGlassPalette.warning
             : .secondary
     }
 
@@ -501,7 +501,7 @@ struct ScreenshotAnnotationEditorView: View {
                 Spacer()
                 Text("\(model.suggestedRedactionCount) 处")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.orange) // lens-token-exempt: 敏感信息建议是内容状态
             }
             Text("橙色虚线框只表示 OCR 建议。请先检查位置，再逐项应用；原图始终保留，像素化不等于安全脱敏。")
                 .font(.system(size: LensType.micro, weight: .medium))
@@ -516,7 +516,7 @@ struct ScreenshotAnnotationEditorView: View {
                                 .font(.system(size: LensType.micro, weight: .bold, design: .monospaced))
                                 .foregroundStyle(.white)
                                 .frame(width: 20, height: 20)
-                                .background(.orange, in: Circle())
+                                .background(LensGlassPalette.warning, in: Circle())
                             VStack(alignment: .leading, spacing: 1) {
                                 Text("建议 \(index + 1)")
                                     .font(.system(size: LensType.micro, weight: .semibold))
@@ -534,7 +534,7 @@ struct ScreenshotAnnotationEditorView: View {
                             }
                             .controlSize(.mini)
                             .buttonStyle(.borderedProminent)
-                            .tint(.orange)
+                            .tint(LensGlassPalette.warning)
                         }
                         .padding(.vertical, 3)
                     }
@@ -548,7 +548,7 @@ struct ScreenshotAnnotationEditorView: View {
                     showsRedactionReview = false
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.orange)
+                .tint(LensGlassPalette.warning)
                 Button("关闭") {
                     showsRedactionReview = false
                 }
@@ -556,7 +556,7 @@ struct ScreenshotAnnotationEditorView: View {
                 Spacer()
             }
         }
-        .padding(14)
+        .padding(LensSpacing.card)
         .frame(width: 360)
     }
 
@@ -639,15 +639,15 @@ struct ScreenshotAnnotationEditorView: View {
         let rect = viewRect(annotation.bounds, in: imageRect).insetBy(dx: -2, dy: -2)
         context.fill(
             Path(roundedRect: rect, cornerRadius: 5), // lens-token-exempt: 画布内容渲染（待复核建议框与序号徽标），非 UI 表面
-            with: .color(.orange.opacity(0.10))
+            with: .color(.orange.opacity(0.10)) // lens-token-exempt: 画布内容渲染（待复核建议填充），非 UI 表面
         )
         context.stroke(
             Path(roundedRect: rect, cornerRadius: 5), // lens-token-exempt: 同上，画布内容渲染
-            with: .color(.orange.opacity(0.95)),
+            with: .color(.orange.opacity(0.95)), // lens-token-exempt: 画布内容渲染（待复核建议描边），非 UI 表面
             style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
         )
         let badge = CGRect(x: rect.minX, y: rect.minY, width: 18, height: 18)
-        context.fill(Path(ellipseIn: badge), with: .color(.orange))
+        context.fill(Path(ellipseIn: badge), with: .color(.orange)) // lens-token-exempt: 画布内容渲染（待复核序号徽标），非 UI 表面
         context.draw(
             Text("\(index + 1)")
                 .font(.system(size: 9, weight: .bold, design: .monospaced)) // lens-token-exempt: 画布徽标文字，非 UI 表面
@@ -837,7 +837,6 @@ struct ScreenshotAnnotationEditorView: View {
         )
     }
 
-    // lens-token-exempt: 用户标注调色板，供用户选择标注颜色，非 UI 表面
     private var editorColors: [(name: String, color: LensColor)] {
         [
             ("红色", .red),

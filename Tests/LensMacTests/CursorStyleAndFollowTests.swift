@@ -6,16 +6,29 @@ import XCTest
 final class CursorStyleAndFollowTests: XCTestCase {
     // MARK: - 指针样式
 
-    func testAppearanceExposesSixStylesWithNewProceduralOnes() {
-        XCTAssertEqual(AutoEditPlan.Cursor.Appearance.allCases.count, 6)
+    func testAppearanceExposesAllThirteenStyles() {
+        XCTAssertEqual(AutoEditPlan.Cursor.Appearance.allCases.count, 13)
         XCTAssertTrue(AutoEditPlan.Cursor.Appearance.allCases.contains(.ring))
         XCTAssertTrue(AutoEditPlan.Cursor.Appearance.allCases.contains(.glowDot))
+        XCTAssertTrue(AutoEditPlan.Cursor.Appearance.allCases.contains(.pointingHand))
+        XCTAssertTrue(AutoEditPlan.Cursor.Appearance.allCases.contains(.magicWand))
+        XCTAssertTrue(AutoEditPlan.Cursor.Appearance.allCases.contains(.laser))
+        XCTAssertTrue(AutoEditPlan.Cursor.Appearance.allCases.contains(.pixelHand))
+        XCTAssertTrue(AutoEditPlan.Cursor.Appearance.allCases.contains(.highlighterPencil))
+        XCTAssertTrue(AutoEditPlan.Cursor.Appearance.allCases.contains(.crosshairHUD))
+        XCTAssertTrue(AutoEditPlan.Cursor.Appearance.allCases.contains(.rocket))
     }
 
     func testNewAppearanceStylesDecodeFromRawValues() throws {
         let data = Data(#"{"appearance":"ring"}"#.utf8)
         let cursor = try JSONDecoder().decode(AutoEditPlan.Cursor.self, from: data)
         XCTAssertEqual(cursor.appearance, .ring)
+    }
+
+    func testUnknownAppearanceDoesNotFailCursorDecoding() throws {
+        let data = Data(#"{"appearance":"not-a-real-style"}"#.utf8)
+        let cursor = try JSONDecoder().decode(AutoEditPlan.Cursor.self, from: data)
+        XCTAssertEqual(cursor.appearance, .macOS)
     }
 
     @MainActor
@@ -49,6 +62,55 @@ final class CursorStyleAndFollowTests: XCTestCase {
                 outputURL: outputURL,
                 plan: plan
             )
+            let size = try FileManager.default.attributesOfItem(
+                atPath: outputURL.path
+            )[.size] as? NSNumber
+            XCTAssertGreaterThan(size?.int64Value ?? 0, 1_000, "\(appearance)")
+        }
+    }
+
+    @MainActor
+    func testPointingHandMagicWandAndLaserAppearancesRenderSuccessfully() async throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "LensCursorStyleNewTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inputURL = directory.appendingPathComponent("input.mp4")
+
+        for appearance in [
+            AutoEditPlan.Cursor.Appearance.pointingHand,
+            .magicWand,
+            .laser,
+            .pixelHand,
+            .highlighterPencil,
+            .crosshairHUD,
+            .rocket
+        ] {
+            let outputURL = directory.appendingPathComponent("\(appearance.rawValue).mp4")
+            try? FileManager.default.removeItem(at: inputURL)
+            try await SyntheticVideoFactory.makeVideo(
+                at: inputURL,
+                frameCount: 12,
+                framesPerSecond: 24
+            )
+            var plan = AutoEditPlan()
+            plan.cursor.appearance = appearance
+            plan.cursor.keyframes = [
+                AutoEditPlan.CursorKeyframe(time: 0, position: LensPoint(x: 0.2, y: 0.3)),
+                AutoEditPlan.CursorKeyframe(time: 0.5, position: LensPoint(x: 0.7, y: 0.6))
+            ]
+
+            let renderer = AutoPreviewRenderer()
+            let renderedURL = try await renderer.render(
+                inputURL: inputURL,
+                outputURL: outputURL,
+                plan: plan
+            )
+            XCTAssertTrue(FileManager.default.fileExists(atPath: renderedURL.path))
             let size = try FileManager.default.attributesOfItem(
                 atPath: outputURL.path
             )[.size] as? NSNumber
@@ -96,6 +158,24 @@ final class CursorStyleAndFollowTests: XCTestCase {
         XCTAssertEqual(
             cursor.resolvedSmoothingParameters.windowMilliseconds,
             40
+        )
+    }
+
+    func testLiveOverlayUsesResolvedFollowParameters() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent(
+                    "Sources/LensMac/UI/VideoEditorCursorOverlayView.swift"
+                ),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("cursor.resolvedSmoothingParameters.smoothing"))
+        XCTAssertTrue(source.contains("cursor.resolvedSmoothingParameters.windowMilliseconds"))
+        XCTAssertFalse(
+            source.contains("smoothing: cursor.smoothing,\n                  smoothingWindowMilliseconds: cursor.smoothingWindowMilliseconds")
         )
     }
 

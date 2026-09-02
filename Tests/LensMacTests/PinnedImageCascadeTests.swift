@@ -87,6 +87,52 @@ final class PinnedImageCascadeTests: XCTestCase {
         XCTAssertEqual(origin.y, centered.minY - 56)
     }
 
+    /// A pin is a reference kept beside your work. At the previous 520×420 cap
+    /// one pin blanketed whatever sat under it, and several buried each other.
+    func testAPinStartsSmallEnoughToSitBesideTheWorkItReferences() {
+        let cap = CGSize(width: 340, height: 260)
+        let wide = PinnedImagePresentation(
+            imageSize: CGSize(width: 2_560, height: 1_440),
+            maximumInitialSize: cap
+        )
+        XCTAssertLessThanOrEqual(wide.windowSize.width, cap.width)
+        XCTAssertLessThanOrEqual(wide.windowSize.height, cap.height)
+
+        let tall = PinnedImagePresentation(
+            imageSize: CGSize(width: 600, height: 2_000),
+            maximumInitialSize: cap
+        )
+        XCTAssertLessThanOrEqual(tall.windowSize.width, cap.width)
+        XCTAssertLessThanOrEqual(tall.windowSize.height, cap.height)
+    }
+
+    /// Shrinking the default must not cost the ability to inspect a pin: the
+    /// zoom range is relative to the fitted scale, so it scales down with it.
+    func testASmallerDefaultStillZoomsUpToTheSameRelativeRange() {
+        var pin = PinnedImagePresentation(
+            imageSize: CGSize(width: 2_560, height: 1_440),
+            maximumInitialSize: CGSize(width: 340, height: 260)
+        )
+        let fitted = pin.windowSize.width
+        pin.zoom(by: 8)
+        XCTAssertGreaterThan(
+            pin.windowSize.width,
+            fitted * 3,
+            "a pin must still zoom well past its fitted size"
+        )
+    }
+
+    /// A capture already smaller than the cap is shown at its true size rather
+    /// than being blown up.
+    func testASmallCaptureIsNotUpscaledToFillTheCap() {
+        let small = PinnedImagePresentation(
+            imageSize: CGSize(width: 160, height: 90),
+            maximumInitialSize: CGSize(width: 340, height: 260)
+        )
+        XCTAssertEqual(small.windowSize.width, 160)
+        XCTAssertEqual(small.windowSize.height, 90)
+    }
+
     private func centeredFrame() -> CGRect {
         CGRect(
             x: visible.midX - 260,

@@ -54,6 +54,16 @@ final class SystemAudioTrackWriter: NSObject, SCStreamOutput, @unchecked Sendabl
     private var appendedSampleCount = 0
     private var firstObservedTime: CMTime?
     private var lastObservedEndTime: CMTime?
+    private var videoStartTime: CMTime?
+
+    func setVideoStartTime(_ time: CMTime) {
+        guard time.isNumeric else { return }
+        outputQueue.async { [self] in
+            if videoStartTime == nil {
+                videoStartTime = time
+            }
+        }
+    }
 
     init(outputURL: URL, levelMeter: AudioLevelMeter? = nil) throws {
         finalOutputURL = outputURL
@@ -181,10 +191,16 @@ final class SystemAudioTrackWriter: NSObject, SCStreamOutput, @unchecked Sendabl
               !isFinishing,
               storedFailure == nil,
               sampleBuffer.presentationTimeStamp.isNumeric else { return }
+        if let videoStartTime, sampleBuffer.presentationTimeStamp < videoStartTime {
+            return
+        }
         let sampleDuration = sampleBuffer.duration.isNumeric
             ? sampleBuffer.duration
             : CMTime(value: 1_024, timescale: 48_000)
         let sampleEnd = sampleBuffer.presentationTimeStamp + sampleDuration
+        let gapBefore = silenceGap(
+            before: sampleBuffer.presentationTimeStamp
+        )
         metricsLock.withLock {
             receivedSampleCount += 1
             if firstObservedTime == nil {
@@ -200,6 +216,16 @@ final class SystemAudioTrackWriter: NSObject, SCStreamOutput, @unchecked Sendabl
                 try finalizeActiveSegment()
             }
             let pcmBuffer = try AudioSampleBufferPCMConverter.convert(sampleBuffer)
+            if let gapBefore, gapBefore > 0.008 {
+                try writeSilence(
+                    seconds: gapBefore,
+                    format: pcmBuffer.format,
+                    at: sampleBuffer.presentationTimeStamp - CMTime(
+                        seconds: gapBefore,
+                        preferredTimescale: 48_000
+                    )
+                )
+            }
             if activeFile == nil {
                 try startSegment(
                     at: sampleBuffer.presentationTimeStamp,
@@ -213,6 +239,39 @@ final class SystemAudioTrackWriter: NSObject, SCStreamOutput, @unchecked Sendabl
                 error.localizedDescription
             )
         }
+    }
+
+    private func silenceGap(before presentationTime: CMTime) -> Double? {
+        if let lastObservedEndTime,
+           presentationTime.isNumeric,
+           lastObservedEndTime.isNumeric,
+           presentationTime > lastObservedEndTime {
+            return (presentationTime - lastObservedEndTime).seconds
+        }
+        if let videoStartTime,
+           firstObservedTime == nil,
+           presentationTime.isNumeric,
+           presentationTime > videoStartTime {
+            return (presentationTime - videoStartTime).seconds
+        }
+        return nil
+    }
+
+    private func writeSilence(
+        seconds: Double,
+        format: AVAudioFormat,
+        at startTime: CMTime
+    ) throws {
+        guard seconds.isFinite, seconds > 0 else { return }
+        let frameCount = AVAudioFrameCount(min(max(seconds * format.sampleRate, 1), 48_000 * 5))
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            return
+        }
+        buffer.frameLength = frameCount
+        if activeFile == nil {
+            try startSegment(at: startTime, format: format)
+        }
+        try activeFile?.write(from: buffer)
     }
 
     private func startSegment(

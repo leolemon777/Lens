@@ -9,9 +9,8 @@ final class RecordingControlWindowController {
     static let panelSize = NSSize(width: 590, height: 110)
 
     private let model = RecordingControlModel()
-    private let panel: RecordingPanel
+    private let panel: LensGlassPanel
     private var levelTimer: Timer?
-    private var storageTimer: Timer?
     private var levelProvider: (() -> (system: Double, microphone: Double))?
     private var eventCaptureHealthProvider: (() -> EventCaptureHealth)?
     private var capturePerformanceProvider: (() -> CapturePerformanceSnapshot?)?
@@ -19,15 +18,12 @@ final class RecordingControlWindowController {
     private var cachedCapturePerformance: CapturePerformanceSnapshot?
     private var lastEventHealthSampleUptime = -Double.infinity
     private var lastPerformanceSampleUptime = -Double.infinity
-    private var storageURL: URL?
-    private var didReportCriticalStorage = false
     private var hasPositionedPanel = false
     var onStop: (() -> Void)?
     var onPauseToggle: (() -> Void)?
     var onDiscardAndRestart: (() -> Void)?
     var onHide: (() -> Void)?
     var onVisibilityChange: ((Bool) -> Void)?
-    var onCriticalStorage: ((Int64?) -> Void)?
 
     var isVisible: Bool { panel.isVisible }
     var panelForTesting: NSPanel { panel }
@@ -36,11 +32,10 @@ final class RecordingControlWindowController {
     var currentWindow: NSWindow { panel }
 
     init() {
-        panel = RecordingPanel(
+        panel = LensGlassPanel(
             contentRect: NSRect(origin: .zero, size: Self.panelSize),
-            styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
+            placement: .bottomCenter,
+            nonactivating: true
         )
         configurePanel()
     }
@@ -50,7 +45,6 @@ final class RecordingControlWindowController {
         capturesSystemAudio: Bool,
         capturesMicrophone: Bool,
         capturesCamera: Bool,
-        storageURL: URL,
         levelProvider: @escaping () -> (system: Double, microphone: Double),
         eventCaptureHealthProvider: @escaping () -> EventCaptureHealth,
         capturePerformanceProvider: @escaping () -> CapturePerformanceSnapshot?
@@ -68,24 +62,21 @@ final class RecordingControlWindowController {
         cachedCapturePerformance = nil
         lastEventHealthSampleUptime = -Double.infinity
         lastPerformanceSampleUptime = -Double.infinity
-        self.storageURL = storageURL
-        didReportCriticalStorage = false
         hasPositionedPanel = false
         startLevelUpdates()
-        startStorageUpdates()
         showExisting()
     }
 
     func showExisting() {
         startLevelUpdates()
-        startStorageUpdates()
         ensurePanelIsOnScreen()
         LensPanelPresenter.present(panel, from: .center)
         onVisibilityChange?(true)
     }
 
     func hide() {
-        stopTimersAndNotifyHidden()
+        stopLevelUpdates()
+        onVisibilityChange?(false)
         LensPanelPresenter.dismiss(panel)
     }
 
@@ -94,15 +85,23 @@ final class RecordingControlWindowController {
     /// `LensPanelPresenter.handoff`, which owns the panel's own fade-out.
     /// Calling both would fight over the same window's animation.
     func prepareForHandoff() {
-        stopTimersAndNotifyHidden()
+        stopLevelUpdates()
+        onVisibilityChange?(false)
     }
 
-    private func stopTimersAndNotifyHidden() {
+    /// Ends live meters for this recording session. Disk monitoring lives on
+    /// ``RecordingStorageMonitor`` so hiding the float cannot disable auto-stop.
+    func endSession() {
+        stopLevelUpdates()
+        levelProvider = nil
+        eventCaptureHealthProvider = nil
+        capturePerformanceProvider = nil
+        onVisibilityChange?(false)
+    }
+
+    private func stopLevelUpdates() {
         levelTimer?.invalidate()
         levelTimer = nil
-        storageTimer?.invalidate()
-        storageTimer = nil
-        onVisibilityChange?(false)
     }
 
     func setPaused(_ paused: Bool) {
@@ -111,6 +110,11 @@ final class RecordingControlWindowController {
 
     func setTransitioning(_ transitioning: Bool) {
         model.isTransitioning = transitioning
+    }
+
+    func beginFinalizing() {
+        model.isFinalizing = true
+        model.isTransitioning = true
     }
 
     func requestDiscardAndRestart() {
@@ -196,70 +200,16 @@ final class RecordingControlWindowController {
         levelTimer = timer
     }
 
-    private func startStorageUpdates() {
-        guard storageTimer == nil, storageURL != nil else { return }
-        updateStorageStatus()
-        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.updateStorageStatus() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        storageTimer = timer
-    }
-
-    private func updateStorageStatus() {
-        let availableBytes = storageURL.flatMap(Self.availableStorageBytes(at:))
-        applyAvailableStorageBytes(availableBytes)
-    }
-
     func applyAvailableStorageBytes(_ availableBytes: Int64?) {
         let level = model.updateAvailableStorageBytes(availableBytes)
-        guard level == .critical, !didReportCriticalStorage else { return }
-        didReportCriticalStorage = true
-        model.isTransitioning = true
-        onCriticalStorage?(availableBytes)
-    }
-
-    nonisolated static func availableStorageBytes(at requestedURL: URL) -> Int64? {
-        var probeURL = requestedURL.standardizedFileURL
-        while !FileManager.default.fileExists(atPath: probeURL.path),
-              probeURL.pathComponents.count > 1 {
-            probeURL.deleteLastPathComponent()
-        }
-        do {
-            let values = try probeURL.resourceValues(forKeys: [
-                .volumeAvailableCapacityForImportantUsageKey,
-                .volumeAvailableCapacityKey
-            ])
-            let importantCapacity = values.volumeAvailableCapacityForImportantUsage
-            let immediateCapacity = values.volumeAvailableCapacity.map(Int64.init)
-            switch (importantCapacity, immediateCapacity) {
-            case let (important?, immediate?):
-                return max(min(important, immediate), 0)
-            case let (important?, nil):
-                return max(important, 0)
-            case let (nil, immediate?):
-                return max(immediate, 0)
-            case (nil, nil):
-                return nil
-            }
-        } catch {
-            return nil
+        if level == .critical {
+            model.isTransitioning = true
         }
     }
 
     private func stop() {
-        guard !model.isTransitioning else { return }
-        hide()
+        guard !model.isTransitioning, !model.isFinalizing else { return }
+        beginFinalizing()
         onStop?()
-    }
-}
-
-private final class RecordingPanel: NSPanel {
-    var onEscape: (() -> Void)?
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-
-    override func cancelOperation(_ sender: Any?) {
-        onEscape?()
     }
 }

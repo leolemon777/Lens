@@ -110,7 +110,7 @@ struct OCRResultView: View {
                     .accessibilityLabel("关闭 OCR 结果")
             }
         }
-        .padding(14)
+        .padding(LensSpacing.card)
         .frame(width: 420, height: model.thumbnail == nil ? 320 : 408)
         .lensGlassSurface(role: .panel, cornerRadius: LensGlassMetrics.panelCornerRadius)
         .padding(22)
@@ -129,7 +129,7 @@ struct OCRResultView: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, minHeight: 148, maxHeight: .infinity, alignment: .leading)
-            .padding(12)
+            .padding(LensSpacing.m)
             .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .accessibilityElement(children: .combine)
             .accessibilityLabel("正在识别文字")
@@ -137,7 +137,7 @@ struct OCRResultView: View {
             TextEditor(text: $model.editedText)
                 .font(.system(size: 13))
                 .scrollContentBackground(.hidden)
-                .padding(8)
+                .padding(LensSpacing.s)
                 .frame(minHeight: 148, maxHeight: .infinity)
                 .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .focused($isEditingText)

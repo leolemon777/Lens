@@ -143,21 +143,56 @@ final class RecordingControlViewTests: XCTestCase {
         let nonexistentChild = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("future-project", isDirectory: true)
-        let available = RecordingControlWindowController.availableStorageBytes(
+        let available = RecordingStorageMonitor.availableStorageBytes(
             at: nonexistentChild
         )
         XCTAssertNotNil(available)
         XCTAssertGreaterThan(available ?? 0, 0)
 
-        let controller = RecordingControlWindowController()
+        let monitor = RecordingStorageMonitor()
         var criticalReports: [Int64?] = []
-        controller.onCriticalStorage = { criticalReports.append($0) }
-        controller.applyAvailableStorageBytes(2 * gibibyte)
+        monitor.onCriticalStorage = { criticalReports.append($0) }
+        monitor.applyAvailableStorageBytes(2 * gibibyte)
         XCTAssertTrue(criticalReports.isEmpty)
-        controller.applyAvailableStorageBytes(gibibyte)
-        controller.applyAvailableStorageBytes(gibibyte / 2)
+        monitor.applyAvailableStorageBytes(gibibyte)
+        monitor.applyAvailableStorageBytes(gibibyte / 2)
         XCTAssertEqual(criticalReports.count, 1)
         XCTAssertEqual(criticalReports[0], gibibyte)
+    }
+
+    func testHideDoesNotStopSessionOwnedStorageMonitor() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "LensStorageMonitorTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let monitor = RecordingStorageMonitor()
+        monitor.start(storageURL: directory)
+        let controller = RecordingControlWindowController()
+        controller.begin(
+            sourceTitle: "当前屏幕",
+            capturesSystemAudio: true,
+            capturesMicrophone: false,
+            capturesCamera: false,
+            levelProvider: { (0, 0) },
+            eventCaptureHealthProvider: { .checking },
+            capturePerformanceProvider: { nil }
+        )
+        XCTAssertTrue(monitor.isMonitoring)
+        controller.hide()
+        XCTAssertTrue(
+            monitor.isMonitoring,
+            "Hiding the float must not disable the 1 GB auto-stop"
+        )
+        controller.endSession()
+        XCTAssertTrue(
+            monitor.isMonitoring,
+            "Float teardown must not own the disk watchdog"
+        )
+        monitor.stop()
+        XCTAssertFalse(monitor.isMonitoring)
     }
 
     func testDiscardAndRestartIsBlockedDuringRecordingTransitions() {

@@ -129,6 +129,22 @@ final class HotKeyStateMachineTests: XCTestCase {
             )),
             .conversationInbox
         )
+        XCTAssertEqual(
+            machine.handle(HotKeyInput(
+                kind: .keyDown,
+                keyCode: 53,
+                modifiers: [.function]
+            )),
+            .stopRecording
+        )
+        XCTAssertEqual(
+            machine.handle(HotKeyInput(
+                kind: .keyDown,
+                keyCode: 21,
+                modifiers: [.control, .option]
+            )),
+            .stopRecording
+        )
     }
 
     func testModifierOnlyCustomShortcutTriggersOncePerPress() {

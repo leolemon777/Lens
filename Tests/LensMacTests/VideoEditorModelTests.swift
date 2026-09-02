@@ -888,4 +888,22 @@ final class VideoEditorModelTests: XCTestCase {
         XCTAssertEqual(model.appliedVoiceEnhancementLevel, .light)
         XCTAssertEqual(model.plan.audio?.noiseReductionAmount ?? 0, 0.4, accuracy: 0.000_1)
     }
+
+    func testEscapeExitsAnnotationAndFocusModesWithoutChangingThePlan() {
+        let model = VideoEditorModel(
+            plan: AutoEditPlan(),
+            sourceDurationSeconds: 8,
+            hasCameraTrack: false
+        )
+        model.activateVideoAnnotationTool(.arrow)
+        XCTAssertTrue(model.isVideoAnnotationEditing)
+        XCTAssertTrue(model.escapeCurrentMode())
+        XCTAssertFalse(model.isVideoAnnotationEditing)
+        XCTAssertFalse(model.escapeCurrentMode())
+
+        model.activateManualCameraFocusEditing()
+        XCTAssertTrue(model.isManualCameraFocusEditing)
+        XCTAssertTrue(model.escapeCurrentMode())
+        XCTAssertFalse(model.isManualCameraFocusEditing)
+    }
 }

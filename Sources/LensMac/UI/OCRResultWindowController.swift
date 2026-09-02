@@ -63,7 +63,7 @@ final class OCRResultWindowController {
             guard let self else { return }
             self.close(id: id)
         }
-        panel.onClose = close
+        panel.onEscape = close
         panel.contentView = NSHostingView(rootView: OCRResultView(
             model: model,
             onCopy: { [weak self] in
@@ -94,19 +94,13 @@ final class OCRResultWindowController {
         LensPanelPresenter.dismiss(session.panel)
     }
 
-    private func makePanel(accessibilityLabel: String) -> OCRResultPanel {
-        let panel = OCRResultPanel(
+    private func makePanel(accessibilityLabel: String) -> LensGlassPanel {
+        let panel = LensGlassPanel(
             contentRect: NSRect(x: 0, y: 0, width: 464, height: 452),
-            styleMask: [.borderless, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
+            placement: .center
         )
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isMovableByWindowBackground = true
         panel.title = "OCR 识别"
         panel.setAccessibilityLabel(accessibilityLabel)
         return panel
@@ -128,16 +122,5 @@ final class OCRResultWindowController {
 private struct Session {
     let id: UUID
     let model: OCRResultModel
-    let panel: OCRResultPanel
-}
-
-private final class OCRResultPanel: NSPanel {
-    var onClose: (() -> Void)?
-
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-
-    override func cancelOperation(_ sender: Any?) {
-        onClose?()
-    }
+    let panel: LensGlassPanel
 }

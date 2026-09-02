@@ -442,6 +442,14 @@ final class ScreenVideoTrackWriter: NSObject, SCStreamOutput, AVAssetWriterDeleg
         }
     }
 
+    /// Safe to call from the shared SCK output queue or hop onto it.
+    func synchronizedFirstVideoTime() -> CMTime? {
+        if DispatchQueue.getSpecific(key: outputQueueKey) != nil {
+            return firstVideoTime
+        }
+        return outputQueue.sync { firstVideoTime }
+    }
+
     func stream(
         _ stream: SCStream,
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,

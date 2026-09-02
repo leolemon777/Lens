@@ -165,7 +165,7 @@ private extension String {
 }
 
 public struct AutoEditPlan: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = "1.2"
+    public static let currentSchemaVersion = "1.3"
 
     public struct ClickPulse: Codable, Equatable, Sendable {
         public let time: Double
@@ -416,6 +416,20 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             case ring
             /// Soft glowing accent dot.
             case glowDot
+            /// Approachable pointing hand gesture ideal for tutorials and product walkthroughs.
+            case pointingHand
+            /// Whimsical magic wand with sparkle star tip for highlight demos.
+            case magicWand
+            /// Focused keynote laser dot without arrow silhouette.
+            case laser
+            /// Nostalgic 8-bit pixel hand pointer for indie, retro, and gaming captures.
+            case pixelHand
+            /// Editorial highlighter pencil for document reading, tutorials, and walkthroughs.
+            case highlighterPencil
+            /// Precision HUD crosshair for UI inspection and tactical tech presentations.
+            case crosshairHUD
+            /// Dynamic cartoon rocket for launch demos, startup pitches, and feature rollouts.
+            case rocket
         }
 
         public enum MotionEffect: String, Codable, CaseIterable, Hashable, Sendable {
@@ -523,14 +537,25 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             case shapeKeyframes
         }
 
+        /// Unknown appearance names fall back to the legacy macOS arrow so a
+        /// newer project still opens instead of rejecting the whole edit plan.
+        private static func decodeAppearance(
+            from container: KeyedDecodingContainer<CodingKeys>
+        ) throws -> Appearance {
+            guard let raw = try container.decodeIfPresent(
+                String.self,
+                forKey: .appearance
+            ) else {
+                return .macOS
+            }
+            return Appearance(rawValue: raw) ?? .macOS
+        }
+
         public init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             self.init(
                 isEnabled: try container.decodeIfPresent(Bool.self, forKey: .isEnabled),
-                appearance: try container.decodeIfPresent(
-                    Appearance.self,
-                    forKey: .appearance
-                ) ?? .macOS,
+                appearance: try Self.decodeAppearance(from: container),
                 accentColorHex: try container.decodeIfPresent(
                     String.self,
                     forKey: .accentColorHex
@@ -1080,9 +1105,10 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
     public var captions: Captions?
     public var videoAnnotations: [VideoAnnotation]?
     public var export: Export?
-    /// Reviewable narration-cleanup proposals. Purely additive within schema
-    /// 1.2: legacy plans decode without it, and pending suggestions never
-    /// affect rendering — only accepted ones change `timeline`.
+    /// Reviewable narration-cleanup proposals. Additive since schema 1.2:
+    /// legacy plans decode without it, and pending suggestions never affect
+    /// rendering — only accepted ones change `timeline`. Schema 1.3 adds
+    /// additional cursor appearances; unknown names fall back to `.macOS`.
     public var narrationTrims: [NarrationTrimSuggestion]?
 
     public init(

@@ -16,6 +16,8 @@ final class PermissionCenterViewTests: XCTestCase {
         )
 
         XCTAssertTrue(source.contains("权限状态"))
+        XCTAssertTrue(source.contains("录屏偏好"))
+        XCTAssertTrue(source.contains("停止录制"))
         XCTAssertTrue(source.contains("\\(actionTitle)：\\(kind.title)"))
         XCTAssertTrue(source.contains("请求\\(kind.title)权限"))
         XCTAssertTrue(source.contains("打开系统设置中的\\(kind.title)权限"))
@@ -36,7 +38,7 @@ final class PermissionCenterViewTests: XCTestCase {
         }
         .environment(\.colorScheme, .light)
         let hostingView = NSHostingView(rootView: root)
-        hostingView.frame = CGRect(x: 0, y: 0, width: 678, height: 628)
+        hostingView.frame = CGRect(x: 0, y: 0, width: 678, height: 720)
         hostingView.layoutSubtreeIfNeeded()
 
         guard let representation = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds) else {

@@ -114,6 +114,7 @@ if [[ ! -s "$RESOURCES_DIR/AppIcon.icns" ]]; then
     echo "App icon generation produced an empty file." >&2
     exit 65
 fi
+cp "$ICON_SOURCE" "$RESOURCES_DIR/AppIcon.png"
 
 PLIST_PATH="$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Clear dict" "$PLIST_PATH" 2>/dev/null || true

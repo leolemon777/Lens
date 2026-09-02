@@ -28,6 +28,7 @@ final class VideoEditorPlaybackController: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isShowingRenderedPreview = false
     @Published private(set) var canShowRenderedPreview = false
+    @Published private(set) var waveformPeaks: [Float] = []
 
     private var rawSourceURL: URL?
     private var rawTimeline: VideoEditTimeline?
@@ -54,6 +55,16 @@ final class VideoEditorPlaybackController: ObservableObject {
             loadRenderedPreview(renderedPreviewURL)
         } else {
             loadRaw(sourceURL: sourceURL, timeline: timeline)
+        }
+        refreshWaveform(from: sourceURL)
+    }
+
+    private func refreshWaveform(from url: URL) {
+        waveformPeaks = []
+        Task { @MainActor [weak self] in
+            let peaks = await TimelineWaveformSampler.peaks(from: url)
+            guard let self, self.rawSourceURL == url else { return }
+            self.waveformPeaks = peaks
         }
     }
 
@@ -194,6 +205,26 @@ final class VideoEditorPlaybackController: ObservableObject {
             toleranceBefore: .zero,
             toleranceAfter: .zero
         )
+    }
+
+    func step(byFrames frames: Int) {
+        seek(to: currentTimeSeconds + Double(frames) / 30)
+        settlePlayhead()
+    }
+
+    func nudge(bySeconds seconds: Double) {
+        seek(to: currentTimeSeconds + seconds)
+        settlePlayhead()
+    }
+
+    func seekToStart() {
+        seek(to: 0)
+        settlePlayhead()
+    }
+
+    func seekToEnd() {
+        seek(to: durationSeconds)
+        settlePlayhead()
     }
 
     func refreshTime() {

@@ -9,10 +9,7 @@ import XCTest
 @MainActor
 final class VideoEditorViewTests: XCTestCase {
     func testAccessibilityAuditRequiresNamedEditorSliders() throws {
-        let source = try String(
-            contentsOf: videoEditorSourceURL("Sources/LensMac/UI/VideoEditorView.swift"),
-            encoding: .utf8
-        )
+        let source = try videoEditorUISource()
 
         XCTAssertTrue(source.contains(".accessibilityLabel(title)"))
         XCTAssertTrue(source.contains(".accessibilityLabel(\"转场时长\")"))
@@ -21,13 +18,12 @@ final class VideoEditorViewTests: XCTestCase {
         XCTAssertTrue(source.contains("快速优化"))
         XCTAssertTrue(source.contains("全部设置"))
         XCTAssertTrue(source.contains("预览待更新"))
+        XCTAssertTrue(source.contains("未保存"))
+        XCTAssertTrue(source.contains("CameraPresentationMapping.aspectFitRect"))
     }
 
     func testExpensiveInspectorSliderWorkCommitsOnRelease() throws {
-        let source = try String(
-            contentsOf: videoEditorSourceURL("Sources/LensMac/UI/VideoEditorView.swift"),
-            encoding: .utf8
-        )
+        let source = try videoEditorUISource()
 
         XCTAssertTrue(source.contains("model.setAutomaticZoomScale($0)"))
         XCTAssertTrue(source.contains("suffix: \"×\",\n                        onEditingEnded: onRegenerateCamera"))
@@ -38,10 +34,7 @@ final class VideoEditorViewTests: XCTestCase {
     }
 
     func testColorChoicesExposeNamesAndSelectionStateToAccessibilityClients() throws {
-        let source = try String(
-            contentsOf: videoEditorSourceURL("Sources/LensMac/UI/VideoEditorView.swift"),
-            encoding: .utf8
-        )
+        let source = try videoEditorUISource()
 
         XCTAssertTrue(source.contains("光标特效颜色：\\(option.name)"))
         XCTAssertTrue(source.contains("点击反馈颜色：\\(option.name)"))
@@ -51,14 +44,7 @@ final class VideoEditorViewTests: XCTestCase {
     }
 
     func testChoiceButtonsExposeSelectionStateAndSwitchHint() throws {
-        let source = try String(
-            contentsOf: URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent("Sources/LensMac/UI/VideoEditorView.swift"),
-            encoding: .utf8
-        )
+        let source = try videoEditorUISource()
 
         XCTAssertTrue(source.contains(".accessibilityLabel(title)"))
         XCTAssertTrue(source.contains(".accessibilityValue(selected ? \"已选择\" : \"未选择\")"))
@@ -67,27 +53,24 @@ final class VideoEditorViewTests: XCTestCase {
     }
 
     func testTimelineButtonsExplainWhereThePlayheadActionApplies() throws {
-        let source = try String(
-            contentsOf: URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent("Sources/LensMac/UI/VideoEditorView.swift"),
-            encoding: .utf8
-        )
+        let source = try videoEditorUISource()
 
         XCTAssertTrue(source.contains(".accessibilityLabel(title)"))
         XCTAssertTrue(source.contains("timelineButtonHint(for: title)"))
         XCTAssertTrue(source.contains("把当前播放头设为所选片段的开始"))
         XCTAssertTrue(source.contains("在当前播放头位置分割所选片段"))
         XCTAssertTrue(source.contains("从成片中移出所选片段，原始录制仍保留"))
+        XCTAssertTrue(source.contains("playback.seek(to: progress * total)"))
+        XCTAssertTrue(source.contains("playback.settlePlayhead()"))
+        XCTAssertTrue(source.contains("timelineTrimHandle"))
+        XCTAssertTrue(source.contains("timelineZoom"))
+        XCTAssertTrue(source.contains("timelineWaveform"))
+        XCTAssertTrue(source.contains("moveManualCameraFocus"))
+        XCTAssertTrue(source.contains("movePresenterKeyframe"))
     }
 
     func testSocialAspectPreviewMatchesDeliveryChoiceAndShowsSafeAreaGuide() throws {
-        let source = try String(
-            contentsOf: videoEditorSourceURL("Sources/LensMac/UI/VideoEditorView.swift"),
-            encoding: .utf8
-        )
+        let source = try videoEditorUISource()
 
         XCTAssertTrue(source.contains(".aspectRatio(previewAspectRatio, contentMode: .fit)"))
         XCTAssertTrue(source.contains("VideoEditorSocialSafeAreaOverlay(aspectRatio: aspectRatio)"))
@@ -642,6 +625,18 @@ final class VideoEditorViewTests: XCTestCase {
         }
         return nil
     }
+}
+
+private func videoEditorUISource() throws -> String {
+    let files = [
+        "Sources/LensMac/UI/VideoEditorView.swift",
+        "Sources/LensMac/UI/VideoEditorInspectorView.swift",
+        "Sources/LensMac/UI/VideoEditorTimelineView.swift",
+        "Sources/LensMac/UI/VideoEditorCursorOverlayView.swift"
+    ]
+    return try files.map { path in
+        try String(contentsOf: videoEditorSourceURL(path), encoding: .utf8)
+    }.joined(separator: "\n")
 }
 
 private func videoEditorSourceURL(_ relativePath: String) -> URL {

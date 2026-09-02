@@ -23,7 +23,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private let model: AppModel
     private let quickAccess: QuickAccessWindowController
     private let onLensChanged: () -> Void
-    private let onRecordingSourceSelected: (RecordingCaptureSource) -> Void
+    private let onRecordingSourceSelected: (RecordingCaptureSource, Bool) -> Void
     private let onOCRStarted: (SavedLens, NSImage) -> Void
     private let onOCRCompleted: (OCRDocument, SavedLens) -> Void
     private let onAutomaticOCRCompleted: (OCRDocument, SavedLens) -> Void
@@ -42,6 +42,9 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private var windowTargets: [CGWindowID: WindowCaptureTarget] = [:]
     private var selectedWindowIDs: Set<CGWindowID> = []
     private var pendingPurpose: CapturePurpose = .screenshot
+    /// One-shot camera opt-in for the in-flight region/window recording
+    /// selection. Cancel clears it so a later quick recording cannot inherit it.
+    private var pendingRecordingCapturesCamera = false
     private var isPreparingCapture = false
     private var isFinishingCapture = false
     private var cachedRegionSnapRects: [CGRect] = []
@@ -60,7 +63,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         model: AppModel,
         quickAccess: QuickAccessWindowController,
         onLensChanged: @escaping () -> Void,
-        onRecordingSourceSelected: @escaping (RecordingCaptureSource) -> Void,
+        onRecordingSourceSelected: @escaping (RecordingCaptureSource, Bool) -> Void,
         onOCRStarted: @escaping (SavedLens, NSImage) -> Void,
         onOCRCompleted: @escaping (OCRDocument, SavedLens) -> Void,
         onAutomaticOCRCompleted: @escaping (OCRDocument, SavedLens) -> Void,
@@ -147,14 +150,16 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         beginWindowSelection(purpose: .multiWindowScreenshot)
     }
 
-    func beginRegionRecordingSelection() {
+    func beginRegionRecordingSelection(capturesCamera: Bool = false) {
         let requestStartedAt = ProcessInfo.processInfo.systemUptime
         guard canBeginCapture(), ensurePermission() else { return }
         pendingPurpose = .recordingRegion
+        pendingRecordingCapturesCamera = capturesCamera
         showRegionOverlays(action: .recording, requestStartedAt: requestStartedAt)
     }
 
-    func beginWindowRecordingSelection() {
+    func beginWindowRecordingSelection(capturesCamera: Bool = false) {
+        pendingRecordingCapturesCamera = capturesCamera
         beginWindowSelection(purpose: .recordingWindow)
     }
 
@@ -351,6 +356,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         windowTargets.removeAll()
         selectedWindowIDs.removeAll()
         pendingPurpose = .screenshot
+        pendingRecordingCapturesCamera = false
     }
 
     func captureOverlay(
@@ -376,7 +382,9 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
                 showError(message: ScreenRecordingError.emptySelection.localizedDescription)
                 return
             }
-            onRecordingSourceSelected(source)
+            let capturesCamera = pendingRecordingCapturesCamera
+            pendingRecordingCapturesCamera = false
+            onRecordingSourceSelected(source, capturesCamera)
             return
         }
         if case .scrollingCapture = purpose {
@@ -408,8 +416,11 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
             dismissOverlays()
             windowTargets.removeAll()
             pendingPurpose = .screenshot
+            let capturesCamera = pendingRecordingCapturesCamera
+            pendingRecordingCapturesCamera = false
             onRecordingSourceSelected(
-                CaptureGeometry.windowRecordingSource(target.candidate)
+                CaptureGeometry.windowRecordingSource(target.candidate),
+                capturesCamera
             )
             return
         }

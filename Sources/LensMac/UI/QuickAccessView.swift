@@ -150,20 +150,16 @@ struct QuickAccessView: View {
         Array(stackModel.entries.dropFirst())
     }
 
-    /// Hero-card width. Deliberately narrower and taller than the old 508pt
-    /// strip: the capture itself is the anchor now, and the title and actions
-    /// stack beneath it instead of stretching beside a tiny thumbnail.
-    private var cardWidth: CGFloat { 320 }
-    private var heroWidth: CGFloat { cardWidth - 20 }
-
-    /// Aspect-true hero height, clamped so extreme captures (tall scrolling
-    /// shots, thin strips) neither balloon the panel nor vanish into a sliver.
-    private var heroHeight: CGFloat {
-        let size = image.size
-        guard size.width > 0, size.height > 0 else { return 168 }
-        let aspectHeight = heroWidth * size.height / size.width
-        return min(max(aspectHeight, 104), 192)
-    }
+    /// A capture confirmation is transient, so the panel stays close to a
+    /// notification in size: thumbnail on the left, everything else in one
+    /// column beside it. A full-width hero cost roughly three times the height
+    /// to show an image the user had just framed themselves.
+    /// Sized against the screenshot action row, its widest occupant: four
+    /// labelled controls plus the overflow measure ~288pt, so 336 leaves
+    /// headroom rather than sitting 7pt from clipping.
+    private var cardWidth: CGFloat { 336 }
+    private var thumbnailWidth: CGFloat { 96 }
+    private var thumbnailHeight: CGFloat { 64 }
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 8) {
@@ -176,25 +172,30 @@ struct QuickAccessView: View {
     }
 
     private var primaryCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            draggablePreview
-                .padding(.top, 10)
-                .padding(.horizontal, 10)
-
-            VStack(alignment: .leading, spacing: 7) {
-                statusTitleRow
-                Text(detailText)
-                    .font(.system(size: LensType.caption, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                if isProcessing {
-                    progressRow
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 11) {
+                draggablePreview
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        statusTitleRow
+                        Spacer(minLength: 0)
+                        closeButton
+                    }
+                    Text(detailText)
+                        .font(.system(size: LensType.caption, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    if isProcessing {
+                        progressRow
+                    }
                 }
-                actionBar
-                    .padding(.top, 3)
             }
-            .padding(12)
+            // Full card width rather than the column beside the thumbnail:
+            // the recording variant's four controls need more room than the
+            // ~210pt that column leaves.
+            actionBar
         }
+        .padding(LensSpacing.m)
         .frame(width: cardWidth)
         // Keeps control glows (the filled primary button's shadow) inside the
         // card outline instead of bleeding past its edge onto the desktop.
@@ -246,20 +247,19 @@ struct QuickAccessView: View {
         .accessibilityValue(progressCaption)
     }
 
-    /// Lives on the hero image's top-right corner: a dark glass chip that
-    /// stays legible over any capture content instead of a plain circle
-    /// floating in the card's dead space.
+    /// Sits in the card's own text column rather than on the capture. Over an
+    /// image it needed a dark scrim to stay legible against arbitrary content,
+    /// which put a heavy chip on top of the very thing being previewed.
     private var closeButton: some View {
         Button(action: onClose) {
             Image(systemName: "xmark")
                 .font(.system(size: LensIcon.small, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 22, height: 22)
-                .background(.black.opacity(0.46), in: Circle())
-                .background(.ultraThinMaterial, in: Circle())
+                .frame(width: 20, height: 20)
+                .background(.primary.opacity(0.07), in: Circle())
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .shadow(color: .black.opacity(0.22), radius: 5, y: 1)
+        .foregroundStyle(.secondary)
         .help("关闭")
         .accessibilityLabel("关闭快速操作")
         .keyboardShortcut(.cancelAction)
@@ -282,6 +282,7 @@ struct QuickAccessView: View {
                     )
                 }
                 quickButton("复制文件", symbol: "doc.on.doc", action: onCopy)
+                    .keyboardShortcut("c", modifiers: .command)
                 if dragFileURL != nil {
                     quickButton("分享", symbol: "square.and.arrow.up", action: onShare)
                         .help("打开 macOS 系统分享面板发送当前视频，不会自动上传")
@@ -294,8 +295,16 @@ struct QuickAccessView: View {
                 }
             } else {
                 primaryQuickButton("复制", symbol: "doc.on.doc", action: onCopy)
+                    .keyboardShortcut("c", modifiers: .command)
                 quickButton("标注", symbol: "pencil.tip", action: onAnnotate)
                 quickButton("贴图", symbol: "pin", action: onPin)
+                // Promoted out of the overflow menu: sending a capture to the
+                // conversation folder is a per-screenshot habit for anyone
+                // pasting shots into a terminal, and a menu round-trip on every
+                // single capture is the wrong cost for that.
+                quickButton("对话", symbol: "terminal", action: onConversationInbox)
+                    .help("保存到对话文件夹并复制路径，方便在终端里发给 AI")
+                    .accessibilityHint("保存到对话文件夹并复制路径")
                 overflowMenu {
                     if dragFileURL != nil {
                         Button(action: onShare) {
@@ -307,11 +316,6 @@ struct QuickAccessView: View {
                     Button(action: onReveal) {
                         Label("显示", systemImage: "folder")
                     }
-                    Button(action: onConversationInbox) {
-                        Label("对话", systemImage: "terminal")
-                    }
-                    .help("保存到对话文件夹并复制路径，方便在终端里发给 AI")
-                    .accessibilityHint("保存到对话文件夹并复制路径")
                 }
             }
         }
@@ -328,7 +332,7 @@ struct QuickAccessView: View {
                 stackedEntryRow(entry)
             }
         }
-        .padding(8)
+        .padding(LensSpacing.s)
         .frame(width: cardWidth, alignment: .trailing)
         .lensGlassSurface(role: .panel, cornerRadius: LensGlassMetrics.panelCornerRadius)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -431,56 +435,61 @@ struct QuickAccessView: View {
 
     @ViewBuilder
     private var draggablePreview: some View {
-        let heroShape = RoundedRectangle(
-            cornerRadius: LensGlassMetrics.cardCornerRadius,
+        let shape = RoundedRectangle(
+            cornerRadius: LensGlassMetrics.thumbnailCornerRadius,
             style: .continuous
         )
-        let preview = Image(nsImage: image)
-            .resizable()
-            .scaledToFill()
-            .frame(width: heroWidth, height: heroHeight)
-            .clipShape(heroShape)
-            .overlay(heroShape.stroke(.white.opacity(0.2), lineWidth: 1))
-            .overlay(alignment: .topLeading) {
-                if stackedEntries.count > 0 {
-                    Button {
-                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-                            onToggleExpansion()
-                        }
-                    } label: {
-                        Text("+\(stackedEntries.count)")
-                            .font(.system(size: LensType.micro, weight: .bold))
-                            .monospacedDigit()
-                            .foregroundStyle(LensGlassPalette.midnight)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(LensGlassPalette.accent, in: Capsule())
+        let preview = ZStack {
+            shape.fill(.primary.opacity(0.06))
+            // Fit, not fill. A wide strip or a tall scrolling capture used to
+            // be cropped to the thumbnail's aspect, so the one thing the
+            // preview exists to confirm — what was actually captured — was the
+            // part you couldn't see.
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFit()
+                .padding(3)
+        }
+        .frame(width: thumbnailWidth, height: thumbnailHeight)
+        .clipShape(shape)
+        .overlay(shape.stroke(.white.opacity(0.16), lineWidth: 1))
+        .overlay(alignment: .bottomTrailing) {
+            Image(systemName: "arrow.up.forward.app.fill")
+                .font(.system(size: LensIcon.small, weight: .semibold))
+                .foregroundStyle(.white)
+                .padding(3)
+                .background(.black.opacity(0.55), in: Circle())
+                .padding(LensSpacing.xs)
+                .accessibilityHidden(true)
+        }
+        .overlay(alignment: .topLeading) {
+            if stackedEntries.count > 0 {
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                        onToggleExpansion()
                     }
-                    .buttonStyle(.plain)
-                    .shadow(color: .black.opacity(0.28), radius: 4, y: 1)
-                    .padding(8)
-                    .help(stackModel.isExpanded ? "收起最近捕获" : "展开最近捕获")
-                    .accessibilityLabel(
-                        stackModel.isExpanded
-                            ? "收起，还有 \(stackedEntries.count) 项最近捕获"
-                            : "展开 \(stackedEntries.count) 项最近捕获"
-                    )
+                } label: {
+                    Text("+\(stackedEntries.count)")
+                        .font(.system(size: LensType.micro, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(LensGlassPalette.ink)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(LensGlassPalette.accent, in: Capsule())
                 }
+                .buttonStyle(.plain)
+                .shadow(color: .black.opacity(0.28), radius: 3, y: 1)
+                .padding(LensSpacing.xs)
+                .help(stackModel.isExpanded ? "收起最近捕获" : "展开最近捕获")
+                .accessibilityLabel(
+                    stackModel.isExpanded
+                        ? "收起，还有 \(stackedEntries.count) 项最近捕获"
+                        : "展开 \(stackedEntries.count) 项最近捕获"
+                )
             }
-            .overlay(alignment: .topTrailing) {
-                closeButton
-                    .padding(8)
-            }
-            .overlay(alignment: .bottomTrailing) {
-                Image(systemName: "arrow.up.forward.app.fill")
-                    .font(.system(size: LensIcon.small, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .padding(5)
-                    .background(.black.opacity(0.58), in: Circle())
-                    .accessibilityHidden(true)
-            }
-            .contentShape(heroShape)
-            .accessibilityLabel(isRecording ? "刚刚保存的录屏预览" : "刚刚保存的截图预览")
+        }
+        .contentShape(shape)
+        .accessibilityLabel(isRecording ? "刚刚保存的录屏预览" : "刚刚保存的截图预览")
 
         if let dragFileURL {
             preview
@@ -514,7 +523,7 @@ struct QuickAccessView: View {
         Button(action: action) {
             Label(title, systemImage: symbol)
                 .font(.system(size: LensType.caption, weight: .semibold))
-                .foregroundStyle(LensGlassPalette.midnight)
+                .foregroundStyle(LensGlassPalette.ink)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 7)
         }
@@ -529,7 +538,7 @@ struct QuickAccessView: View {
         Button(action: action) {
             Label(title, systemImage: symbol)
                 .font(.system(size: LensType.caption, weight: .semibold))
-                .padding(.horizontal, 10)
+                .padding(.horizontal, LensSpacing.inset)
                 .padding(.vertical, 6)
         }
         .buttonStyle(LensGlassButtonStyle(tint: LensGlassPalette.neutral, cornerRadius: LensGlassMetrics.controlCornerRadius))
@@ -545,7 +554,7 @@ struct QuickAccessView: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.system(size: LensIcon.small, weight: .semibold))
-                .padding(.horizontal, 10)
+                .padding(.horizontal, LensSpacing.inset)
                 .padding(.vertical, 9)
         }
         .menuStyle(.button)
@@ -602,7 +611,9 @@ enum QuickAccessFileTransfer {
         }
         let healthURL = lens.packageURL.appendingPathComponent(healthAsset.relativePath)
         guard isRegularFileInsidePackage(healthURL, packageURL: lens.packageURL),
-              let data = try? Data(contentsOf: healthURL) else {
+              let data = LensFailureLog.optional("quickaccess.health_report_read_failed", {
+                  try Data(contentsOf: healthURL)
+              }) else {
             return true
         }
         do {

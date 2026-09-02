@@ -24,7 +24,7 @@ struct ShortcutRecorderButton: View {
                     Spacer(minLength: 4)
                 }
                 .font(.system(size: LensType.caption, weight: .semibold, design: .rounded))
-                .padding(.horizontal, 10)
+                .padding(.horizontal, LensSpacing.inset)
                 .frame(height: 30)
                 .background(
                     (isCapturing ? LensGlassPalette.accent : Color.primary).opacity(0.08),
@@ -57,7 +57,7 @@ struct ShortcutRecorderButton: View {
             if let validationMessage {
                 Text(validationMessage)
                     .font(.system(size: LensType.micro, weight: .medium))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(LensGlassPalette.recording)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

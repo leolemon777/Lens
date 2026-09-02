@@ -6,7 +6,7 @@ import SwiftUI
 final class LensLibraryWindowController {
     private let store: LensProjectStore
     private let model: LensLibraryModel
-    private let window: LensLibraryWindow
+    private let window: LensChromeWindow
 
     var onAnnotateRequested: ((SavedLens, NSImage) -> Void)?
     var onOCRRequested: ((LensLibraryEntry) -> Void)?
@@ -23,7 +23,7 @@ final class LensLibraryWindowController {
     init(store: LensProjectStore) {
         self.store = store
         model = LensLibraryModel(store: store)
-        window = LensLibraryWindow(
+        window = LensChromeWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1_020, height: 690),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
@@ -154,7 +154,9 @@ final class LensLibraryWindowController {
     }
 
     private func openFolder() {
-        try? FileManager.default.createDirectory(at: store.rootDirectory, withIntermediateDirectories: true)
+        LensFailureLog.ignoringFailure("library.create_root_failed") {
+            try FileManager.default.createDirectory(at: store.rootDirectory, withIntermediateDirectories: true)
+        }
         NSWorkspace.shared.open(store.rootDirectory)
     }
 
@@ -285,13 +287,5 @@ final class LensLibraryWindowController {
         alert.informativeText = message
         alert.addButton(withTitle: "知道了")
         alert.beginSheetModal(for: window)
-    }
-}
-
-private final class LensLibraryWindow: NSWindow {
-    var onEscape: (() -> Void)?
-
-    override func cancelOperation(_ sender: Any?) {
-        onEscape?()
     }
 }

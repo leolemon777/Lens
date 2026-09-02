@@ -3,14 +3,14 @@ import Foundation
 @preconcurrency import Speech
 import LensCore
 
-struct G3TranscriptionConfiguration {
+package struct G3TranscriptionConfiguration {
     let audioURL: URL
     let reportURL: URL
     let localeIdentifier: String
     let expectedTerms: [String]
     let verifiesOrganization: Bool
 
-    init?(arguments: [String], workingDirectory: URL? = nil) {
+    package init?(arguments: [String], workingDirectory: URL? = nil) {
         guard arguments.contains("--g3-transcription"),
               let audioPath = Self.option("--audio", in: arguments),
               let reportPath = Self.option("--report", in: arguments) else {
@@ -118,8 +118,8 @@ private struct G3TranscriptionFailureReport: Encodable {
 /// Privacy-safe installed-app gate. The report stores counts and timing only;
 /// recognized words and expected phrases are deliberately excluded.
 @MainActor
-enum G3TranscriptionRunner {
-    static func run(_ configuration: G3TranscriptionConfiguration) async -> Int32 {
+package enum G3TranscriptionRunner {
+    package static func run(_ configuration: G3TranscriptionConfiguration) async -> Int32 {
         let installed = Bundle.main.bundleURL.standardizedFileURL.path
             .hasPrefix("/Applications/")
         let evidenceLevel = installed

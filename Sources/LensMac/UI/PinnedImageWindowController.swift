@@ -148,10 +148,14 @@ final class PinnedImageWindowController {
         if areHidden {
             showAll()
         }
+        // A pin is a reference you keep beside your work, not a viewer. At the
+        // previous 520×420 a single pin blanketed whatever was underneath, and
+        // pinning several buried each other. Zoom is still available on the
+        // pin itself for anyone who wants a closer look.
         let window = PinnedImageWindow(
             image: image,
             source: source,
-            maximumInitialSize: CGSize(width: 520, height: 420)
+            maximumInitialSize: CGSize(width: 340, height: 260)
         )
         window.onClose = { [weak self, weak window] in
             guard let self, let window else { return }

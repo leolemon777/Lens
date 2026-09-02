@@ -57,6 +57,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: 缓存 SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('Package.swift') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-
+
       - name: 记录工具链
         run: |
           sw_vers
@@ -64,7 +72,7 @@ jobs:
 
       - name: swift test
         run: |
-          swift test 2>&1 | tee swift-test.log
+          swift test --enable-code-coverage 2>&1 | tee swift-test.log
 
       # 防御空跑：若测试目标被意外排除，swift test 仍可能以 0 退出。
       # 这里强制要求日志里出现 "Executed N tests, with 0 failures"，
@@ -85,6 +93,37 @@ jobs:
           fi
           echo "通过用例数：$count"
           echo "### 单元测试：$count 项通过" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 覆盖率摘要
+        run: |
+          xcrun llvm-cov report \
+            .build/debug/LensPackageTests.xctest/Contents/MacOS/LensPackageTests \
+            -instr-profile default.profdata \
+            Sources | tee coverage.log
+          if ! grep -q '^TOTAL' coverage.log; then
+            echo "未能生成 Sources 覆盖率 TOTAL 行。" >&2
+            exit 65
+          fi
+          echo "### 覆盖率" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -n 20 coverage.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: SwiftFormat
+        run: |
+          if command -v swiftformat >/dev/null 2>&1; then
+            swiftformat --lint --config .swiftformat Sources Tests
+          else
+            echo "SwiftFormat 未安装，跳过。"
+          fi
+
+      - name: SwiftLint
+        run: |
+          if command -v swiftlint >/dev/null 2>&1; then
+            swiftlint lint --strict --reporter github-actions-logging
+          else
+            echo "SwiftLint 未安装，跳过。"
+          fi
 
   # Release 闸门：build-app.sh release 内部已带 -Xswiftc -warnings-as-errors，
   # 因此这里不再单独跑一次 swift build -c release。

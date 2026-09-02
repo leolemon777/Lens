@@ -75,6 +75,7 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
     private var previewRefreshTask: Task<Void, Never>?
     private var cameraRegenerationRevision: UInt64 = 0
     private var cameraRegenerationTask: Task<Void, Never>?
+    private var persistTask: Task<URL?, Never>?
     private let presenterThumbnailCache: NSCache<NSURL, NSImage> = {
         let cache = NSCache<NSURL, NSImage>()
         cache.countLimit = 12
@@ -83,6 +84,7 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
 
     var onSaved: (@MainActor (SavedLens) async -> Void)?
     var onFailure: ((Error) -> Void)?
+    var onCancelBackgroundProcessing: ((URL) -> Void)?
 
     init(store: LensProjectStore) {
         self.store = store
@@ -116,8 +118,9 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
             onFailure?(VideoEditorWindowError.sourceUnavailable)
             return
         }
-        let plan = (try? store.loadAutoEditPlan(from: entry.packageURL))
-            ?? AutoEditPlan(
+        let plan = LensFailureLog.optional("editor.plan_load") {
+            try store.loadAutoEditPlan(from: entry.packageURL)
+        } ?? AutoEditPlan(
                 timeline: VideoEditTimeline(sourceDurationSeconds: duration)
             )
         let requiresPlanMigration = plan.schemaVersion
@@ -139,7 +142,9 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
             .filter { $0.role == .keyboardEvents }
             .map { entry.packageURL.appendingPathComponent($0.relativePath) }
             .first { FileManager.default.fileExists(atPath: $0.path) }
-        let transcript = try? store.loadTranscript(from: entry.packageURL)
+        let transcript = LensFailureLog.optional("editor.transcript_load") {
+            try store.loadTranscript(from: entry.packageURL)
+        }
         let model = VideoEditorModel(
             plan: plan,
             sourceDurationSeconds: duration,
@@ -172,6 +177,7 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
             onRegenerateCamera: { [weak self] in self?.regenerateAutomaticCamera() },
             onRefreshPreview: { [weak self] in self?.requestPreviewRefresh() },
             onSave: { [weak self] in self?.save() },
+            onCancelProcessing: { [weak self] in self?.cancelProcessing() },
             onExport: { [weak self] in self?.exportMP4() },
             onExportStepDocument: { [weak self] in self?.exportStepDocument() },
             onExportNarrationDraft: { [weak self] in self?.exportNarrationDraft() },
@@ -231,8 +237,30 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
     }
 
     func hide() {
+        persistTask?.cancel()
+        persistTask = nil
+        previewRefreshTask?.cancel()
+        previewRefreshTask = nil
+        cameraRegenerationTask?.cancel()
+        cameraRegenerationTask = nil
+        model?.endProcessing()
         playback?.stop()
         window.orderOut(nil)
+    }
+
+    func cancelProcessing() {
+        persistTask?.cancel()
+        persistTask = nil
+        previewRefreshTask?.cancel()
+        if let packageURL {
+            onCancelBackgroundProcessing?(packageURL)
+        }
+        model?.endProcessing()
+    }
+
+    func updateProcessingProgress(_ fraction: Double, packageURL: URL? = nil) {
+        guard packageURL == nil || packageURL == self.packageURL else { return }
+        model?.updateProcessingProgress(fraction)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -250,15 +278,104 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
         window.minSize = NSSize(width: 1_060, height: 680)
         window.backgroundColor = .windowBackgroundColor
         window.collectionBehavior = [.fullScreenPrimary]
-        window.onEscape = { [weak self] in self?.requestClose() }
+        window.onEscape = { [weak self] in self?.handleEscape() }
+        window.onKeyDown = { [weak self] event in
+            self?.handleEditorKeyDown(event) ?? false
+        }
+        window.onUndo = { [weak self] in self?.model?.undo() }
+        window.onRedo = { [weak self] in self?.model?.redo() }
+    }
+
+    @objc func undo(_ sender: Any?) {
+        model?.undo()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        model?.redo()
+    }
+
+    private func handleEscape() {
+        if model?.escapeCurrentMode() == true { return }
+        requestClose()
+    }
+
+    private func handleEditorKeyDown(_ event: NSEvent) -> Bool {
+        guard let playback, let model else { return false }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let isShift = modifiers.contains(.shift)
+        let isCommand = modifiers.contains(.command)
+        let character = event.charactersIgnoringModifiers?.lowercased()
+
+        if isCommand {
+            switch character {
+            case "s" where !isShift:
+                save()
+                return true
+            case "z" where isShift:
+                model.redo()
+                return true
+            case "z":
+                model.undo()
+                return true
+            default:
+                break
+            }
+        }
+
+        switch event.keyCode {
+        case 49: // space
+            playback.togglePlayback()
+            return true
+        case 123: // left arrow
+            if isCommand { playback.seekToStart() }
+            else if isShift { playback.nudge(bySeconds: -1) }
+            else { playback.step(byFrames: -1) }
+            return true
+        case 124: // right arrow
+            if isCommand { playback.seekToEnd() }
+            else if isShift { playback.nudge(bySeconds: 1) }
+            else { playback.step(byFrames: 1) }
+            return true
+        case 115: // home
+            playback.seekToStart()
+            return true
+        case 119: // end
+            playback.seekToEnd()
+            return true
+        case 51, 117: // delete / forward delete
+            if model.selectedVideoAnnotationID != nil {
+                model.deleteSelectedVideoAnnotation()
+            } else {
+                model.removeSelectedSegment()
+            }
+            return true
+        default:
+            break
+        }
+
+        guard !isCommand else { return false }
+        switch character {
+        case "i":
+            model.trimSelectedStart(toOutputTime: playback.currentTimeSeconds)
+            return true
+        case "o":
+            model.trimSelectedEnd(toOutputTime: playback.currentTimeSeconds)
+            return true
+        case "s":
+            model.split(atOutputTime: playback.currentTimeSeconds)
+            return true
+        default:
+            return false
+        }
     }
 
     private func save() {
         guard let model, let packageURL, !model.isProcessing else { return }
         let requestedPlan = model.plan
-        Task { @MainActor [weak self, weak model] in
-            guard let self, let model else { return }
-            _ = await persistAndProcess(
+        persistTask?.cancel()
+        persistTask = Task { @MainActor [weak self, weak model] in
+            guard let self, let model else { return nil }
+            return await persistAndProcess(
                 model: model,
                 packageURL: packageURL,
                 requestedPlan: requestedPlan
@@ -363,6 +480,8 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
                   self.model === model,
                   requestedRevision == self.previewRefreshRevision else { return }
             let requestedPlan = model.plan
+            persistTask?.cancel()
+            persistTask = nil
             _ = await persistAndProcess(
                 model: model,
                 packageURL: packageURL,
@@ -385,6 +504,10 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
             model.markPlanPersisted(requestedPlan)
             model.beginProcessing()
             await onSaved?(saved)
+            if Task.isCancelled {
+                model.endProcessing()
+                return nil
+            }
             guard self.model === model else { return nil }
             let refreshedManifest = try store.loadManifest(from: packageURL)
             guard refreshedManifest.state == .ready else {
@@ -421,16 +544,20 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
         Task { @MainActor [weak self, weak model] in
             guard let self, let model else { return }
             let previewURL = packageURL.appendingPathComponent("previews/auto.mp4")
-            let previousHealthReport = try? store.loadRecordingHealthReport(
-                from: packageURL
-            )
+            let previousHealthReport = LensFailureLog.optional("editor.health_report_load") {
+                try store.loadRecordingHealthReport(from: packageURL)
+            }
             let currentTranscript = model.plan.captions?.isEnabled == true
-                ? try? store.loadTranscript(from: packageURL)
+                ? LensFailureLog.optional("editor.export_transcript_load") {
+                    try store.loadTranscript(from: packageURL)
+                }
                 : nil
-            let expectedPlanDigest = try? RenderedPlanIdentity.digest(
-                for: model.plan,
-                transcript: currentTranscript
-            )
+            let expectedPlanDigest = LensFailureLog.optional("editor.plan_digest") {
+                try RenderedPlanIdentity.digest(
+                    for: model.plan,
+                    transcript: currentTranscript
+                )
+            }
             let mustRegenerate = model.isDirty
                 || !FileManager.default.fileExists(atPath: previewURL.path)
                 || previousHealthReport?.renderedEffectVerification == nil
@@ -446,9 +573,9 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
                 readyURL = previewURL
             }
             guard let readyURL else { return }
-            let verifiedHealthReport = try? store.loadRecordingHealthReport(
-                from: packageURL
-            )
+            let verifiedHealthReport = LensFailureLog.optional("editor.verified_health_report_load") {
+                try store.loadRecordingHealthReport(from: packageURL)
+            }
             if let failure = RenderedPreviewExportGate.failureDescription(
                 for: verifiedHealthReport,
                 expectedPlanDigest: expectedPlanDigest
@@ -470,14 +597,18 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
             let package = packageURL
             let duration = model.sourceDurationSeconds
             let document = await Task.detached(priority: .utility) { () -> StepDocument? in
-                let clicks = (try? LensEventReader.read(
+                let clicks = LensFailureLog.optional("editor.step_clicks_read") {
+                    try LensEventReader.read(
                     ClickEvent.self,
                     from: clickURL
-                )) ?? []
-                let windows = (try? LensEventReader.read(
+                    )
+                } ?? []
+                let windows = LensFailureLog.optional("editor.step_windows_read") {
+                    try LensEventReader.read(
                     WindowEvent.self,
                     from: windowURL
-                )) ?? []
+                    )
+                } ?? []
                 let document = StepDocumentPlanner().document(
                     clicks: clicks,
                     windows: windows,
@@ -489,11 +620,15 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
                 onFailure?(VideoEditorWindowError.stepDocumentUnavailable)
                 return
             }
-            guard let rawVideoURL = (try? store.loadManifest(from: package))?
-                .assets
-                .first(where: { $0.role == .screenVideo })
-                .map({ package.appendingPathComponent($0.relativePath) }),
-                FileManager.default.fileExists(atPath: rawVideoURL.path) else {
+            guard let manifest = LensFailureLog.optional("editor.step_manifest_load", {
+                try store.loadManifest(from: package)
+            }),
+            let asset = manifest.assets.first(where: { $0.role == .screenVideo }) else {
+                onFailure?(VideoEditorWindowError.stepDocumentUnavailable)
+                return
+            }
+            let rawVideoURL = package.appendingPathComponent(asset.relativePath)
+            guard FileManager.default.fileExists(atPath: rawVideoURL.path) else {
                 onFailure?(VideoEditorWindowError.stepDocumentUnavailable)
                 return
             }
@@ -536,7 +671,9 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                guard let transcript = try? store.loadTranscript(from: package) else {
+                guard let transcript = LensFailureLog.optional("editor.narration_transcript_load", {
+                    try store.loadTranscript(from: package)
+                }) else {
                     onFailure?(VideoEditorWindowError.narrationDraftFailed("没有可用的转写文本。"))
                     return
                 }
@@ -580,20 +717,28 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
         panel.nameFieldStringValue = "\(safeTitle.isEmpty ? "Lens 视频" : safeTitle).mp4"
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let destinationURL = panel.url else { return }
-            do {
-                if FileManager.default.fileExists(atPath: destinationURL.path) {
-                    try FileManager.default.removeItem(at: destinationURL)
+            Task.detached(priority: .utility) {
+                do {
+                    if FileManager.default.fileExists(atPath: destinationURL.path) {
+                        try FileManager.default.removeItem(at: destinationURL)
+                    }
+                    try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+                    await MainActor.run {
+                        NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
+                    }
+                } catch {
+                    await MainActor.run {
+                        self?.onFailure?(error)
+                    }
                 }
-                try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
-                NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
-            } catch {
-                self?.onFailure?(error)
             }
         }
     }
 
     private func savedPlanTimeline(_ saved: SavedLens) -> VideoEditTimeline {
-        (try? store.loadAutoEditPlan(from: saved.packageURL).timeline)
+        LensFailureLog.optional("editor.saved_plan_timeline") {
+            try store.loadAutoEditPlan(from: saved.packageURL)
+        }?.timeline
             ?? VideoEditTimeline(sourceDurationSeconds: saved.manifest.durationSeconds ?? 0)
     }
 
@@ -644,10 +789,40 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
     }
 }
 
-private final class VideoEditorWindow: NSWindow {
-    var onEscape: (() -> Void)?
+private final class VideoEditorWindow: LensChromeWindow {
+    var onKeyDown: ((NSEvent) -> Bool)?
+    var onUndo: (() -> Void)?
+    var onRedo: (() -> Void)?
 
-    override func cancelOperation(_ sender: Any?) {
-        onEscape?()
+    @objc func undo(_ sender: Any?) {
+        onUndo?()
+    }
+
+    @objc func redo(_ sender: Any?) {
+        onRedo?()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if isEditingText {
+            super.keyDown(with: event)
+            return
+        }
+        if onKeyDown?(event) == true { return }
+        super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if isEditingText {
+            return super.performKeyEquivalent(with: event)
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if modifiers.contains(.command), onKeyDown?(event) == true {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    private var isEditingText: Bool {
+        firstResponder is NSTextView || firstResponder is NSTextField
     }
 }

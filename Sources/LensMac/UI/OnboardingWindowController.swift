@@ -6,7 +6,7 @@ final class OnboardingWindowController {
     private let model: OnboardingModel
     private let appModel: AppModel
     private let permissionRequests = PermissionCenterModel()
-    private let window: OnboardingPanel
+    private let window: LensGlassPanel
     private let onFinished: () -> Void
     private let onQuitRequested: () -> Void
 
@@ -20,11 +20,9 @@ final class OnboardingWindowController {
         self.model = model
         self.onQuitRequested = onQuitRequested
         self.onFinished = onFinished
-        window = OnboardingPanel(
+        window = LensGlassPanel(
             contentRect: NSRect(x: 0, y: 0, width: 678, height: 508),
-            styleMask: [.borderless, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
+            placement: .center
         )
         configureWindow()
     }
@@ -95,16 +93,5 @@ final class OnboardingWindowController {
         model.markPresentationComplete(build: BuildIdentity.current.buildNumber)
         hide()
         onFinished()
-    }
-}
-
-private final class OnboardingPanel: NSPanel {
-    var onEscape: (() -> Void)?
-
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-
-    override func cancelOperation(_ sender: Any?) {
-        onEscape?()
     }
 }

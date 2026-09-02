@@ -25,10 +25,13 @@ struct RecordingRecoveryInspector {
     }
 
     func assess(packageURL: URL) async -> RecordingRecoveryAssessment? {
-        guard let manifest = try? store.loadManifest(from: packageURL),
+        guard let manifest = LensFailureLog.optional("recovery.manifest_load", {
+            try store.loadManifest(from: packageURL)
+        }),
               manifest.kind == .recording else { return nil }
-        let index = (try? store.loadRecordingSegmentIndex(from: packageURL))
-            ?? RecordingSegmentIndex()
+        let index = LensFailureLog.optional("recovery.segment_index_load", {
+            try store.loadRecordingSegmentIndex(from: packageURL)
+        }) ?? RecordingSegmentIndex()
 
         var probes: [RecordingRecoveryProbe] = []
         var probedPaths: Set<String> = []

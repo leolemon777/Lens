@@ -201,7 +201,8 @@ final class AutoEditPlanTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AutoEditPlan.self, from: encoded)
 
         XCTAssertEqual(decoded.export?.preset, .compact)
-        XCTAssertEqual(decoded.schemaVersion, "1.2")
+        XCTAssertEqual(decoded.schemaVersion, AutoEditPlan.currentSchemaVersion)
+        XCTAssertEqual(decoded.schemaVersion, "1.3")
 
         var object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: encoded) as? [String: Any]
@@ -211,5 +212,23 @@ final class AutoEditPlanTests: XCTestCase {
         let legacy = try JSONDecoder().decode(AutoEditPlan.self, from: legacyData)
 
         XCTAssertNil(legacy.export)
+    }
+
+    func testUnknownCursorAppearanceFallsBackWithoutFailingThePlan() throws {
+        var plan = AutoEditPlan()
+        plan.cursor.appearance = .rocket
+        let encoded = try JSONEncoder().encode(plan)
+        var object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        var cursor = try XCTUnwrap(object["cursor"] as? [String: Any])
+        cursor["appearance"] = "futureStyleFromNewerApp"
+        object["cursor"] = cursor
+        let data = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try JSONDecoder().decode(AutoEditPlan.self, from: data)
+        XCTAssertEqual(decoded.cursor.appearance, .macOS)
+        XCTAssertEqual(decoded.schemaVersion, "1.3")
+        XCTAssertEqual(decoded.cursor.scale, plan.cursor.scale, accuracy: 0.000_1)
     }
 }

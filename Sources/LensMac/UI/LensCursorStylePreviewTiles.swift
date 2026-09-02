@@ -79,9 +79,86 @@ struct LensCursorAppearancePreview: View {
                     .frame(width: 10, height: 10)
                     .shadow(color: accent.opacity(0.85), radius: 5)
                     .offset(x: 2, y: 2)
+            case .pointingHand:
+                Image(systemName: "hand.point.up.left.fill")
+                    .font(.system(size: LensIcon.large, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                    .overlay(
+                        Image(systemName: "hand.point.up.left")
+                            .font(.system(size: LensIcon.large, weight: .semibold))
+                            .foregroundStyle(Color.white)
+                    )
+                    .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+            case .magicWand:
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: LensIcon.large, weight: .medium))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color(red: 1.0, green: 0.85, blue: 0.35), accent],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .shadow(color: Color(red: 1.0, green: 0.85, blue: 0.35).opacity(0.5), radius: 3)
+            case .laser:
+                ZStack {
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [Color.red.opacity(0.65), Color.red.opacity(0.0)], // lens-token-exempt: 激光指针预览即内容
+                                center: .center,
+                                startRadius: 2,
+                                endRadius: 11
+                            )
+                        )
+                        .frame(width: 22, height: 22)
+                    Circle()
+                        .stroke(Color.red.opacity(0.85), lineWidth: 1.5) // lens-token-exempt: 激光指针预览即内容
+                        .frame(width: 14, height: 14)
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 6, height: 6)
+                }
+            case .pixelHand:
+                Image(systemName: "cursorarrow.click.2")
+                    .font(.system(size: LensIcon.large, weight: .bold))
+                    .foregroundStyle(Color.primary)
+                    .shadow(color: .black.opacity(0.3), radius: 1, y: 1)
+            case .highlighterPencil:
+                Image(systemName: "highlighter")
+                    .font(.system(size: LensIcon.large, weight: .semibold))
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color(red: 1.0, green: 0.90, blue: 0.30), accent],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .shadow(color: Color(red: 1.0, green: 0.90, blue: 0.30).opacity(0.4), radius: 2)
+            case .crosshairHUD:
+                ZStack {
+                    Circle()
+                        .stroke(accent, lineWidth: 1.5)
+                        .frame(width: 18, height: 18)
+                    Image(systemName: "scope")
+                        .font(.system(size: LensIcon.large, weight: .light))
+                        .foregroundStyle(accent)
+                }
+            case .rocket:
+                ZStack {
+                    Image(systemName: "flame.fill")
+                        .font(.system(size: LensIcon.small, weight: .bold))
+                        .foregroundStyle(LensGlassPalette.recording)
+                        .offset(x: 7, y: 7)
+                    Image(systemName: "location.north.fill")
+                        .font(.system(size: LensIcon.large, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                        .rotationEffect(.degrees(45))
+                }
             }
         }
         .frame(width: 44, height: 32)
+        .drawingGroup()
     }
 }
 
@@ -147,6 +224,7 @@ struct LensCursorFollowPreview: View {
             )
         }
         .frame(width: 44, height: 32)
+        .drawingGroup()
     }
 }
 
@@ -190,6 +268,7 @@ struct LensCursorMotionPreview: View {
             }
         }
         .frame(width: 44, height: 32)
+        .drawingGroup()
     }
 
     private var arrow: some View {
@@ -240,6 +319,7 @@ struct LensClickEffectPreview: View {
             }
         }
         .frame(width: 44, height: 32)
+        .drawingGroup()
     }
 }
 

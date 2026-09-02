@@ -5,14 +5,14 @@ import Foundation
 @preconcurrency import ScreenCaptureKit
 import LensCore
 
-struct G2RecordingStressConfiguration {
+package struct G2RecordingStressConfiguration {
     let durationSeconds: Double
     let framesPerSecond: Int
     let reportURL: URL
     let workRootURL: URL?
     let readyMarkerURL: URL?
 
-    init?(arguments: [String]) {
+    package init?(arguments: [String]) {
         guard arguments.contains("--g2-recording-stress") else { return nil }
         let requestedDuration = Self.option("--duration-seconds", in: arguments)
             .flatMap(Double.init) ?? 60
@@ -398,11 +398,11 @@ private final class G2VisualStimulusView: NSView {
     }
 }
 
-struct G2SystemAudioProbeConfiguration {
+package struct G2SystemAudioProbeConfiguration {
     let durationSeconds: Double
     let reportURL: URL
 
-    init?(arguments: [String]) {
+    package init?(arguments: [String]) {
         guard arguments.contains("--g2-system-audio-probe") else { return nil }
         func option(_ name: String) -> String? {
             guard let index = arguments.firstIndex(of: name),
@@ -422,11 +422,11 @@ struct G2SystemAudioProbeConfiguration {
     }
 }
 
-struct G2SourceHostConfiguration {
+package struct G2SourceHostConfiguration {
     let windowTitle: String
     let readyMarkerURL: URL
 
-    init?(arguments: [String]) {
+    package init?(arguments: [String]) {
         guard arguments.contains("--g2-source-host") else { return nil }
         func option(_ name: String) -> String? {
             guard let index = arguments.firstIndex(of: name),
@@ -441,10 +441,10 @@ struct G2SourceHostConfiguration {
 }
 
 @MainActor
-enum G2SourceHostRunner {
+package enum G2SourceHostRunner {
     private static var retainedWindow: NSWindow?
 
-    static func start(_ configuration: G2SourceHostConfiguration) -> Bool {
+    package static func start(_ configuration: G2SourceHostConfiguration) -> Bool {
         let window = NSWindow(
             contentRect: NSRect(x: 180, y: 180, width: 800, height: 500),
             styleMask: [.titled, .closable, .resizable],
@@ -477,12 +477,12 @@ enum G2SourceHostRunner {
     }
 }
 
-struct G2SourceInterruptionConfiguration {
+package struct G2SourceInterruptionConfiguration {
     let closeAfterSeconds: Double
     let callbackTimeoutSeconds: Double
     let reportURL: URL
 
-    init?(arguments: [String]) {
+    package init?(arguments: [String]) {
         guard arguments.contains("--g2-source-interruption") else { return nil }
         func option(_ name: String) -> String? {
             guard let index = arguments.firstIndex(of: name),
@@ -510,8 +510,8 @@ struct G2SourceInterruptionConfiguration {
 }
 
 @MainActor
-enum G2SourceInterruptionRunner {
-    static func run(_ configuration: G2SourceInterruptionConfiguration) async -> Int32 {
+package enum G2SourceInterruptionRunner {
+    package static func run(_ configuration: G2SourceInterruptionConfiguration) async -> Int32 {
         let generatedAt = ISO8601DateFormatter().string(from: Date())
         let workRoot = configuration.reportURL.deletingLastPathComponent()
             .appendingPathComponent(
@@ -736,8 +736,8 @@ private enum G2SourceInterruptionError: LocalizedError {
 }
 
 @MainActor
-enum G2SystemAudioProbeRunner {
-    static func run(_ configuration: G2SystemAudioProbeConfiguration) async -> Int32 {
+package enum G2SystemAudioProbeRunner {
+    package static func run(_ configuration: G2SystemAudioProbeConfiguration) async -> Int32 {
         let tone = G2EnduranceToneGenerator()
         do {
             guard ScreenPermission.hasAccess else { return 77 }
@@ -897,8 +897,8 @@ private final class G2SystemAudioProbeOutput: NSObject, SCStreamOutput,
 }
 
 @MainActor
-enum G2RecordingStressRunner {
-    static func run(_ configuration: G2RecordingStressConfiguration) async -> Int32 {
+package enum G2RecordingStressRunner {
+    package static func run(_ configuration: G2RecordingStressConfiguration) async -> Int32 {
         let generatedAt = ISO8601DateFormatter().string(from: Date())
         guard ScreenPermission.hasAccess else {
             writeReport([
@@ -1299,7 +1299,7 @@ enum G2RecordingStressRunner {
     }
 }
 
-struct G2RecordingRecoveryConfiguration {
+package struct G2RecordingRecoveryConfiguration {
     let workRootURL: URL
     let reportURL: URL
     let expectedDurationSeconds: Double
@@ -1307,7 +1307,7 @@ struct G2RecordingRecoveryConfiguration {
     let enforcesFragmentLossBoundary: Bool
     let requiresNewlyInterruptedCandidate: Bool
 
-    init?(arguments: [String]) {
+    package init?(arguments: [String]) {
         guard arguments.contains("--g2-recording-recovery") else { return nil }
         let workingDirectory = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
@@ -1346,8 +1346,8 @@ struct G2RecordingRecoveryConfiguration {
 }
 
 @MainActor
-enum G2RecordingRecoveryRunner {
-    static func run(_ configuration: G2RecordingRecoveryConfiguration) async -> Int32 {
+package enum G2RecordingRecoveryRunner {
+    package static func run(_ configuration: G2RecordingRecoveryConfiguration) async -> Int32 {
         let generatedAt = ISO8601DateFormatter().string(from: Date())
         let store = LensProjectStore(rootDirectory: configuration.workRootURL)
         let service = ScreenRecordingService(

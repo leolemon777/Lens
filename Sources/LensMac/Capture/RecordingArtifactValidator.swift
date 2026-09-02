@@ -21,7 +21,9 @@ struct RecordingArtifactValidator: Sendable {
         async let videoMetricsTask = Self.inspectVideo(at: session.videoURL)
         async let trackIntegrityTask = Self.inspectTrackIntegrity(session: session)
         async let countsTask = Self.readEventCounts(session: session)
-        let plan = try? store.loadAutoEditPlan(from: session.packageURL)
+        let plan = LensFailureLog.optional("artifact.plan_load") {
+            try store.loadAutoEditPlan(from: session.packageURL)
+        }
         let videoMetrics = await videoMetricsTask
         let trackIntegrity = await trackIntegrityTask
         let counts = await countsTask
@@ -29,7 +31,9 @@ struct RecordingArtifactValidator: Sendable {
         let effectiveCameraKeyframeCount = plan?.camera.keyframes.filter {
             $0.reason != .baseline
         }.count ?? 0
-        let mediaDuration = (try? store.loadManifest(from: session.packageURL))?
+        let mediaDuration = LensFailureLog.optional("artifact.manifest_load") {
+            try store.loadManifest(from: session.packageURL)
+        }?
             .durationSeconds ?? plan?.camera.keyframes.last?.time ?? 0
         let cameraMotionComfort = plan.map {
             CameraMotionComfortAnalyzer.analyze(
@@ -100,6 +104,9 @@ struct RecordingArtifactValidator: Sendable {
         if !trackIntegrity.outOfSyncTracks.isEmpty {
             warnings.append(.rawTrackDurationDrift)
         }
+        if !trackIntegrity.startOffsetTracks.isEmpty {
+            warnings.append(.rawTrackStartOffset)
+        }
         warnings.append(contentsOf: Self.optionalTrackInterruptionWarnings(
             for: interruptedOptionalTracks
         ))
@@ -146,53 +153,84 @@ struct RecordingArtifactValidator: Sendable {
         }
         let requestedMicrophone = session.microphoneURL != nil
         let requestedCamera = session.cameraURL != nil
-        async let screenDurationTask = trackDuration(
+        async let screenTimingTask = trackTiming(
             at: session.videoURL,
             mediaType: .video
         )
-        async let systemDurationTask = trackDuration(
+        async let systemTimingTask = trackTiming(
             at: requestedSystemAudio ? session.videoURL : nil,
             mediaType: .audio
         )
-        async let microphoneDurationTask = trackDuration(
+        async let microphoneTimingTask = trackTiming(
             at: session.microphoneURL,
             mediaType: .audio
         )
-        async let cameraDurationTask = trackDuration(
+        async let cameraTimingTask = trackTiming(
             at: session.cameraURL,
             mediaType: .video
         )
-        return await RecordingTrackIntegrityReport(
-            screenVideoDurationSeconds: screenDurationTask,
-            systemAudioDurationSeconds: systemDurationTask,
-            microphoneDurationSeconds: microphoneDurationTask,
-            cameraDurationSeconds: cameraDurationTask,
+        let screen = await screenTimingTask
+        let system = await systemTimingTask
+        let microphone = await microphoneTimingTask
+        let camera = await cameraTimingTask
+        return RecordingTrackIntegrityReport(
+            screenVideoDurationSeconds: screen.duration,
+            systemAudioDurationSeconds: system.duration,
+            microphoneDurationSeconds: microphone.duration,
+            cameraDurationSeconds: camera.duration,
             requestedSystemAudio: requestedSystemAudio,
             requestedMicrophone: requestedMicrophone,
             requestedCamera: requestedCamera,
-            durationToleranceSeconds: durationToleranceSeconds
+            durationToleranceSeconds: durationToleranceSeconds,
+            systemAudioStartOffsetSeconds: Self.startOffset(
+                track: system.start,
+                screen: screen.start
+            ),
+            microphoneStartOffsetSeconds: Self.startOffset(
+                track: microphone.start,
+                screen: screen.start
+            ),
+            cameraStartOffsetSeconds: Self.startOffset(
+                track: camera.start,
+                screen: screen.start
+            )
         )
+    }
+
+    private static func startOffset(track: Double?, screen: Double?) -> Double? {
+        guard let track, let screen else { return nil }
+        return track - screen
+    }
+
+    private static func trackTiming(
+        at url: URL?,
+        mediaType: AVMediaType
+    ) async -> (duration: Double?, start: Double?) {
+        guard let url else { return (nil, nil) }
+        guard FileManager.default.fileExists(atPath: url.path) else { return (nil, nil) }
+        do {
+            let asset = AVURLAsset(url: url)
+            guard let track = try await asset.loadTracks(withMediaType: mediaType).first else {
+                return (nil, nil)
+            }
+            let timeRange = try await track.load(.timeRange)
+            let seconds = timeRange.duration.seconds
+            let start = timeRange.start.seconds
+            let duration = timeRange.duration.isNumeric && seconds.isFinite && seconds > 0
+                ? seconds
+                : nil
+            let startSeconds = timeRange.start.isNumeric && start.isFinite ? start : nil
+            return (duration, startSeconds)
+        } catch {
+            return (nil, nil)
+        }
     }
 
     private static func trackDuration(
         at url: URL?,
         mediaType: AVMediaType
     ) async -> Double? {
-        guard let url else { return nil }
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        do {
-            let asset = AVURLAsset(url: url)
-            guard let track = try await asset.loadTracks(withMediaType: mediaType).first else {
-                return nil
-            }
-            let timeRange = try await track.load(.timeRange)
-            let seconds = timeRange.duration.seconds
-            return timeRange.duration.isNumeric && seconds.isFinite && seconds > 0
-                ? seconds
-                : nil
-        } catch {
-            return nil
-        }
+        await trackTiming(at: url, mediaType: mediaType).duration
     }
 
     static func inspectVideo(at url: URL) async -> RecordingVideoMetrics? {
@@ -310,22 +348,30 @@ struct RecordingArtifactValidator: Sendable {
     ) async -> (pointer: Int, click: Int, keyboard: Int, window: Int) {
         await Task.detached(priority: .utility) {
             (
-                (try? LensEventReader.read(
+                LensFailureLog.optional("artifact.pointer_events") {
+                    try LensEventReader.read(
                     PointerEvent.self,
                     from: session.pointerEventsURL
-                ).count) ?? 0,
-                (try? LensEventReader.read(
+                    ).count
+                } ?? 0,
+                LensFailureLog.optional("artifact.click_events") {
+                    try LensEventReader.read(
                     ClickEvent.self,
                     from: session.clickEventsURL
-                ).count) ?? 0,
-                (try? LensEventReader.read(
+                    ).count
+                } ?? 0,
+                LensFailureLog.optional("artifact.keyboard_events") {
+                    try LensEventReader.read(
                     KeyboardEvent.self,
                     from: session.keyboardEventsURL
-                ).count) ?? 0,
-                (try? LensEventReader.read(
+                    ).count
+                } ?? 0,
+                LensFailureLog.optional("artifact.window_events") {
+                    try LensEventReader.read(
                     WindowEvent.self,
                     from: session.windowEventsURL
-                ).count) ?? 0
+                    ).count
+                } ?? 0
             )
         }.value
     }

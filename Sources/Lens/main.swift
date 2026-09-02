@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import LensMac
 
 let application = NSApplication.shared
 if let accessibilityConfiguration = G4AccessibilityHostConfiguration(

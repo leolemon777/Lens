@@ -9,7 +9,11 @@ private struct RecordingRecoveryScan: Sendable {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+public final class AppDelegate: NSObject, NSApplicationDelegate {
+    public override init() {
+        super.init()
+    }
+
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let buildIdentity = BuildIdentity.current
     private let model = AppModel()
@@ -59,8 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onLensChanged: { [weak self] in
             self?.lensLibrary.reloadIfVisible()
         },
-        onRecordingSourceSelected: { [weak self] source in
-            self?.startRecording(source: source)
+        onRecordingSourceSelected: { [weak self] source, capturesCamera in
+            self?.startRecording(source: source, capturesCamera: capturesCamera)
         },
         onOCRStarted: { [weak self] lens, thumbnail in
             // The waiting card must use the in-memory bitmap from this capture.
@@ -129,11 +133,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private lazy var recordingSetup = RecordingSetupWindowController(model: model) {
         [weak self] request in
+        guard let self else { return }
+        let capturesCamera = model.capturesCamera
+        model.capturesCamera = false
         switch request {
+        case .action(.recording):
+            startDisplayRecording(capturesCamera: capturesCamera)
+        case .action(.regionRecording):
+            captureCoordinator.beginRegionRecordingSelection(capturesCamera: capturesCamera)
         case let .action(action):
-            self?.handle(action)
+            handle(action)
         case let .source(source):
-            self?.startRecording(source: source)
+            startRecording(source: source, capturesCamera: capturesCamera)
         }
     }
     private var hotKeyManager: GlobalHotKeyManager?
@@ -146,8 +157,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingAutomaticTranscriptions: [LensLibraryEntry] = []
     private var launchHealthSessionStarted = false
     private var didCompleteApplicationLaunch = false
+    private let recordingSession = RecordingSessionCoordinator()
+    private var recordingProcessingTasks: [URL: Task<Void, Never>] = [:]
+    private var recordingRenderTasks: [URL: Task<AutoEditPlan?, Never>] = [:]
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    public func applicationDidFinishLaunching(_ notification: Notification) {
         switch instanceCoordinator.resolveLaunch() {
         case .continueLaunch:
             completeApplicationLaunch()
@@ -181,8 +195,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if onboarding.shouldPresentOnLaunch {
             onboarding.show()
             logDiagnostic("onboarding.presented", metadata: ["reason": "first_launch"])
-        } else {
-            actionCenter.show()
         }
         restoreRecentScreenshot()
         scheduleRecordingRecovery(startedBefore: recoveryCutoff)
@@ -226,19 +238,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    public func applicationWillTerminate(_ notification: Notification) {
         if launchHealthSessionStarted {
             launchHealth.completeSession()
         }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
 
     /// Permissions are granted over in System Settings and TCC sends no change
     /// notification, so the guide rechecks whenever the user comes back.
-    func applicationDidBecomeActive(_ notification: Notification) {
+    public func applicationDidBecomeActive(_ notification: Notification) {
         guard didCompleteApplicationLaunch else { return }
         onboarding.refresh()
         if hotKeysBlockedByAccessibility, AXIsProcessTrusted() {
@@ -246,7 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationShouldHandleReopen(
+    public func applicationShouldHandleReopen(
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
@@ -279,6 +291,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func wireControllers() {
+        recordingSession.attach(
+            model: model,
+            store: store,
+            recordingService: recordingService,
+            recordingControl: recordingControl,
+            recordingCountdown: recordingCountdown,
+            toast: toast,
+            permissionCenter: permissionCenter,
+            quickAccess: quickAccess,
+            lensLibrary: lensLibrary,
+            videoEditor: videoEditor,
+            host: self
+        )
+        videoEditor.onCancelBackgroundProcessing = { [weak self] packageURL in
+            self?.cancelRecordingProcessing(for: packageURL)
+        }
         quickAccess.onCopyResult = { [weak self] in
             self?.showClipboardFeedback(succeeded: $0)
         }
@@ -314,10 +342,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 confirmationTitle: "原始录屏已保存 · 成片生成中",
                 deliveryState: .processing
             )
-            Task { @MainActor [weak self] in
+            let retry = Task { @MainActor [weak self] in
                 guard let self else { return }
                 _ = await processRecording(lens)
             }
+            trackProcessingTask(retry, for: lens.packageURL)
         }
         annotationEditor.onSaved = { [weak self] lens, image, clipboardStatus in
             guard let self else { return }
@@ -362,13 +391,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
         recordingControl.onStop = { [weak self] in
-            self?.stopRecording()
+            self?.recordingSession.stop()
         }
         recordingControl.onPauseToggle = { [weak self] in
-            self?.toggleRecordingPause()
+            self?.recordingSession.togglePause()
         }
         recordingControl.onDiscardAndRestart = { [weak self] in
-            self?.requestDiscardAndRestart()
+            self?.recordingSession.requestDiscardAndRestart()
         }
         recordingControl.onHide = { [weak self] in
             guard let self else { return }
@@ -381,22 +410,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         recordingControl.onVisibilityChange = { [weak self] _ in
             self?.configureStatusItem()
-        }
-        recordingControl.onCriticalStorage = { [weak self] availableBytes in
-            guard let self, recordingService.isRecording else { return }
-            logDiagnostic(
-                "storage.critical",
-                level: .error,
-                metadata: ["storageLevel": "critical"]
-            )
-            let remaining = availableBytes.map {
-                ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
-            } ?? "不足 1 GB"
-            recordingControl.hide()
-            stopRecording(
-                startTitle: "磁盘空间不足，正在安全停止",
-                startDetail: "当前可用 \(remaining)；已写入的媒体分片会继续保留"
-            )
         }
         lensLibrary.onAnnotateRequested = { [weak self] lens, image in
             self?.annotationEditor.show(lens: lens, fallbackImage: image)
@@ -602,6 +615,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .conversationInbox:
                 self?.actionCenter.hide()
                 self?.captureCoordinator.beginConversationInboxCapture()
+            case .stopRecording:
+                self?.stopRecordingFromMenu()
             case .toggleActionCenter:
                 if self?.recordingService.isRecording == true {
                     self?.recordingControl.showExisting()
@@ -627,7 +642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             toast.show(
                 title: "部分主快捷键被占用",
-                detail: "Lens 已启用事件监听回退；Control + Option + 1/2/3 备用组合仍会尝试保持可用",
+                detail: "Lens 已启用事件监听回退；Control + Option + 1/2/3/4 备用组合仍会尝试保持可用",
                 symbol: "keyboard.badge.ellipsis"
             )
         }
@@ -669,7 +684,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
-        menu.addItem(menuItem("开启快捷键…", action: #selector(enableHotKeysFromMenu)))
+        if recordingService.isRecording {
+            menu.addItem(menuItem(
+                "停止录制  (\(model.stopRecordingShortcut.displayName))",
+                action: #selector(stopRecordingFromMenu)
+            ))
+        }
+        menu.addItem(menuItem(ActionCenterAction.enableHotKeys.menuTitle, action: #selector(enableHotKeysFromMenu)))
         menu.addItem(menuItem(
             "打开操作中心  (\(model.actionCenterShortcut.displayName))",
             action: #selector(toggleActionCenter)
@@ -690,21 +711,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         let moreMenu = NSMenu(title: "更多")
-        moreMenu.addItem(menuItem("窗口截图", action: #selector(beginWindowScreenshot)))
-        moreMenu.addItem(menuItem("多窗口截图", action: #selector(beginMultiWindowScreenshot)))
-        moreMenu.addItem(menuItem("当前屏幕截图", action: #selector(beginDisplayScreenshot)))
+        moreMenu.addItem(menuItem(ActionCenterAction.windowScreenshot.menuTitle, action: #selector(beginWindowScreenshot)))
+        moreMenu.addItem(menuItem(ActionCenterAction.multiWindowScreenshot.menuTitle, action: #selector(beginMultiWindowScreenshot)))
+        moreMenu.addItem(menuItem(ActionCenterAction.displayScreenshot.menuTitle, action: #selector(beginDisplayScreenshot)))
         moreMenu.addItem(menuItem(
-            "截到对话文件夹  (\(model.conversationInboxShortcut.displayName))",
+            "\(ActionCenterAction.conversationInbox.menuTitle)  (\(model.conversationInboxShortcut.displayName))",
             action: #selector(beginConversationInboxCapture)
         ))
-        moreMenu.addItem(menuItem("选区 OCR", action: #selector(beginOCR)))
-        moreMenu.addItem(menuItem("滚动长截图", action: #selector(beginScrollingCapture)))
+        moreMenu.addItem(menuItem(ActionCenterAction.ocr.menuTitle, action: #selector(beginOCR)))
+        moreMenu.addItem(menuItem(ActionCenterAction.scrollingCapture.menuTitle, action: #selector(beginScrollingCapture)))
         moreMenu.addItem(.separator())
-        moreMenu.addItem(menuItem("快速录制区域", action: #selector(beginRegionRecording)))
-        moreMenu.addItem(menuItem("快速录制窗口", action: #selector(beginWindowRecording)))
-        moreMenu.addItem(menuItem("快速录制当前屏幕", action: #selector(beginRecording)))
+        moreMenu.addItem(menuItem(ActionCenterAction.regionRecording.menuTitle, action: #selector(beginRegionRecording)))
+        moreMenu.addItem(menuItem(ActionCenterAction.windowRecording.menuTitle, action: #selector(beginWindowRecording)))
+        moreMenu.addItem(menuItem(ActionCenterAction.recording.menuTitle, action: #selector(beginRecording)))
         moreMenu.addItem(.separator())
-        moreMenu.addItem(menuItem("贴上剪贴板", action: #selector(pinFromClipboard)))
+        moreMenu.addItem(menuItem(ActionCenterAction.pin.menuTitle, action: #selector(pinFromClipboard)))
         moreMenu.addItem(menuItem("隐藏全部贴图", action: #selector(togglePinnedImagesHidden)))
         moreMenu.addItem(menuItem("关闭全部贴图", action: #selector(closeAllPinnedImages)))
         moreMenu.addItem(menuItem("关闭全部 OCR", action: #selector(closeAllOCRResults)))
@@ -712,10 +733,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         moreItem.submenu = moreMenu
         menu.addItem(moreItem)
 
-        menu.addItem(menuItem("打开 Lens 库", action: #selector(showLensLibrary)))
+        menu.addItem(menuItem(ActionCenterAction.openLibrary.menuTitle, action: #selector(showLensLibrary)))
         menu.addItem(menuItem("在 Finder 中打开 Lens 目录", action: #selector(openLensDirectory)))
         menu.addItem(menuItem("在 Finder 中打开对话文件夹", action: #selector(openConversationInbox)))
-        menu.addItem(menuItem("设置与权限", action: #selector(openSettingsAndPermissions)))
+        menu.addItem(menuItem(ActionCenterAction.openSettings.menuTitle, action: #selector(openSettingsAndPermissions)))
         menu.addItem(.separator())
         menu.addItem(menuItem("退出 Lens", action: #selector(quit), keyEquivalent: "q"))
         statusItem.menu = menu
@@ -775,6 +796,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         applicationMenuItem.submenu = applicationMenu
         mainMenu.addItem(applicationMenuItem)
+
+        let editMenuItem = NSMenuItem(title: "编辑", action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: "编辑")
+        let undoItem = NSMenuItem(
+            title: "撤销",
+            action: Selector(("undo:")),
+            keyEquivalent: "z"
+        )
+        let redoItem = NSMenuItem(
+            title: "重做",
+            action: Selector(("redo:")),
+            keyEquivalent: "z"
+        )
+        redoItem.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(undoItem)
+        editMenu.addItem(redoItem)
+        editMenu.addItem(.separator())
+        editMenu.addItem(NSMenuItem(
+            title: "剪切",
+            action: #selector(NSText.cut(_:)),
+            keyEquivalent: "x"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: "复制",
+            action: #selector(NSText.copy(_:)),
+            keyEquivalent: "c"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: "粘贴",
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        ))
+        editMenu.addItem(NSMenuItem(
+            title: "全选",
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: "a"
+        ))
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
         return mainMenu
     }
 
@@ -889,9 +950,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func beginRecording() {
-        model.capturesCamera = false
         actionCenter.hide()
         startDisplayRecording()
+    }
+
+    @objc private func stopRecordingFromMenu() {
+        recordingControl.beginFinalizing()
+        recordingSession.stop()
     }
 
     @objc private func showRecordingSetup() {
@@ -909,13 +974,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func beginRegionRecording() {
-        model.capturesCamera = false
         actionCenter.hide()
         captureCoordinator.beginRegionRecordingSelection()
     }
 
     @objc private func beginWindowRecording() {
-        model.capturesCamera = false
         actionCenter.hide()
         recordingSetup.show(initialSource: .window)
     }
@@ -1228,6 +1291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         lensLibrary.setOrganizing(true, lensID: lens.manifest.id)
         let store = store
+        let diagnostics = diagnostics
 
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1238,10 +1302,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 let insights = try await Task.detached(priority: .userInitiated) {
                     let manifest = try store.loadManifest(from: lens.packageURL)
-                    let ocr = suppliedOCR ?? (try? store.loadOCR(from: lens.packageURL))
-                    let transcript = suppliedTranscript
-                        ?? (try? store.loadTranscript(from: lens.packageURL))
-                    let previous = try? store.loadInsights(from: lens.packageURL)
+                    let ocr: OCRDocument?
+                    if let suppliedOCR {
+                        ocr = suppliedOCR
+                    } else {
+                        do {
+                            ocr = try store.loadOCR(from: lens.packageURL)
+                        } catch {
+                            await diagnostics.record(
+                                "organization.ocr_load_failed",
+                                level: .warning,
+                                metadata: DiagnosticEvent.errorMetadata(error)
+                            )
+                            ocr = nil
+                        }
+                    }
+                    let transcript: TranscriptDocument?
+                    if let suppliedTranscript {
+                        transcript = suppliedTranscript
+                    } else {
+                        do {
+                            transcript = try store.loadTranscript(from: lens.packageURL)
+                        } catch {
+                            await diagnostics.record(
+                                "organization.transcript_load_failed",
+                                level: .warning,
+                                metadata: DiagnosticEvent.errorMetadata(error)
+                            )
+                            transcript = nil
+                        }
+                    }
+                    let previous: LensInsightsDocument?
+                    do {
+                        previous = try store.loadInsights(from: lens.packageURL)
+                    } catch {
+                        await diagnostics.record(
+                            "organization.insights_load_failed",
+                            level: .warning,
+                            metadata: DiagnosticEvent.errorMetadata(error)
+                        )
+                        previous = nil
+                    }
                     return LocalLensOrganizer.organize(
                         manifest: manifest,
                         ocr: ocr,
@@ -1335,12 +1436,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return (entry.primaryAssetURL, .screenVideo)
     }
 
-    private func beginAutomaticTranscription(for lens: SavedLens) {
+    func beginAutomaticTranscription(for lens: SavedLens) {
         guard let entry = libraryEntry(for: lens) else { return }
         beginTranscription(for: entry, automatic: true)
     }
 
-    private func deliveryImage(for lens: SavedLens) -> NSImage {
+    func deliveryImage(for lens: SavedLens) -> NSImage {
         if let thumbnail = lens.manifest.assets.first(where: { $0.role == .thumbnail }) {
             let url = lens.packageURL.appendingPathComponent(thumbnail.relativePath)
             if let image = NSImage(contentsOf: url) {
@@ -1354,9 +1455,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return NSWorkspace.shared.icon(forFile: lens.rawAssetURL.path)
     }
 
-    private func libraryEntry(for lens: SavedLens) -> LensLibraryEntry? {
-        guard let manifest = try? store.loadManifest(from: lens.packageURL),
-              let primaryAsset = manifest.assets.first(where: { $0.role == .screenVideo }) else {
+    func libraryEntry(for lens: SavedLens) -> LensLibraryEntry? {
+        let manifest: LensManifest
+        do {
+            manifest = try store.loadManifest(from: lens.packageURL)
+        } catch {
+            logDiagnosticFailure("library.manifest_load_failed", error: error)
+            return nil
+        }
+        guard let primaryAsset = manifest.assets.first(where: { $0.role == .screenVideo }) else {
             return nil
         }
         let primaryURL = lens.packageURL.appendingPathComponent(primaryAsset.relativePath)
@@ -1366,8 +1473,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .map { lens.packageURL.appendingPathComponent($0.relativePath) }
             .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
             ?? primaryURL
-        let transcript = try? store.loadTranscript(from: lens.packageURL)
-        let insights = try? store.loadInsights(from: lens.packageURL)
+        let transcript: TranscriptDocument?
+        do {
+            transcript = try store.loadTranscript(from: lens.packageURL)
+        } catch {
+            logDiagnostic(
+                "library.transcript_load_failed",
+                level: .warning,
+                metadata: DiagnosticEvent.errorMetadata(error)
+            )
+            transcript = nil
+        }
+        let insights: LensInsightsDocument?
+        do {
+            insights = try store.loadInsights(from: lens.packageURL)
+        } catch {
+            logDiagnostic(
+                "library.insights_load_failed",
+                level: .warning,
+                metadata: DiagnosticEvent.errorMetadata(error)
+            )
+            insights = nil
+        }
         return LensLibraryEntry(
             packageURL: lens.packageURL,
             manifest: manifest,
@@ -1399,7 +1526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func startDisplayRecording() {
+    private func startDisplayRecording(capturesCamera: Bool = false) {
         guard let displayID = activeDisplayID() else {
             toast.show(title: "找不到显示器", symbol: "exclamationmark.triangle")
             return
@@ -1408,339 +1535,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             source: CaptureGeometry.displayRecordingSource(
                 displayID: displayID,
                 displayBounds: CGDisplayBounds(displayID)
-            )
+            ),
+            capturesCamera: capturesCamera
         )
     }
 
-    private func startRecording(source: RecordingCaptureSource) {
-        guard ScreenPermission.hasAccess else {
-            model.capturesCamera = false
-            ScreenPermission.requestOrExplain()
-            return
-        }
-        guard !recordingService.isRecording else {
-            model.capturesCamera = false
-            recordingControl.showExisting()
-            return
-        }
-        let experiencePreset = model.recordingExperiencePreset
-        let options = ScreenRecordingOptions(
-            framesPerSecond: model.recordingFrameRate.rawValue,
-            capturesSystemAudio: model.capturesSystemAudio,
-            capturesMicrophone: model.capturesMicrophone,
-            capturesCamera: model.capturesCamera,
-            initialEditPlan: experiencePreset.makeEditPlan(
-                includesCamera: model.capturesCamera
-            )
-        )
-        // Camera is an opt-in for one recording attempt. These immutable
-        // options retain the choice while every later entry starts safely off.
-        model.capturesCamera = false
-        let audioSummary: String
-        switch (options.capturesSystemAudio, options.capturesMicrophone) {
-        case (true, true): audioSummary = "系统声音 + 麦克风分轨"
-        case (true, false): audioSummary = "系统声音"
-        case (false, true): audioSummary = "麦克风分轨"
-        case (false, false): audioSummary = "无音频"
-        }
-        toast.show(
-            title: "正在准备\(source.mode.presentationTitle)",
-            detail: "\(experiencePreset.title) · \(options.framesPerSecond) FPS · \(audioSummary) · \(options.capturesCamera ? "摄像头分轨 · " : "")正在检查智能跟踪",
-            symbol: "record.circle"
-        )
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            if options.capturesMicrophone, !(await microphoneAccessGranted()) {
-                toast.show(
-                    title: "麦克风尚未授权",
-                    detail: "已打开权限中心；关闭麦克风后仍可继续录屏",
-                    symbol: "mic.slash.fill"
-                )
-                permissionCenter.show()
-                return
-            }
-            if options.capturesCamera, !(await cameraAccessGranted()) {
-                toast.show(
-                    title: "摄像头尚未授权",
-                    detail: "已打开权限中心；关闭摄像头后仍可继续录屏",
-                    symbol: "video.slash.fill"
-                )
-                permissionCenter.show()
-                return
-            }
-            let readyToRecord = await recordingCountdown.run(
-                source: source,
-                isEnabled: model.showsRecordingCountdown
-            )
-            guard readyToRecord else {
-                toast.show(title: "已取消录制", symbol: "xmark.circle")
-                return
-            }
-            do {
-                _ = try await recordingService.start(source: source, options: options)
-                logDiagnostic(
-                    "recording.started",
-                    metadata: [
-                        "captureMode": source.mode.rawValue,
-                        "frameRate": String(options.framesPerSecond),
-                        "eventCaptureMode": recordingService.usesEmbeddedCursorFallback
-                            ? "embeddedCursorFallback"
-                            : "editableEventTracks"
-                    ]
-                )
-                recordingControl.begin(
-                    sourceTitle: "\(source.mode.presentationTitle) · \(experiencePreset.title) · \(options.framesPerSecond) FPS",
-                    capturesSystemAudio: options.capturesSystemAudio,
-                    capturesMicrophone: options.capturesMicrophone,
-                    capturesCamera: options.capturesCamera,
-                    storageURL: store.rootDirectory,
-                    levelProvider: { [weak self] in
-                        self?.recordingService.audioLevels ?? (0, 0)
-                    },
-                    eventCaptureHealthProvider: { [weak self] in
-                        self?.recordingService.eventCaptureSnapshot.health ?? .checking
-                    },
-                    capturePerformanceProvider: { [weak self] in
-                        self?.recordingService.capturePerformanceSnapshot
-                    }
-                )
-                if recordingService.usesEmbeddedCursorFallback {
-                    toast.show(
-                        title: "原始光标已保留",
-                        detail: "输入监控当前不可用；本次不会伪造自动跟踪效果",
-                        symbol: "cursorarrow.slash"
-                    )
-                }
-            } catch {
-                recordingControl.hide()
-                showRecordingError(error, phase: "start")
-            }
-        }
+    private func startRecording(
+        source: RecordingCaptureSource,
+        capturesCamera: Bool = false
+    ) {
+        recordingSession.start(source: source, capturesCamera: capturesCamera)
     }
 
     private func handleUnexpectedCaptureStop(_ error: Error) {
-        guard recordingService.isRecording else { return }
-        logDiagnosticFailure(
-            "recording.capture_stream_interrupted",
-            error: error,
-            metadata: ["recovery": "automaticSafeFinalize"]
-        )
-        stopRecording(
-            startTitle: "录屏来源已中断，正在安全保存",
-            startDetail: "已写入的屏幕、声音和事件分片会保留"
-        )
+        recordingSession.handleUnexpectedCaptureStop(error)
     }
 
     private func handleOptionalTrackInterruption(
         _ track: RecordingOptionalTrack,
         error: Error
     ) {
-        let title: String
-        let detail: String
-        let code: String
-        switch track {
-        case .microphone:
-            title = "麦克风已断开，屏幕录制继续"
-            detail = "结束后会保留断开前的有效声音"
-            code = "recording.microphone_interrupted"
-        case .camera:
-            title = "摄像头已断开，屏幕录制继续"
-            detail = "结束后会保留断开前的有效画面"
-            code = "recording.camera_interrupted"
-        }
-        logDiagnosticFailure(code, error: error, metadata: ["screenCapture": "continued"])
-        toast.show(title: title, detail: detail, symbol: "cable.connector.slash")
-    }
-
-    private func stopRecording(
-        startTitle: String? = nil,
-        startDetail: String? = nil
-    ) {
-        guard recordingService.isRecording else { return }
-        let stopRequestedAt = ProcessInfo.processInfo.systemUptime
-        if let startTitle {
-            toast.show(
-                title: startTitle,
-                detail: startDetail ?? "",
-                symbol: "hourglass"
-            )
-        }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                let saved = try await recordingService.stop()
-                let recordingControlWindow = recordingControl.currentWindow
-                recordingControl.prepareForHandoff()
-                let healthReport = recordingService.lastRecordingHealthReport
-                    ?? (try? store.loadRecordingHealthReport(from: saved.packageURL))
-                var stopMetadata = [
-                    "status": "saved",
-                    "durationMilliseconds": Self.performanceMilliseconds(
-                        since: stopRequestedAt
-                    )
-                ]
-                if let measured = healthReport?.measuredFramesPerSecond {
-                    stopMetadata["measuredFrameRate"] = String(format: "%.2f", measured)
-                }
-                if let healthReport {
-                    stopMetadata["videoStatus"] = healthReport.videoStatus.rawValue
-                    stopMetadata["eventStatus"] = healthReport.eventStatus.rawValue
-                }
-                logDiagnostic("recording.stopped", metadata: stopMetadata)
-                let shouldAutomaticallyTranscribe = model.automaticallyTranscribesRecordings
-                    && saved.manifest.assets.contains {
-                        $0.role == .microphone || $0.role == .systemAudio
-                    }
-                var completionNotes = [
-                    recordingService.lastMicrophoneError == nil ? nil : "麦克风轨道异常",
-                    recordingService.lastCameraError == nil ? nil : "摄像头轨道异常"
-                ].compactMap { $0 }
-                if let healthReport,
-                   healthReport.videoStatus == .degraded,
-                   let measured = healthReport.measuredFramesPerSecond {
-                    completionNotes.append(String(format: "实测 %.1f FPS", measured))
-                }
-                if healthReport?.eventStatus == .degraded {
-                    completionNotes.append("智能跟踪已降级")
-                }
-                if recordingService.lastCaptureInterruptionError != nil {
-                    completionNotes.append("录屏来源中断，已保留中断前原片")
-                }
-                if let integrity = healthReport?.rawTrackIntegrity {
-                    if !integrity.missingRequestedTracks.isEmpty {
-                        completionNotes.append(
-                            "\(integrity.missingRequestedTracks.map(\.title).joined(separator: "、"))原始轨缺失"
-                        )
-                    }
-                    if !integrity.outOfSyncTracks.isEmpty {
-                        completionNotes.append(
-                            "\(integrity.outOfSyncTracks.map(\.title).joined(separator: "、"))时长偏差超过 150ms"
-                        )
-                    }
-                }
-                quickAccess.show(
-                    lens: saved,
-                    image: deliveryImage(for: saved),
-                    confirmationTitle: "原始录屏已保存 · 成片生成中",
-                    deliveryState: .processing,
-                    handoffFrom: recordingControlWindow
-                )
-                if !completionNotes.isEmpty {
-                    toast.show(
-                        title: "录屏已保存",
-                        detail: completionNotes.joined(separator: "、"),
-                        symbol: "exclamationmark.triangle.fill"
-                    )
-                }
-                lensLibrary.reloadIfVisible()
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    let renderedPlan = await processRecording(saved)
-                    if let renderedPlan,
-                       let entry = libraryEntry(for: saved) {
-                        _ = videoEditor.adoptBackgroundPreview(
-                            entry: entry,
-                            renderedPlan: renderedPlan
-                        )
-                    }
-                    if shouldAutomaticallyTranscribe {
-                        beginAutomaticTranscription(for: saved)
-                    }
-                }
-            } catch {
-                if recordingService.isRecording {
-                    recordingControl.setTransitioning(false)
-                    recordingControl.showExisting()
-                } else {
-                    recordingControl.hide()
-                }
-                showRecordingError(error, phase: "stop")
-            }
-        }
-    }
-
-    private func toggleRecordingPause() {
-        guard recordingService.isRecording else { return }
-        let shouldPause = !recordingService.isPaused
-        recordingControl.setTransitioning(true)
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer { recordingControl.setTransitioning(false) }
-            do {
-                if shouldPause {
-                    try await recordingService.pause()
-                    logDiagnostic("recording.paused")
-                    recordingControl.setPaused(true)
-                    toast.show(
-                        title: "录制已暂停",
-                        detail: "当前分片已安全写盘；继续时会创建新分片",
-                        symbol: "pause.circle.fill"
-                    )
-                } else {
-                    try await recordingService.resume()
-                    logDiagnostic("recording.resumed")
-                    recordingControl.setPaused(false)
-                    toast.show(
-                        title: "继续录制",
-                        detail: "时间轴会自动跳过暂停区间",
-                        symbol: "play.circle.fill"
-                    )
-                }
-            } catch {
-                recordingControl.setPaused(recordingService.isPaused)
-                showRecordingError(error, phase: shouldPause ? "pause" : "resume")
-            }
-        }
-    }
-
-    private func requestDiscardAndRestart() {
-        guard recordingService.isRecording else { return }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "丢弃并重新录制？"
-        alert.informativeText = "Lens 会先安全停止当前录制，再把整个项目移入废纸篓。文件不会被永久删除。"
-        alert.addButton(withTitle: "移到废纸篓并重录")
-        alert.addButton(withTitle: "继续录制")
-        alert.buttons.first?.hasDestructiveAction = true
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        recordingControl.setTransitioning(true)
-        toast.show(
-            title: "正在安全丢弃当前录制",
-            detail: "完成所有媒体分片后会移入废纸篓",
-            symbol: "trash.circle"
-        )
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                let discarded = try await recordingService.stopForDiscard()
-                recordingControl.hide()
-                try FileManager.default.trashItem(
-                    at: discarded.packageURL,
-                    resultingItemURL: nil
-                )
-                lensLibrary.reloadIfVisible()
-                toast.show(
-                    title: "旧录制已移到废纸篓",
-                    detail: "正在按相同来源重新准备录制",
-                    symbol: "arrow.counterclockwise.circle.fill"
-                )
-                startRecording(source: discarded.source)
-            } catch {
-                logDiagnosticFailure(
-                    "recording.discard_restart_failed",
-                    error: error,
-                    metadata: ["phase": "discard"]
-                )
-                recordingControl.hide()
-                lensLibrary.reloadIfVisible()
-                toast.show(
-                    title: "没有删除录制项目",
-                    detail: "录制已停止并尽量保留为可恢复项目：\(error.localizedDescription)",
-                    symbol: "exclamationmark.arrow.triangle.2.circlepath"
-                )
-            }
-        }
+        recordingSession.handleOptionalTrackInterruption(track, error: error)
     }
 
     private func activeDisplayID() -> CGDirectDisplayID? {
@@ -1753,7 +1568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return number.uint32Value
     }
 
-    private func microphoneAccessGranted() async -> Bool {
+    func microphoneAccessGranted() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
             true
@@ -1766,7 +1581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func cameraAccessGranted() async -> Bool {
+    func cameraAccessGranted() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
             true
@@ -1783,7 +1598,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buildIdentity.diagnosticMetadata
     }
 
-    private func logDiagnostic(
+    func logDiagnostic(
         _ code: String,
         level: DiagnosticLevel = .info,
         metadata: [String: String] = [:]
@@ -1839,7 +1654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ))
     }
 
-    private func showRecordingError(_ error: Error, phase: String) {
+    func showRecordingError(_ error: Error, phase: String) {
         logDiagnosticFailure(
             "recording.failed",
             error: error,
@@ -1872,10 +1687,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             detail: "原始分片仍保留；正在按新时长重新生成预览",
             symbol: "arrow.clockwise.circle.fill"
         )
-        Task { @MainActor [weak self] in
-            guard let self,
-                  let manifest = try? store.loadManifest(from: rebuilt.packageURL)
-            else { return }
+        let repair = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let manifest: LensManifest
+            do {
+                manifest = try store.loadManifest(from: rebuilt.packageURL)
+            } catch {
+                logDiagnosticFailure("recording.repair_manifest_load_failed", error: error)
+                return
+            }
             let saved = SavedLens(
                 packageURL: rebuilt.packageURL,
                 rawAssetURL: rebuilt.packageURL
@@ -1885,24 +1705,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = await processRecording(saved)
             lensLibrary.reloadIfVisible()
         }
+        trackProcessingTask(repair, for: rebuilt.packageURL)
     }
 
     @discardableResult
-    private func processRecording(_ saved: SavedLens) async -> AutoEditPlan? {
+    func processRecording(_ saved: SavedLens) async -> AutoEditPlan? {
+        let packageKey = saved.packageURL.standardizedFileURL
+        recordingRenderTasks[packageKey]?.cancel()
+        let task = Task { @MainActor [weak self] in
+            await self?.performProcessRecording(saved)
+        }
+        recordingRenderTasks[packageKey] = task
+        let result = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+        if recordingRenderTasks[packageKey] == task {
+            recordingRenderTasks[packageKey] = nil
+        }
+        return result
+    }
+
+    func trackProcessingTask(_ task: Task<Void, Never>, for packageURL: URL) {
+        let packageKey = packageURL.standardizedFileURL
+        recordingProcessingTasks[packageKey]?.cancel()
+        recordingProcessingTasks[packageKey] = task
+        Task { @MainActor [weak self] in
+            await task.value
+            if self?.recordingProcessingTasks[packageKey] == task {
+                self?.recordingProcessingTasks[packageKey] = nil
+            }
+        }
+    }
+
+    func cancelRecordingProcessing(for packageURL: URL) {
+        let packageKey = packageURL.standardizedFileURL
+        recordingProcessingTasks[packageKey]?.cancel()
+        recordingRenderTasks[packageKey]?.cancel()
+    }
+
+    @discardableResult
+    private func performProcessRecording(_ saved: SavedLens) async -> AutoEditPlan? {
         let processingStartedAt = ProcessInfo.processInfo.systemUptime
         let packageKey = saved.packageURL.standardizedFileURL
         await recordingProcessingGate.acquire(packageKey)
         defer { Task { await recordingProcessingGate.release(packageKey) } }
         do {
             let plan = try store.loadAutoEditPlan(from: saved.packageURL)
-            var healthReport = try? store.loadRecordingHealthReport(from: saved.packageURL)
+            try Task.checkCancellation()
+            var healthReport: RecordingHealthReport?
+            do {
+                healthReport = try store.loadRecordingHealthReport(from: saved.packageURL)
+            } catch {
+                logDiagnostic(
+                    "preview.health_report_load_failed",
+                    level: .warning,
+                    metadata: DiagnosticEvent.errorMetadata(error)
+                )
+            }
             let outputURL = saved.packageURL.appendingPathComponent("previews/auto.mp4")
             let cameraURL = saved.manifest.assets.first(where: { $0.role == .camera })
                 .map { saved.packageURL.appendingPathComponent($0.relativePath) }
                 .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
-            let transcript = plan.captions?.isEnabled == true
-                ? try? store.loadTranscript(from: saved.packageURL)
-                : nil
+            let transcript: TranscriptDocument?
+            if plan.captions?.isEnabled == true {
+                do {
+                    transcript = try store.loadTranscript(from: saved.packageURL)
+                } catch {
+                    logDiagnostic(
+                        "preview.transcript_load_failed",
+                        level: .warning,
+                        metadata: DiagnosticEvent.errorMetadata(error)
+                    )
+                    transcript = nil
+                }
+            } else {
+                transcript = nil
+            }
             let microphoneURL = saved.manifest.assets.first(where: { $0.role == .microphone })
                 .map { saved.packageURL.appendingPathComponent($0.relativePath) }
                 .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
@@ -1941,6 +1821,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         progress: { [weak self] fraction in
                             Task { @MainActor in
                                 self?.quickAccess.updateProgress(fraction * 0.15, for: saved)
+                                self?.videoEditor.updateProcessingProgress(
+                                    fraction * 0.15,
+                                    packageURL: saved.packageURL
+                                )
                             }
                         }
                     )
@@ -1948,12 +1832,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         .voiceProcessingErrorDescription != nil
                     microphoneWasMixed = microphoneURL != nil
                     mixedAudioReady = true
+                } catch is CancellationError {
+                    throw CancellationError()
                 } catch {
                     audioMixError = error
                 }
             }
             let videoProgressBase = requiresAudioMixdown ? 0.15 : 0.0
             let videoProgressScale = requiresAudioMixdown ? 0.85 : 1.0
+            try Task.checkCancellation()
             _ = try await previewRenderer.render(
                 inputURL: saved.rawAssetURL,
                 cameraURL: cameraURL,
@@ -1966,6 +1853,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self?.quickAccess.updateProgress(
                             videoProgressBase + fraction * videoProgressScale,
                             for: saved
+                        )
+                        self?.videoEditor.updateProcessingProgress(
+                            videoProgressBase + fraction * videoProgressScale,
+                            packageURL: saved.packageURL
                         )
                     }
                 }
@@ -1992,6 +1883,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     )
                     microphoneWasMixed = microphoneURL != nil
                     audioMixError = nil
+                } catch is CancellationError {
+                    throw CancellationError()
                 } catch {
                     audioMixError = error
                 }
@@ -2037,10 +1930,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     renderedPlanDigest: renderedPlanDigest
                 )
             healthReport = verifiedHealthReport
-            _ = try? store.writeRecordingHealthReport(
-                verifiedHealthReport,
-                to: saved.packageURL
-            )
+            do {
+                _ = try store.writeRecordingHealthReport(
+                    verifiedHealthReport,
+                    to: saved.packageURL
+                )
+            } catch {
+                logDiagnosticFailure("preview.health_report_write_failed", error: error)
+            }
             logDiagnostic(
                 "preview.effects_verified",
                 level: renderedEffectVerification.isVerified ? .info : .warning,
@@ -2162,6 +2059,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ]
             )
             return plan
+        } catch is CancellationError {
+            logDiagnostic("preview.cancelled", level: .warning)
+            quickAccess.updateIfShowing(
+                saved,
+                thumbnail: deliveryImage(for: saved),
+                confirmationTitle: "成片生成已取消",
+                deliveryState: .failed
+            )
+            return nil
         } catch {
             logDiagnosticFailure("preview.failed", error: error)
             quickAccess.updateIfShowing(
@@ -2180,12 +2086,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-private extension RecordingCaptureMode {
-    var presentationTitle: String {
-        switch self {
-        case .region: "区域录制"
-        case .window: "窗口录制"
-        case .display: "屏幕录制"
-        }
-    }
-}
+extension AppDelegate: RecordingSessionHost {}

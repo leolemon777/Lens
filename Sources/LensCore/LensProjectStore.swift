@@ -128,7 +128,10 @@ public struct LensProjectStore: Sendable {
         let data = try Data(contentsOf: packageURL.appendingPathComponent("edits/edit-plan.json"))
         var plan = try JSONDecoder().decode(AutoEditPlan.self, from: data)
         try LensProjectSchema.autoEditPlan.validate(plan.schemaVersion)
-        if let manifest = try? loadManifest(from: packageURL),
+        if let manifest = LensCoreLog.optional(
+            "store.loadAutoEditPlan.loadManifest",
+            { try loadManifest(from: packageURL) }
+        ),
            let duration = manifest.durationSeconds {
             if let storedVersion = LensSchemaVersion(plan.schemaVersion),
                let latestAutomaticCameraVersion = LensSchemaVersion("1.2"),
@@ -756,7 +759,10 @@ public struct LensProjectStore: Sendable {
             throw LensProjectStoreError.emptyRawRecording
         }
         // Preserve assets that may have been added or removed while capture was active.
-        var manifest = (try? loadManifest(from: session.packageURL)) ?? session.manifest
+        var manifest = LensCoreLog.optional(
+            "store.finalizeRecording.loadManifest",
+            { try loadManifest(from: session.packageURL) }
+        ) ?? session.manifest
         manifest.state = state
         manifest.durationSeconds = max(0, durationSeconds)
         try writeManifest(manifest, to: session.packageURL)
@@ -818,7 +824,10 @@ public struct LensProjectStore: Sendable {
     }
 
     public func markRecordingInterrupted(_ session: RecordingLensSession) throws {
-        var manifest = (try? loadManifest(from: session.packageURL)) ?? session.manifest
+        var manifest = LensCoreLog.optional(
+            "store.markRecordingInterrupted.loadManifest",
+            { try loadManifest(from: session.packageURL) }
+        ) ?? session.manifest
         manifest.state = .interrupted
         try writeManifest(manifest, to: session.packageURL)
     }
@@ -964,7 +973,10 @@ public struct LensProjectStore: Sendable {
             PointerEvent.self,
             from: session.pointerEventsURL
         ).filter { $0.time >= 0 && $0.time <= sourceDuration }
-        var plan = (try? loadAutoEditPlan(from: session.packageURL)) ?? AutoEditPlan()
+        var plan = LensCoreLog.optional(
+            "store.writeAutoEditPlan.load",
+            { try loadAutoEditPlan(from: session.packageURL) }
+        ) ?? AutoEditPlan()
         plan.schemaVersion = AutoEditPlan.currentSchemaVersion
         plan.timeline = (plan.timeline ?? VideoEditTimeline(
             sourceDurationSeconds: sourceDuration
@@ -1051,7 +1063,12 @@ public struct LensProjectStore: Sendable {
                 continue
             }
             manifest.state = .interrupted
-            guard (try? writeManifest(manifest, to: url)) != nil else { continue }
+            do {
+                try writeManifest(manifest, to: url)
+            } catch {
+                LensCoreLog.record("store.recoverInterrupted.writeManifest", error: error)
+                continue
+            }
             let videoURL = url.appendingPathComponent("raw/screen.mp4")
             recovered.append(RecordingRecoveryCandidate(
                 packageURL: url,

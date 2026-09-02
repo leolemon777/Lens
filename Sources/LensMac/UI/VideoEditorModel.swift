@@ -12,26 +12,27 @@ final class VideoEditorModel: ObservableObject {
         var id: String { "\(annotationID.uuidString)-\(rangeIndex)" }
     }
 
-    @Published private(set) var plan: AutoEditPlan
-    @Published private(set) var selectedSegmentID: UUID?
+    @Published var plan: AutoEditPlan
+    @Published var selectedSegmentID: UUID?
     @Published private(set) var isDirty = false
     /// True once the latest edit plan has reached disk. This is intentionally
     /// separate from `isDirty`: a plan can be persisted while its renderer is
     /// still producing the matching preview.
     @Published private(set) var isPlanPersisted = true
     @Published private(set) var isProcessing = false
-    @Published private(set) var isRegeneratingCamera = false
-    @Published private(set) var presenterThumbnail: NSImage?
-    @Published private(set) var isVideoAnnotationEditing = false
-    @Published private(set) var isVideoAnnotationSelectionMode = false
-    @Published private(set) var selectedVideoAnnotationID: UUID?
-    @Published private(set) var videoAnnotationDraft: ScreenshotAnnotation?
+    @Published private(set) var processingProgress: Double?
+    @Published var isRegeneratingCamera = false
+    @Published var presenterThumbnail: NSImage?
+    @Published var isVideoAnnotationEditing = false
+    @Published var isVideoAnnotationSelectionMode = false
+    @Published var selectedVideoAnnotationID: UUID?
+    @Published var videoAnnotationDraft: ScreenshotAnnotation?
     @Published var selectedVideoAnnotationTool: ScreenshotAnnotationKind = .arrow
     @Published var selectedVideoAnnotationColor: LensColor = .red
     @Published var videoAnnotationTextDraft = "重点"
     @Published var defaultVideoAnnotationDurationSeconds = 2.0
-    @Published private(set) var selectedCaptionCueIndex: Int?
-    @Published private(set) var isManualCameraFocusEditing = false
+    @Published var selectedCaptionCueIndex: Int?
+    @Published var isManualCameraFocusEditing = false
     @Published var manualCameraScale = 1.80
     @Published var manualCameraHoldSeconds = 1.20
 
@@ -43,27 +44,28 @@ final class VideoEditorModel: ObservableObject {
     let keyboardEventsURL: URL?
     var onTimelineChanged: ((VideoEditTimeline) -> Void)?
 
-    private let initialPlan: AutoEditPlan
-    private var savedPlan: AutoEditPlan
-    private var persistedPlan: AutoEditPlan
-    private let automaticCaptionSourceCues: [CaptionSourceCue]
-    private var undoHistory: [AutoEditPlan] = []
-    private var redoHistory: [AutoEditPlan] = []
+    let initialPlan: AutoEditPlan
+    var savedPlan: AutoEditPlan
+    var persistedPlan: AutoEditPlan
+    let automaticCaptionSourceCues: [CaptionSourceCue]
+    var undoHistory: [AutoEditPlan] = []
+    var redoHistory: [AutoEditPlan] = []
     /// Slider drags update the live preview on every tick, but should be one
     /// undoable edit rather than dozens of full-plan snapshots.
-    private var continuousEditBaseline: AutoEditPlan?
-    private var presenterInteractionStartPlan: AutoEditPlan?
-    private var videoAnnotationDraftID = UUID()
-    private var videoAnnotationDraftPath: [LensPoint] = []
-    private var videoAnnotationInteractionActive = false
-    private var activeVideoAnnotationTransform: ActiveVideoAnnotationTransform?
-    private var captionPlacementCache: (
+    var continuousEditBaseline: AutoEditPlan?
+    var presenterInteractionStartPlan: AutoEditPlan?
+    var videoAnnotationDraftID = UUID()
+    var videoAnnotationDraftPath: [LensPoint] = []
+    var videoAnnotationInteractionActive = false
+    var activeVideoAnnotationTransform: ActiveVideoAnnotationTransform?
+    var captionPlacementCache: (
         configuration: AutoEditPlan.Captions,
         timeline: VideoEditTimeline,
         cues: [CaptionCue]
     )?
+    var preAuditionAudio: AutoEditPlan.Audio?
 
-    private struct ActiveVideoAnnotationTransform {
+    struct ActiveVideoAnnotationTransform {
         enum Operation {
             case move
             case resize(ScreenshotAnnotationResizeHandle)
@@ -249,20 +251,8 @@ final class VideoEditorModel: ObservableObject {
         }
     }
 
-    func selectSegment(_ id: UUID) {
-        guard timeline.segments.contains(where: { $0.id == id }) else { return }
-        selectedSegmentID = id
-    }
-
-    // MARK: - 旁白清理
-
-    enum NarrationTrimDetectionState {
-        case detecting
-        case ready
-    }
-
-    @Published private(set) var narrationTrimDetectionState: NarrationTrimDetectionState = .ready
-    private var narrationTrimDetectionRevision = 0
+    @Published var narrationTrimDetectionState: NarrationTrimDetectionState = .ready
+    var narrationTrimDetectionRevision = 0
 
     var narrationTrimSuggestions: [NarrationTrimSuggestion] {
         plan.narrationTrims ?? []
@@ -281,1381 +271,6 @@ final class VideoEditorModel: ObservableObject {
 
     /// Output times a suggestion maps to under the current timeline, used to
     /// seek the playhead when a row is inspected.
-    func outputTimes(forNarrationTrim suggestion: NarrationTrimSuggestion) -> [Double] {
-        timeline.outputTimes(forSourceTime: suggestion.startSeconds)
-    }
-
-    func acceptNarrationTrim(_ id: UUID) {
-        guard let suggestion = narrationTrimSuggestions.first(where: { $0.id == id }),
-              suggestion.status == .pending else { return }
-        mutate(timelineChanged: true) { plan in
-            guard var timeline = plan.timeline,
-                  timeline.removeSourceRange(
-                    startSeconds: suggestion.startSeconds,
-                    endSeconds: suggestion.endSeconds
-                  ) else { return }
-            plan.timeline = timeline
-            plan.narrationTrims = Self.updating(
-                plan.narrationTrims ?? [],
-                id: id,
-                status: .accepted
-            )
-        }
-    }
-
-    func acceptAllPendingNarrationTrims() {
-        let pending = pendingNarrationTrims
-        guard !pending.isEmpty else { return }
-        mutate(timelineChanged: true) { plan in
-            guard var timeline = plan.timeline else { return }
-            var acceptedIDs = Set<UUID>()
-            for suggestion in pending
-            where timeline.removeSourceRange(
-                startSeconds: suggestion.startSeconds,
-                endSeconds: suggestion.endSeconds
-            ) {
-                acceptedIDs.insert(suggestion.id)
-            }
-            guard !acceptedIDs.isEmpty else { return }
-            plan.timeline = timeline
-            plan.narrationTrims = (plan.narrationTrims ?? []).map { item in
-                guard acceptedIDs.contains(item.id) else { return item }
-                var updated = item
-                updated.status = .accepted
-                return updated
-            }
-        }
-    }
-
-    func rejectNarrationTrim(_ id: UUID) {
-        setNarrationTrimStatus(id, .rejected)
-    }
-
-    /// Brings a previously rejected suggestion back into the review list.
-    func restoreNarrationTrim(_ id: UUID) {
-        setNarrationTrimStatus(id, .pending)
-    }
-
-    private func setNarrationTrimStatus(
-        _ id: UUID,
-        _ status: NarrationTrimSuggestion.Status
-    ) {
-        mutate { plan in
-            let current = plan.narrationTrims ?? []
-            guard current.contains(where: { $0.id == id && $0.status != status }) else {
-                return
-            }
-            plan.narrationTrims = Self.updating(current, id: id, status: status)
-        }
-    }
-
-    private static func updating(
-        _ suggestions: [NarrationTrimSuggestion],
-        id: UUID,
-        status: NarrationTrimSuggestion.Status
-    ) -> [NarrationTrimSuggestion] {
-        suggestions.map { item in
-            guard item.id == id else { return item }
-            var updated = item
-            updated.status = status
-            return updated
-        }
-    }
-
-    /// Detects silence, filler words, and buffer dead air once per project.
-    /// Results land in the plan without marking it dirty: pending suggestions
-    /// never change rendering, so there is nothing to re-render or save until
-    /// the user accepts one.
-    private func startNarrationTrimDetectionIfNeeded() {
-        guard plan.narrationTrims == nil else { return }
-        guard let microphoneURL else { return }
-        narrationTrimDetectionState = .detecting
-        narrationTrimDetectionRevision &+= 1
-        let revision = narrationTrimDetectionRevision
-        let thresholdDecibels = plan.audio?.narrationThresholdDecibels ?? -42
-        Task { [weak self] in
-            let spans = await Task.detached(priority: .utility) { () -> [NarrationTrimPlanner.Span]? in
-                let ranges = try? NarrationActivityAnalyzer().analyze(
-                    url: microphoneURL,
-                    thresholdDecibels: thresholdDecibels
-                )
-                return ranges?.map {
-                    NarrationTrimPlanner.Span(
-                        startSeconds: $0.startSeconds,
-                        endSeconds: $0.endSeconds
-                    )
-                }
-            }.value
-            guard let self, self.narrationTrimDetectionRevision == revision else { return }
-            var updated = self.plan
-            // A failed analysis still records an empty list: the recording is
-            // treated as "reviewed, nothing to suggest" rather than retried
-            // on every editor open.
-            updated.narrationTrims = NarrationTrimPlanner().suggestions(
-                narrationRanges: spans ?? [],
-                transcript: self.transcript,
-                durationSeconds: self.sourceDurationSeconds
-            )
-            self.plan = updated
-            var baseline = self.savedPlan
-            baseline.narrationTrims = updated.narrationTrims
-            self.savedPlan = baseline
-            self.syncChangeState()
-            self.narrationTrimDetectionState = .ready
-        }
-    }
-
-    func split(atOutputTime outputTime: Double) {
-        guard let position = timeline.position(atOutputTime: outputTime) else { return }
-        mutate(timelineChanged: true) { plan in
-            guard var timeline = plan.timeline,
-                  let newID = timeline.split(
-                    segmentID: position.segmentID,
-                    atSourceTime: position.sourceTimeSeconds
-                  ) else { return }
-            plan.timeline = timeline
-            selectedSegmentID = newID
-        }
-    }
-
-    func trimSelectedStart(toOutputTime outputTime: Double) {
-        guard let selectedSegmentID,
-              let position = timeline.position(atOutputTime: outputTime),
-              position.segmentID == selectedSegmentID else { return }
-        mutate(timelineChanged: true) { plan in
-            plan.timeline?.trimStart(
-                of: selectedSegmentID,
-                to: position.sourceTimeSeconds
-            )
-        }
-    }
-
-    func trimSelectedEnd(toOutputTime outputTime: Double) {
-        guard let selectedSegmentID,
-              let position = timeline.position(atOutputTime: outputTime),
-              position.segmentID == selectedSegmentID else { return }
-        mutate(timelineChanged: true) { plan in
-            plan.timeline?.trimEnd(
-                of: selectedSegmentID,
-                to: position.sourceTimeSeconds
-            )
-        }
-    }
-
-    func removeSelectedSegment() {
-        guard let selectedSegmentID, canRemoveSelectedSegment else { return }
-        mutate(timelineChanged: true) { plan in
-            plan.timeline?.setEnabled(false, for: selectedSegmentID)
-        }
-        self.selectedSegmentID = activeSegments.first?.id
-    }
-
-    func setSelectedPlaybackRate(_ rate: Double) {
-        guard let selectedSegmentID else { return }
-        mutate(timelineChanged: true) { plan in
-            plan.timeline?.setPlaybackRate(rate, for: selectedSegmentID)
-        }
-    }
-
-    func setSelectedTransitionKind(_ kind: VideoEditTransition.Kind) {
-        guard let selectedSegmentID, canTransitionFromSelectedSegment else { return }
-        let duration = selectedTransitionDuration
-        mutate(timelineChanged: true) { plan in
-            plan.timeline?.setTransition(
-                kind == .cut
-                    ? nil
-                    : VideoEditTransition(kind: kind, durationSeconds: duration),
-                after: selectedSegmentID
-            )
-        }
-    }
-
-    func setSelectedTransitionDuration(_ duration: Double) {
-        guard let selectedSegmentID,
-              canTransitionFromSelectedSegment,
-              selectedTransitionKind != .cut else { return }
-        let kind = selectedTransitionKind
-        mutate(timelineChanged: true) { plan in
-            plan.timeline?.setTransition(
-                VideoEditTransition(kind: kind, durationSeconds: duration),
-                after: selectedSegmentID
-            )
-        }
-    }
-
-    func setCameraMotionEnabled(_ enabled: Bool) {
-        mutate { $0.camera.mode = enabled ? "event-driven" : "off" }
-    }
-
-    func setAutomaticZoomScale(_ value: Double) {
-        let requestedScale = min(max(value.isFinite ? value : 1.60, 1), 3)
-        mutate { plan in
-            let effective = EffectTimeline.effectiveCameraKeyframes(for: plan.camera)
-            let automaticPeak = effective.enumerated().reduce(1.0) { peak, item in
-                let (index, keyframe) = item
-                guard !Self.isManualCameraReason(keyframe.reason),
-                      plan.camera.keyframes.indices.contains(index) else { return peak }
-                return max(peak, keyframe.scale)
-            }
-            plan.camera.keyframes = plan.camera.keyframes.enumerated().map { index, keyframe in
-                guard !Self.isManualCameraReason(keyframe.reason),
-                      effective.indices.contains(index),
-                      automaticPeak > 1.000_1 else { return keyframe }
-                let renderedScale = effective[index].scale
-                let relativeAmount = min(max(
-                    (renderedScale - 1) / (automaticPeak - 1),
-                    0
-                ), 1)
-                let scale = 1 + (requestedScale - 1) * relativeAmount
-                let visibleHalf = 0.5 / scale
-                return AutoEditPlan.CameraKeyframe(
-                    time: keyframe.time,
-                    scale: scale,
-                    center: LensPoint(
-                        x: min(max(keyframe.center.x, visibleHalf), 1 - visibleHalf),
-                        y: min(max(keyframe.center.y, visibleHalf), 1 - visibleHalf)
-                    ),
-                    easing: keyframe.easing,
-                    reason: keyframe.reason
-                )
-            }
-            plan.camera.zoomScale = requestedScale
-            plan.camera.zoomIntensity = 0.42
-        }
-    }
-
-    func setAutomaticCameraGenerationStrength(
-        _ strength: AutoEditPlan.Camera.GenerationStrength
-    ) {
-        mutate { $0.camera.generationStrength = strength }
-    }
-
-    func setCameraMotionBlurStrength(_ value: Double) {
-        mutate {
-            $0.camera.motionBlurStrength = min(max(value.isFinite ? value : 0, 0), 1)
-        }
-    }
-
-    func setClickToZoomEnabled(_ enabled: Bool) {
-        mutate { $0.camera.clickToZoom = enabled }
-    }
-
-    func setCameraFollowPointerEnabled(_ enabled: Bool) {
-        mutate { $0.camera.followPointer = enabled }
-    }
-
-    func replaceAutomaticCameraKeyframes(
-        with keyframes: [AutoEditPlan.CameraKeyframe]
-    ) {
-        let manual = plan.camera.keyframes.filter { keyframe in
-            switch keyframe.reason {
-            case .manualAnchor, .manualFocus, .manualHold, .manualReturn:
-                true
-            default:
-                false
-            }
-        }
-        mutate { plan in
-            if plan.camera.zoomScale == nil {
-                plan.camera.zoomScale = plan.camera.resolvedZoomScale
-                plan.camera.zoomIntensity = 0.42
-            }
-            plan.camera.keyframes = (keyframes + manual).sorted { lhs, rhs in
-                if lhs.time != rhs.time { return lhs.time < rhs.time }
-                return Self.cameraReasonPriority(lhs.reason)
-                    < Self.cameraReasonPriority(rhs.reason)
-            }
-        }
-    }
-
-    func beginRegeneratingCamera() {
-        isRegeneratingCamera = true
-    }
-
-    func endRegeneratingCamera() {
-        isRegeneratingCamera = false
-    }
-
-    func activateManualCameraFocusEditing() {
-        finishVideoAnnotationEditing()
-        isManualCameraFocusEditing = true
-    }
-
-    func cancelManualCameraFocusEditing() {
-        isManualCameraFocusEditing = false
-    }
-
-    @discardableResult
-    func addManualCameraFocus(
-        center: LensPoint,
-        atOutputTime outputTime: Double
-    ) -> Bool {
-        guard isManualCameraFocusEditing else { return false }
-        let sourceTime = sourceTime(atOutputTime: outputTime)
-        let previousPlan = plan
-        let editor = ManualCameraEditor(configuration: .init(
-            holdDuration: min(max(manualCameraHoldSeconds, 0.20), 8)
-        ))
-        mutate { plan in
-            plan.camera = editor.insertingFocus(
-                at: sourceTime,
-                center: center,
-                scale: min(max(manualCameraScale, 1), 3),
-                duration: sourceDurationSeconds,
-                into: plan.camera
-            )
-        }
-        isManualCameraFocusEditing = false
-        return plan != previousPlan
-    }
-
-    func clearManualCameraFocuses() {
-        guard manualCameraFocusCount > 0 else { return }
-        mutate { plan in
-            plan.camera = ManualCameraEditor().removingManualKeyframes(from: plan.camera)
-        }
-        isManualCameraFocusEditing = false
-    }
-
-    func setCursorEnabled(_ enabled: Bool) {
-        mutate { $0.cursor.isEnabled = enabled }
-    }
-
-    func setCursorAppearance(_ appearance: AutoEditPlan.Cursor.Appearance) {
-        mutate { $0.cursor.appearance = appearance }
-    }
-
-    func setCursorAccentColorHex(_ value: String) {
-        mutate { plan in
-            let trimmed = value.trimmingCharacters(
-                in: CharacterSet(charactersIn: "# ")
-            ).uppercased()
-            plan.cursor.accentColorHex = if trimmed.count == 6,
-                                            UInt32(trimmed, radix: 16) != nil {
-                "#\(trimmed)"
-            } else {
-                "#5BD6FF"
-            }
-        }
-    }
-
-    func setCursorMotionEffect(_ effect: AutoEditPlan.Cursor.MotionEffect) {
-        mutate { $0.cursor.motionEffect = effect }
-    }
-
-    func setCursorMotionEffectStrength(_ value: Double) {
-        mutate { plan in
-            plan.cursor.motionEffectStrength = min(max(
-                value.isFinite ? value : 0.42,
-                0.1
-            ), 1)
-        }
-    }
-
-    func setCursorScale(_ value: Double) {
-        mutate { $0.cursor.scale = min(max(value, 0.5), 3) }
-    }
-
-    func setCursorSmoothingWindowMilliseconds(_ value: Double) {
-        mutate { plan in
-            let milliseconds = min(max(value.isFinite ? value : 0, 0), 160)
-            plan.cursor.smoothingWindowMilliseconds = milliseconds
-            plan.cursor.smoothing = min(milliseconds / 80, 1)
-        }
-    }
-
-    func setCursorHidesWhenIdle(_ enabled: Bool) {
-        mutate { $0.cursor.hidesWhenIdle = enabled }
-    }
-
-    func setClickPulseEnabled(_ enabled: Bool) {
-        mutate { plan in
-            if plan.interaction == nil { plan.interaction = .init() }
-            plan.interaction?.showsClickPulse = enabled
-        }
-    }
-
-    func setClickEffect(_ effect: AutoEditPlan.Interaction.ClickEffect) {
-        mutate { plan in
-            if plan.interaction == nil { plan.interaction = .init() }
-            plan.interaction?.clickEffect = effect
-        }
-    }
-
-    func setClickEffectStrength(_ value: Double) {
-        mutate { plan in
-            if plan.interaction == nil { plan.interaction = .init() }
-            plan.interaction?.clickEffectStrength = min(max(
-                value.isFinite ? value : 1,
-                0.1
-            ), 1)
-        }
-    }
-
-    func setClickPulseScale(_ value: Double) {
-        mutate { plan in
-            if plan.interaction == nil { plan.interaction = .init() }
-            plan.interaction?.clickPulseScale = min(max(
-                value.isFinite ? value : 1.25,
-                0.5
-            ), 3)
-        }
-    }
-
-    func setClickPulseDuration(_ value: Double) {
-        mutate { plan in
-            if plan.interaction == nil { plan.interaction = .init() }
-            plan.interaction?.clickPulseDuration = min(max(
-                value.isFinite ? value : 0.62,
-                0.15
-            ), 1.5)
-        }
-    }
-
-    func setClickPulseColorHex(_ value: String) {
-        mutate { plan in
-            if plan.interaction == nil { plan.interaction = .init() }
-            let normalized = AutoEditPlan.Interaction(
-                clickPulseColorHex: value
-            ).clickPulseColorHex
-            plan.interaction?.clickPulseColorHex = normalized
-        }
-    }
-
-    func setCanvasEnabled(_ enabled: Bool) {
-        mutate { plan in
-            if plan.canvas == nil { plan.canvas = .init() }
-            plan.canvas?.isEnabled = enabled
-        }
-    }
-
-    func setCanvasMargin(_ value: Double) {
-        mutate { plan in
-            if plan.canvas == nil { plan.canvas = .init() }
-            plan.canvas?.margin = min(max(value, 0), 0.25)
-        }
-    }
-
-    func setCanvasCornerRadius(_ value: Double) {
-        mutate { plan in
-            if plan.canvas == nil { plan.canvas = .init() }
-            plan.canvas?.cornerRadius = min(max(value, 0), 0.2)
-        }
-    }
-
-    func setCanvasShadowOpacity(_ value: Double) {
-        mutate { plan in
-            if plan.canvas == nil { plan.canvas = .init() }
-            plan.canvas?.shadowOpacity = min(max(
-                value.isFinite ? value : 0.24,
-                0
-            ), 1)
-        }
-    }
-
-    func setCanvasPreset(topHex: String, bottomHex: String) {
-        mutate { plan in
-            if plan.canvas == nil { plan.canvas = .init() }
-            plan.canvas?.backgroundTopHex = topHex
-            plan.canvas?.backgroundBottomHex = bottomHex
-        }
-    }
-
-    func setPresenterEnabled(_ enabled: Bool) {
-        guard hasCameraTrack else { return }
-        mutate { plan in
-            if plan.presenterCamera == nil { plan.presenterCamera = .init() }
-            plan.presenterCamera?.isEnabled = enabled
-        }
-    }
-
-    func setPresenterShape(_ shape: AutoEditPlan.PresenterCamera.Shape) {
-        mutate { plan in
-            if plan.presenterCamera == nil { plan.presenterCamera = .init() }
-            plan.presenterCamera?.shape = shape
-        }
-    }
-
-    func setPresenterAnchor(_ anchor: AutoEditPlan.PresenterCamera.Anchor) {
-        mutate { plan in
-            if plan.presenterCamera == nil { plan.presenterCamera = .init() }
-            plan.presenterCamera?.anchor = anchor
-            plan.presenterCamera?.position = nil
-        }
-    }
-
-    func setPresenterSize(_ value: Double) {
-        mutate { plan in
-            if plan.presenterCamera == nil { plan.presenterCamera = .init() }
-            plan.presenterCamera?.size = min(max(value, 0.08), 0.45)
-        }
-    }
-
-    func setPresenterMirrored(_ mirrored: Bool) {
-        mutate { plan in
-            if plan.presenterCamera == nil { plan.presenterCamera = .init() }
-            plan.presenterCamera?.isMirrored = mirrored
-        }
-    }
-
-    func setPresenterAvoidanceEnabled(_ enabled: Bool) {
-        mutate { plan in
-            if plan.presenterCamera == nil { plan.presenterCamera = .init() }
-            plan.presenterCamera?.automaticallyAvoidsContent = enabled
-        }
-    }
-
-    func setPresenterThumbnail(_ image: NSImage?) {
-        presenterThumbnail = image
-    }
-
-    func presenterState(
-        atOutputTime outputTime: Double,
-        canvasAspectRatio: Double = 16.0 / 9.0
-    ) -> PresenterCameraFrameState {
-        var layout = plan.presenterCamera ?? .init()
-        if presenterInteractionStartPlan != nil {
-            layout.automaticallyAvoidsContent = false
-        }
-        let captionContext: (AutoEditPlan.Captions, Double)? = {
-            guard let transcript,
-                  let captions = plan.captions,
-                  captions.isEnabled else { return nil }
-            let cues = cachedCaptionCues(
-                transcript: transcript,
-                configuration: captions
-            )
-            let amount = CaptionCuePlanner.avoidanceAmount(at: outputTime, in: cues)
-            return amount > 0.001 ? (captions, amount) : nil
-        }()
-        return PresenterCameraPlacementPlanner.state(
-            atSourceTime: sourceTime(atOutputTime: outputTime),
-            layout: layout,
-            cameraKeyframes: EffectTimeline.effectiveCameraKeyframes(for: plan.camera),
-            captions: captionContext?.0,
-            captionAvoidanceAmount: captionContext?.1 ?? 0,
-            canvasAspectRatio: canvasAspectRatio
-        )
-    }
-
-    func hasPresenterKeyframe(nearOutputTime outputTime: Double) -> Bool {
-        guard let layout = plan.presenterCamera else { return false }
-        return nearestPresenterKeyframeIndex(
-            in: layout,
-            sourceTime: sourceTime(atOutputTime: outputTime)
-        ) != nil
-    }
-
-    func upsertPresenterKeyframe(atOutputTime outputTime: Double) {
-        guard hasCameraTrack else { return }
-        let sourceTime = sourceTime(atOutputTime: outputTime)
-        let state = presenterState(atOutputTime: outputTime)
-        mutate { plan in
-            if plan.presenterCamera == nil { plan.presenterCamera = .init(isEnabled: true) }
-            guard var presenter = plan.presenterCamera else { return }
-            let existingIndex = nearestPresenterKeyframeIndex(
-                in: presenter,
-                sourceTime: sourceTime
-            )
-            let storedTime = existingIndex.map {
-                presenter.keyframes[$0].sourceTimeSeconds
-            } ?? sourceTime
-            let easing = existingIndex.map {
-                presenter.keyframes[$0].easing
-            } ?? "spring-gentle"
-            let keyframe = AutoEditPlan.PresenterCameraKeyframe(
-                sourceTimeSeconds: storedTime,
-                center: state.center,
-                size: state.size,
-                easing: easing
-            )
-            if let existingIndex {
-                presenter.keyframes[existingIndex] = keyframe
-            } else {
-                presenter.keyframes.append(keyframe)
-            }
-            presenter.keyframes.sort { $0.sourceTimeSeconds < $1.sourceTimeSeconds }
-            plan.presenterCamera = presenter
-        }
-    }
-
-    func removePresenterKeyframe(nearOutputTime outputTime: Double) {
-        let sourceTime = sourceTime(atOutputTime: outputTime)
-        guard let presenter = plan.presenterCamera,
-              let index = nearestPresenterKeyframeIndex(
-                  in: presenter,
-                  sourceTime: sourceTime
-              ) else { return }
-        mutate { plan in
-            plan.presenterCamera?.keyframes.remove(at: index)
-        }
-    }
-
-    func presenterKeyframeEasing(nearOutputTime outputTime: Double) -> String? {
-        guard let presenter = plan.presenterCamera,
-              let index = nearestPresenterKeyframeIndex(
-                  in: presenter,
-                  sourceTime: sourceTime(atOutputTime: outputTime)
-              ) else { return nil }
-        return presenter.keyframes[index].easing
-    }
-
-    func setPresenterKeyframeEasing(_ easing: String, atOutputTime outputTime: Double) {
-        let sourceTime = sourceTime(atOutputTime: outputTime)
-        guard let presenter = plan.presenterCamera,
-              let index = nearestPresenterKeyframeIndex(
-                  in: presenter,
-                  sourceTime: sourceTime
-              ) else { return }
-        mutate { plan in
-            guard let current = plan.presenterCamera?.keyframes[index] else { return }
-            plan.presenterCamera?.keyframes[index] = AutoEditPlan.PresenterCameraKeyframe(
-                sourceTimeSeconds: current.sourceTimeSeconds,
-                center: current.center,
-                size: current.size,
-                easing: easing
-            )
-        }
-    }
-
-    func previousPresenterKeyframeOutputTime(before outputTime: Double) -> Double? {
-        presenterKeyframeOutputTimes.last {
-            $0 < outputTime - 0.05
-        }
-    }
-
-    func nextPresenterKeyframeOutputTime(after outputTime: Double) -> Double? {
-        presenterKeyframeOutputTimes.first {
-            $0 > outputTime + 0.05
-        }
-    }
-
-    func beginPresenterInteraction() {
-        guard hasCameraTrack,
-              presenterEnabled,
-              presenterInteractionStartPlan == nil else { return }
-        presenterInteractionStartPlan = plan
-    }
-
-    func updatePresenterInteraction(
-        center: LensPoint,
-        size: Double,
-        atOutputTime outputTime: Double
-    ) {
-        guard hasCameraTrack, presenterEnabled else { return }
-        if presenterInteractionStartPlan == nil { beginPresenterInteraction() }
-        let sourceTime = sourceTime(atOutputTime: outputTime)
-        let normalized = AutoEditPlan.PresenterCameraKeyframe(
-            sourceTimeSeconds: sourceTime,
-            center: center,
-            size: size
-        )
-        var updated = plan
-        guard var presenter = updated.presenterCamera else { return }
-        if let index = nearestPresenterKeyframeIndex(
-            in: presenter,
-            sourceTime: sourceTime
-        ) {
-            let existing = presenter.keyframes[index]
-            presenter.keyframes[index] = AutoEditPlan.PresenterCameraKeyframe(
-                sourceTimeSeconds: existing.sourceTimeSeconds,
-                center: normalized.center,
-                size: normalized.size,
-                easing: existing.easing
-            )
-        } else {
-            presenter.position = normalized.center
-            presenter.size = normalized.size
-        }
-        updated.presenterCamera = presenter
-        guard updated != plan else { return }
-        plan = updated
-        syncChangeState()
-    }
-
-    func endPresenterInteraction() {
-        guard let start = presenterInteractionStartPlan else { return }
-        presenterInteractionStartPlan = nil
-        guard start != plan else { return }
-        undoHistory.append(start)
-        if undoHistory.count > 80 { undoHistory.removeFirst() }
-        redoHistory.removeAll()
-        syncChangeState()
-    }
-
-    /// Begins a continuous inspector edit such as a slider drag. The plan can
-    /// still change on every tick so the raw preview remains responsive; the
-    /// undo stack is committed once when the gesture ends.
-    func beginContinuousEdit() {
-        guard continuousEditBaseline == nil else { return }
-        continuousEditBaseline = plan
-    }
-
-    /// Commits the baseline captured by ``beginContinuousEdit`` as one undo
-    /// entry. Calling this more than once is harmless and keeps keyboard
-    /// accessibility interactions well-defined.
-    func endContinuousEdit() {
-        guard let baseline = continuousEditBaseline else { return }
-        continuousEditBaseline = nil
-        guard baseline != plan else { return }
-        undoHistory.append(baseline)
-        if undoHistory.count > 80 { undoHistory.removeFirst() }
-        redoHistory.removeAll()
-        syncChangeState()
-    }
-
-    func activateVideoAnnotationSelection() {
-        cancelManualCameraFocusEditing()
-        cancelVideoAnnotationDraft()
-        cancelVideoAnnotationInteraction()
-        isVideoAnnotationEditing = true
-        isVideoAnnotationSelectionMode = true
-    }
-
-    func selectVideoAnnotation(_ id: UUID) {
-        guard videoAnnotations.contains(where: { $0.id == id }) else { return }
-        activateVideoAnnotationSelection()
-        selectedVideoAnnotationID = id
-        if let selected = selectedVideoAnnotation {
-            selectedVideoAnnotationColor = selected.annotation.style.color
-            if selected.annotation.kind == .text, let text = selected.annotation.text {
-                videoAnnotationTextDraft = text
-            }
-            defaultVideoAnnotationDurationSeconds = selected.sourceDurationSeconds
-        }
-    }
-
-    func activateVideoAnnotationTool(_ tool: ScreenshotAnnotationKind) {
-        cancelManualCameraFocusEditing()
-        cancelVideoAnnotationDraft()
-        cancelVideoAnnotationInteraction()
-        selectedVideoAnnotationTool = tool
-        isVideoAnnotationEditing = true
-        isVideoAnnotationSelectionMode = false
-        selectedVideoAnnotationID = nil
-    }
-
-    func finishVideoAnnotationEditing() {
-        cancelVideoAnnotationDraft()
-        endVideoAnnotationInteraction()
-        isVideoAnnotationEditing = false
-    }
-
-    func updateVideoAnnotationDraft(start: LensPoint, end: LensPoint) {
-        guard isVideoAnnotationEditing, !isVideoAnnotationSelectionMode else { return }
-        if selectedVideoAnnotationTool == .freehand {
-            if videoAnnotationDraftPath.isEmpty {
-                appendVideoAnnotationDraftPoint(clamped(start))
-            }
-            appendVideoAnnotationDraftPoint(clamped(end))
-            videoAnnotationDraft = makeVideoFreehandAnnotation(
-                id: videoAnnotationDraftID,
-                points: videoAnnotationDraftPath
-            )
-        } else {
-            videoAnnotationDraft = makeVideoAnnotation(
-                id: videoAnnotationDraftID,
-                start: clamped(start),
-                end: clamped(end)
-            )
-        }
-    }
-
-    @discardableResult
-    func commitVideoAnnotationDraft(
-        start: LensPoint,
-        end: LensPoint,
-        atOutputTime outputTime: Double
-    ) -> Bool {
-        guard isVideoAnnotationEditing,
-              !isVideoAnnotationSelectionMode,
-              sourceDurationSeconds >= VideoEditTimeline.minimumSegmentDurationSeconds else {
-            cancelVideoAnnotationDraft()
-            return false
-        }
-        let startPoint = clamped(start)
-        let endPoint = clamped(end)
-        let annotation: ScreenshotAnnotation?
-        if selectedVideoAnnotationTool == .freehand {
-            if videoAnnotationDraftPath.isEmpty {
-                appendVideoAnnotationDraftPoint(startPoint)
-            }
-            appendVideoAnnotationDraftPoint(endPoint)
-            annotation = makeVideoFreehandAnnotation(
-                id: videoAnnotationDraftID,
-                points: videoAnnotationDraftPath
-            )
-        } else {
-            annotation = makeVideoAnnotation(
-                id: videoAnnotationDraftID,
-                start: startPoint,
-                end: endPoint
-            )
-        }
-        guard let annotation else {
-            cancelVideoAnnotationDraft()
-            return false
-        }
-
-        let minimumDuration = VideoEditTimeline.minimumSegmentDurationSeconds
-        let sourceStart = min(
-            max(sourceTime(atOutputTime: outputTime), 0),
-            max(sourceDurationSeconds - minimumDuration, 0)
-        )
-        let requestedDuration = min(max(
-            defaultVideoAnnotationDurationSeconds,
-            minimumDuration
-        ), 30)
-        let sourceEnd = min(
-            max(sourceStart + requestedDuration, sourceStart + minimumDuration),
-            sourceDurationSeconds
-        )
-        let item = VideoAnnotation(
-            annotation: annotation,
-            sourceStartSeconds: sourceStart,
-            sourceEndSeconds: sourceEnd
-        )
-        mutate { plan in
-            if plan.videoAnnotations == nil { plan.videoAnnotations = [] }
-            plan.videoAnnotations?.append(item)
-        }
-        videoAnnotationDraft = nil
-        videoAnnotationDraftID = UUID()
-        videoAnnotationDraftPath.removeAll(keepingCapacity: true)
-        return true
-    }
-
-    func cancelVideoAnnotationDraft() {
-        videoAnnotationDraft = nil
-        videoAnnotationDraftID = UUID()
-        videoAnnotationDraftPath.removeAll(keepingCapacity: true)
-    }
-
-    func beginVideoAnnotationSelectionInteraction(
-        at point: LensPoint,
-        outputTime: Double,
-        hitTolerance: Double,
-        handleTolerance: Double
-    ) {
-        guard isVideoAnnotationEditing,
-              isVideoAnnotationSelectionMode,
-              !videoAnnotationInteractionActive else { return }
-        videoAnnotationInteractionActive = true
-        let point = clamped(point)
-        let contributions = timeline.sourceContributions(atOutputTime: outputTime)
-        let activeItems = videoAnnotations.filter {
-            let item = $0
-            return contributions.contains {
-                $0.sourceTimeSeconds >= item.sourceStartSeconds
-                    && $0.sourceTimeSeconds < item.sourceEndSeconds
-            }
-        }
-
-        if let selected = selectedVideoAnnotation,
-           activeItems.contains(where: { $0.id == selected.id }),
-           let handle = ScreenshotAnnotationGeometry.resizeHandle(
-               for: selected.annotation,
-               at: point,
-               tolerance: handleTolerance
-           ) {
-            activeVideoAnnotationTransform = ActiveVideoAnnotationTransform(
-                baseline: plan,
-                original: selected,
-                startPoint: point,
-                operation: .resize(handle)
-            )
-            return
-        }
-
-        guard let hitID = ScreenshotAnnotationGeometry.topmostAnnotationID(
-            in: activeItems.map(\.annotation),
-            at: point,
-            tolerance: hitTolerance
-        ), let hit = activeItems.first(where: { $0.id == hitID }) else {
-            selectedVideoAnnotationID = nil
-            activeVideoAnnotationTransform = nil
-            return
-        }
-        selectedVideoAnnotationID = hitID
-        selectedVideoAnnotationColor = hit.annotation.style.color
-        if hit.annotation.kind == .text, let text = hit.annotation.text {
-            videoAnnotationTextDraft = text
-        }
-        activeVideoAnnotationTransform = ActiveVideoAnnotationTransform(
-            baseline: plan,
-            original: hit,
-            startPoint: point,
-            operation: .move
-        )
-    }
-
-    func updateVideoAnnotationSelectionInteraction(to point: LensPoint) {
-        guard videoAnnotationInteractionActive,
-              let activeVideoAnnotationTransform else { return }
-        let annotation: ScreenshotAnnotation
-        switch activeVideoAnnotationTransform.operation {
-        case .move:
-            annotation = ScreenshotAnnotationGeometry.moved(
-                activeVideoAnnotationTransform.original.annotation,
-                byX: clamped(point).x - activeVideoAnnotationTransform.startPoint.x,
-                y: clamped(point).y - activeVideoAnnotationTransform.startPoint.y
-            )
-        case let .resize(handle):
-            annotation = ScreenshotAnnotationGeometry.resized(
-                activeVideoAnnotationTransform.original.annotation,
-                handle: handle,
-                to: clamped(point)
-            )
-        }
-        var updated = plan
-        guard let index = updated.videoAnnotations?.firstIndex(where: {
-            $0.id == activeVideoAnnotationTransform.original.id
-        }) else { return }
-        updated.videoAnnotations?[index].annotation = annotation
-        guard updated != plan else { return }
-        plan = updated
-        syncChangeState()
-    }
-
-    func endVideoAnnotationInteraction() {
-        guard videoAnnotationInteractionActive else { return }
-        videoAnnotationInteractionActive = false
-        guard let activeVideoAnnotationTransform else { return }
-        self.activeVideoAnnotationTransform = nil
-        guard activeVideoAnnotationTransform.baseline != plan else { return }
-        undoHistory.append(activeVideoAnnotationTransform.baseline)
-        if undoHistory.count > 80 { undoHistory.removeFirst() }
-        redoHistory.removeAll()
-        syncChangeState()
-    }
-
-    func cancelVideoAnnotationInteraction() {
-        videoAnnotationInteractionActive = false
-        guard let activeVideoAnnotationTransform else { return }
-        plan = activeVideoAnnotationTransform.baseline
-        self.activeVideoAnnotationTransform = nil
-        syncChangeState()
-    }
-
-    func deleteSelectedVideoAnnotation() {
-        guard let selectedVideoAnnotationID else { return }
-        mutate { plan in
-            plan.videoAnnotations?.removeAll { $0.id == selectedVideoAnnotationID }
-        }
-        self.selectedVideoAnnotationID = nil
-    }
-
-    func setVideoAnnotationColor(_ color: LensColor) {
-        selectedVideoAnnotationColor = color
-        guard let selectedVideoAnnotationID else { return }
-        mutate { plan in
-            guard let index = plan.videoAnnotations?.firstIndex(where: {
-                $0.id == selectedVideoAnnotationID
-            }) else { return }
-            plan.videoAnnotations?[index].annotation.style.color = color
-            if let fill = plan.videoAnnotations?[index].annotation.style.fillColor {
-                plan.videoAnnotations?[index].annotation.style.fillColor = LensColor(
-                    red: color.red,
-                    green: color.green,
-                    blue: color.blue,
-                    alpha: fill.alpha
-                )
-            }
-        }
-    }
-
-    func setSelectedVideoAnnotationDuration(_ duration: Double) {
-        let value = min(max(
-            duration.isFinite ? duration : 2,
-            VideoEditTimeline.minimumSegmentDurationSeconds
-        ), 30)
-        defaultVideoAnnotationDurationSeconds = value
-        guard let selectedVideoAnnotationID else { return }
-        mutate { plan in
-            guard let index = plan.videoAnnotations?.firstIndex(where: {
-                $0.id == selectedVideoAnnotationID
-            }), let item = plan.videoAnnotations?[index] else { return }
-            plan.videoAnnotations?[index].sourceEndSeconds = min(
-                item.sourceStartSeconds + value,
-                sourceDurationSeconds
-            )
-        }
-    }
-
-    func setSelectedVideoAnnotationFadeDuration(_ duration: Double) {
-        guard let selectedVideoAnnotationID else { return }
-        mutate { plan in
-            guard let index = plan.videoAnnotations?.firstIndex(where: {
-                $0.id == selectedVideoAnnotationID
-            }) else { return }
-            plan.videoAnnotations?[index].fadeDurationSeconds = min(max(
-                duration.isFinite ? duration : 0.16,
-                0
-            ), 1)
-        }
-    }
-
-    func setSelectedVideoAnnotationLineWidth(_ value: Double) {
-        guard let selectedVideoAnnotationID else { return }
-        mutate { plan in
-            guard let index = plan.videoAnnotations?.firstIndex(where: {
-                $0.id == selectedVideoAnnotationID
-            }) else { return }
-            plan.videoAnnotations?[index].annotation.style.lineWidth = min(max(value, 0.002), 0.04)
-        }
-    }
-
-    func setSelectedVideoAnnotationIntensity(_ value: Double) {
-        guard let selectedVideoAnnotationID else { return }
-        mutate { plan in
-            guard let index = plan.videoAnnotations?.firstIndex(where: {
-                $0.id == selectedVideoAnnotationID
-            }) else { return }
-            plan.videoAnnotations?[index].annotation.style.intensity = min(max(value, 0.01), 0.12)
-        }
-    }
-
-    func applyVideoAnnotationTextDraft() {
-        let text = videoAnnotationTextDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let selectedVideoAnnotationID, !text.isEmpty else { return }
-        mutate { plan in
-            guard let index = plan.videoAnnotations?.firstIndex(where: {
-                $0.id == selectedVideoAnnotationID
-            }), plan.videoAnnotations?[index].annotation.kind == .text else { return }
-            plan.videoAnnotations?[index].annotation.text = text
-        }
-    }
-
-    func setAudioEnabled(_ enabled: Bool) {
-        mutate { plan in
-            if plan.audio == nil { plan.audio = .init() }
-            plan.audio?.isEnabled = enabled
-        }
-    }
-
-    func setSystemVolume(_ value: Double) {
-        mutate { plan in
-            if plan.audio == nil { plan.audio = .init() }
-            plan.audio?.systemVolume = min(max(value, 0), 2)
-        }
-    }
-
-    func setMicrophoneVolume(_ value: Double) {
-        mutate { plan in
-            if plan.audio == nil { plan.audio = .init() }
-            plan.audio?.microphoneVolume = min(max(value, 0), 2)
-        }
-    }
-
-    func setMicrophoneNoiseReductionEnabled(_ enabled: Bool) {
-        mutate { plan in
-            if plan.audio == nil { plan.audio = .init() }
-            plan.audio?.reducesMicrophoneNoise = enabled
-        }
-    }
-
-    func setNoiseReductionAmount(_ value: Double) {
-        mutate { plan in
-            if plan.audio == nil { plan.audio = .init() }
-            plan.audio?.noiseReductionAmount = min(max(value, 0), 1)
-        }
-    }
-
-    func setLoudnessNormalizationEnabled(_ enabled: Bool) {
-        mutate { plan in
-            if plan.audio == nil { plan.audio = .init() }
-            plan.audio?.normalizesLoudness = enabled
-        }
-    }
-
-    func setTargetLoudnessLUFS(_ value: Double) {
-        mutate { plan in
-            if plan.audio == nil { plan.audio = .init() }
-            plan.audio?.targetLoudnessLUFS = min(max(value, -24), -10)
-        }
-    }
-
-    func setDuckingEnabled(_ enabled: Bool) {
-        mutate { plan in
-            if plan.audio == nil { plan.audio = .init() }
-            plan.audio?.ducksSystemUnderNarration = enabled
-        }
-    }
-
-    func setCursorFollowStyle(_ style: AutoEditPlan.Cursor.FollowStyle) {
-        mutate { plan in
-            plan.cursor.followStyle = style
-        }
-    }
-
-    func setCaptionsWordHighlight(_ enabled: Bool) {
-        mutate { plan in
-            if plan.captions == nil { plan.captions = .init() }
-            plan.captions?.highlightsSpokenWords = enabled
-        }
-    }
-
-    func setExportAspectRatio(_ aspectRatio: AutoEditPlan.Export.AspectRatio?) {
-        mutate { plan in
-            if plan.export == nil { plan.export = .init() }
-            plan.export?.aspectRatio = aspectRatio
-        }
-    }
-
-    // MARK: - 击键胶囊
-
-    func setKeystrokesEnabled(_ enabled: Bool) {
-        mutate { plan in
-            if plan.interaction == nil { plan.interaction = .init() }
-            plan.interaction?.showsKeystrokes = enabled
-        }
-    }
-
-    /// Legacy projects predate keystroke data; regenerate it once from the
-    /// recorded event file so the toggle works everywhere.
-    private func hydrateKeystrokesIfNeeded() {
-        guard (plan.interaction?.keystrokes ?? []).isEmpty,
-              let keyboardEventsURL,
-              FileManager.default.fileExists(atPath: keyboardEventsURL.path) else {
-            return
-        }
-        Task { [weak self] in
-            let sourceDuration = self?.sourceDurationSeconds ?? 0
-            let displays = await Task.detached(priority: .utility) { () -> [AutoEditPlan.KeystrokeDisplay] in
-                let events = (try? LensEventReader.read(
-                    KeyboardEvent.self,
-                    from: keyboardEventsURL
-                )) ?? []
-                return KeystrokePlanner().displays(
-                    events: events,
-                    durationSeconds: sourceDuration
-                )
-            }.value
-            guard let self, !displays.isEmpty else { return }
-            var updated = self.plan
-            if updated.interaction == nil { updated.interaction = .init() }
-            updated.interaction?.keystrokes = displays
-            self.plan = updated
-            var baseline = self.savedPlan
-            if baseline.interaction == nil { baseline.interaction = .init() }
-            baseline.interaction?.keystrokes = displays
-            self.savedPlan = baseline
-            self.syncChangeState()
-        }
-    }
-
-    // MARK: - 一键人声增强
-
-    /// The applied preset when all three narration-polish switches are on;
-    /// nil means enhancement is off (or the knobs were tuned by hand).
-    var appliedVoiceEnhancementLevel: AutoEditPlan.Audio.VoiceEnhancementLevel? {
-        guard let audio = plan.audio,
-              audio.reducesMicrophoneNoise,
-              audio.normalizesLoudness,
-              audio.ducksSystemUnderNarration else { return nil }
-        return AutoEditPlan.Audio.VoiceEnhancementLevel.allCases
-            .min { lhs, rhs in
-                abs(lhs.noiseReductionAmount - audio.noiseReductionAmount)
-                    < abs(rhs.noiseReductionAmount - audio.noiseReductionAmount)
-            }
-    }
-
-    func setVoiceEnhancement(
-        _ level: AutoEditPlan.Audio.VoiceEnhancementLevel?
-    ) {
-        mutate { plan in
-            if plan.audio == nil { plan.audio = .init() }
-            guard let level else {
-                plan.audio?.reducesMicrophoneNoise = false
-                plan.audio?.normalizesLoudness = false
-                plan.audio?.ducksSystemUnderNarration = false
-                return
-            }
-            plan.audio?.reducesMicrophoneNoise = true
-            plan.audio?.normalizesLoudness = true
-            plan.audio?.ducksSystemUnderNarration = true
-            plan.audio?.noiseReductionAmount = level.noiseReductionAmount
-            plan.audio?.targetLoudnessLUFS = level.targetLoudnessLUFS
-        }
-    }
-
-    private var preAuditionAudio: AutoEditPlan.Audio?
-
-    var isAuditioningUnprocessedAudio: Bool { preAuditionAudio != nil }
-
-    /// Temporarily bypasses narration processing so the user can hear the
-    /// before/after difference against the same preview pipeline.
-    func setUnprocessedAudition(_ enabled: Bool) {
-        if enabled {
-            guard preAuditionAudio == nil, let audio = plan.audio else { return }
-            mutate { plan in
-                plan.audio?.reducesMicrophoneNoise = false
-                plan.audio?.normalizesLoudness = false
-                plan.audio?.ducksSystemUnderNarration = false
-            }
-            preAuditionAudio = audio
-        } else {
-            guard let original = preAuditionAudio else { return }
-            mutate { plan in
-                plan.audio = original
-            }
-            preAuditionAudio = nil
-        }
-    }
-
-    func setCaptionsEnabled(_ enabled: Bool) {
-        guard hasTranscript else { return }
-        mutate { plan in
-            if plan.captions == nil { plan.captions = .init() }
-            plan.captions?.isEnabled = enabled
-        }
-    }
-
-    func setCaptionStyle(_ style: AutoEditPlan.Captions.Style) {
-        guard hasTranscript else { return }
-        mutate { plan in
-            if plan.captions == nil { plan.captions = .init() }
-            plan.captions?.style = style
-        }
-    }
-
-    func setCaptionPosition(_ position: AutoEditPlan.Captions.Position) {
-        guard hasTranscript else { return }
-        mutate { plan in
-            if plan.captions == nil { plan.captions = .init() }
-            plan.captions?.position = position
-        }
-    }
-
-    func setCaptionFontScale(_ value: Double) {
-        guard hasTranscript else { return }
-        mutate { plan in
-            if plan.captions == nil { plan.captions = .init() }
-            plan.captions?.fontScale = min(max(value, 0.7), 1.6)
-        }
-    }
-
-    func setExportPreset(_ preset: AutoEditPlan.Export.Preset) {
-        mutate { plan in
-            if plan.export == nil { plan.export = .init(preset: .source) }
-            plan.export?.preset = preset
-        }
-    }
-
-    func setCaptionCueText(_ text: String, at index: Int) {
-        mutateCaptionCues { cues in
-            guard cues.indices.contains(index), cues[index].text != text else { return nil }
-            var updated = cues
-            updated[index].text = text
-            return updated
-        }
-    }
-
-    func selectCaptionCue(at index: Int?) {
-        guard let index else {
-            selectedCaptionCueIndex = nil
-            return
-        }
-        guard captionSourceCues.indices.contains(index) else { return }
-        selectedCaptionCueIndex = index
-    }
-
-    func captionOutputRanges(at index: Int) -> [VideoEditTimeRange] {
-        let cues = captionSourceCues
-        guard cues.indices.contains(index) else { return [] }
-        let cue = cues[index]
-        return timeline.outputRanges(forSourceRange: VideoEditTimeRange(
-            startSeconds: cue.sourceStartSeconds,
-            endSeconds: cue.sourceEndSeconds
-        ))
-    }
-
-    func primaryCaptionOutputTime(at index: Int) -> Double? {
-        captionOutputRanges(at: index).first?.startSeconds
-    }
-
-    func setCaptionCueStart(_ seconds: Double, at index: Int) {
-        mutateCaptionCues { cues in
-            CaptionCueEditor.retimed(
-                cues,
-                at: index,
-                sourceStartSeconds: seconds,
-                sourceDurationSeconds: sourceDurationSeconds
-            )
-        }
-    }
-
-    func setCaptionCueEnd(_ seconds: Double, at index: Int) {
-        mutateCaptionCues { cues in
-            CaptionCueEditor.retimed(
-                cues,
-                at: index,
-                sourceEndSeconds: seconds,
-                sourceDurationSeconds: sourceDurationSeconds
-            )
-        }
-    }
-
-    func canSplitCaptionCue(at index: Int, atOutputTime outputTime: Double) -> Bool {
-        let cues = captionSourceCues
-        guard cues.indices.contains(index),
-              let sourceTime = timeline.position(atOutputTime: outputTime)?.sourceTimeSeconds else {
-            return false
-        }
-        return CaptionCueEditor.split(
-            cues,
-            at: index,
-            sourceTimeSeconds: sourceTime
-        ) != nil
-    }
-
-    @discardableResult
-    func splitCaptionCue(at index: Int, atOutputTime outputTime: Double) -> Bool {
-        guard let sourceTime = timeline.position(atOutputTime: outputTime)?.sourceTimeSeconds else {
-            return false
-        }
-        let changed = mutateCaptionCues { cues in
-            CaptionCueEditor.split(
-                cues,
-                at: index,
-                sourceTimeSeconds: sourceTime
-            )
-        }
-        if changed { selectedCaptionCueIndex = index + 1 }
-        return changed
-    }
-
-    @discardableResult
-    func mergeCaptionCueWithNext(at index: Int) -> Bool {
-        let changed = mutateCaptionCues { cues in
-            CaptionCueEditor.mergedWithNext(
-                cues,
-                at: index,
-                localeIdentifier: transcript?.localeIdentifier ?? "und"
-            )
-        }
-        if changed { selectedCaptionCueIndex = index }
-        return changed
-    }
-
-    func deleteCaptionCue(at index: Int) {
-        let changed = mutateCaptionCues { cues in
-            guard cues.indices.contains(index) else { return nil }
-            var updated = cues
-            updated.remove(at: index)
-            return updated
-        }
-        guard changed else { return }
-        selectedCaptionCueIndex = captionSourceCues.isEmpty
-            ? nil
-            : min(index, captionSourceCues.count - 1)
-    }
-
-    func restoreAutomaticCaptionText() {
-        guard plan.captions?.customCues != nil else { return }
-        mutate { $0.captions?.customCues = nil }
-        selectedCaptionCueIndex = nil
-    }
 
     func undo() {
         cancelManualCameraFocusEditing()
@@ -1723,10 +338,17 @@ final class VideoEditorModel: ObservableObject {
 
     func beginProcessing() {
         isProcessing = true
+        processingProgress = 0
+    }
+
+    func updateProcessingProgress(_ fraction: Double) {
+        guard isProcessing else { return }
+        processingProgress = min(max(fraction, 0), 1)
     }
 
     func endProcessing() {
         isProcessing = false
+        processingProgress = nil
     }
 
     /// A preview rendered in the background may arrive after the editor has
@@ -1739,7 +361,7 @@ final class VideoEditorModel: ObservableObject {
             && plan == renderedPlan
     }
 
-    private func mutate(
+    func mutate(
         timelineChanged: Bool = false,
         _ mutation: (inout AutoEditPlan) -> Void
     ) {
@@ -1759,12 +381,12 @@ final class VideoEditorModel: ObservableObject {
         if timelineChanged { onTimelineChanged?(timeline) }
     }
 
-    private func syncChangeState() {
+    func syncChangeState() {
         isDirty = plan != savedPlan
         isPlanPersisted = plan == persistedPlan
     }
 
-    private static func cameraReasonPriority(
+    static func cameraReasonPriority(
         _ reason: AutoEditPlan.CameraKeyframe.Reason
     ) -> Int {
         switch reason {
@@ -1780,7 +402,7 @@ final class VideoEditorModel: ObservableObject {
         }
     }
 
-    private static func isManualCameraReason(
+    static func isManualCameraReason(
         _ reason: AutoEditPlan.CameraKeyframe.Reason
     ) -> Bool {
         switch reason {
@@ -1791,7 +413,7 @@ final class VideoEditorModel: ObservableObject {
         }
     }
 
-    private func normalizeSelection() {
+    func normalizeSelection() {
         if selectedSegmentID == nil
             || !activeSegments.contains(where: { $0.id == selectedSegmentID }) {
             selectedSegmentID = activeSegments.first?.id
@@ -1808,7 +430,7 @@ final class VideoEditorModel: ObservableObject {
     }
 
     @discardableResult
-    private func mutateCaptionCues(
+    func mutateCaptionCues(
         _ mutation: ([CaptionSourceCue]) -> [CaptionSourceCue]?
     ) -> Bool {
         guard transcript != nil else { return false }
@@ -1833,12 +455,12 @@ final class VideoEditorModel: ObservableObject {
         return changed
     }
 
-    private func sourceTime(atOutputTime outputTime: Double) -> Double {
+    func sourceTime(atOutputTime outputTime: Double) -> Double {
         timeline.position(atOutputTime: outputTime)?.sourceTimeSeconds
             ?? min(max(outputTime.isFinite ? outputTime : 0, 0), sourceDurationSeconds)
     }
 
-    private func makeVideoAnnotation(
+    func makeVideoAnnotation(
         id: UUID,
         start: LensPoint,
         end: LensPoint
@@ -1918,7 +540,7 @@ final class VideoEditorModel: ObservableObject {
         )
     }
 
-    private func makeVideoFreehandAnnotation(
+    func makeVideoFreehandAnnotation(
         id: UUID,
         points: [LensPoint]
     ) -> ScreenshotAnnotation? {
@@ -1943,7 +565,7 @@ final class VideoEditorModel: ObservableObject {
         )
     }
 
-    private var nextVideoAnnotationStepNumber: Int {
+    var nextVideoAnnotationStepNumber: Int {
         videoAnnotations
             .filter { $0.annotation.kind == .step }
             .compactMap { $0.annotation.text.flatMap(Int.init) }
@@ -1952,12 +574,12 @@ final class VideoEditorModel: ObservableObject {
             ?? 1
     }
 
-    private var normalizedVideoAnnotationTextDraft: String {
+    var normalizedVideoAnnotationTextDraft: String {
         let value = videoAnnotationTextDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? "文字" : value
     }
 
-    private func appendVideoAnnotationDraftPoint(_ point: LensPoint) {
+    func appendVideoAnnotationDraftPoint(_ point: LensPoint) {
         guard let last = videoAnnotationDraftPath.last else {
             videoAnnotationDraftPath.append(point)
             return
@@ -1966,7 +588,7 @@ final class VideoEditorModel: ObservableObject {
         videoAnnotationDraftPath.append(point)
     }
 
-    private func simplifyVideoAnnotationPath(
+    func simplifyVideoAnnotationPath(
         _ points: [LensPoint],
         minimumDistance: Double
     ) -> [LensPoint] {
@@ -1982,20 +604,20 @@ final class VideoEditorModel: ObservableObject {
         return result
     }
 
-    private func videoAnnotationPathLength(_ points: [LensPoint]) -> Double {
+    func videoAnnotationPathLength(_ points: [LensPoint]) -> Double {
         zip(points, points.dropFirst()).reduce(0) { partial, pair in
             partial + hypot(pair.1.x - pair.0.x, pair.1.y - pair.0.y)
         }
     }
 
-    private func clamped(_ point: LensPoint) -> LensPoint {
+    func clamped(_ point: LensPoint) -> LensPoint {
         LensPoint(
             x: min(max(point.x, 0), 1),
             y: min(max(point.y, 0), 1)
         )
     }
 
-    private func cachedCaptionCues(
+    func cachedCaptionCues(
         transcript: TranscriptDocument,
         configuration: AutoEditPlan.Captions
     ) -> [CaptionCue] {
@@ -2014,7 +636,7 @@ final class VideoEditorModel: ObservableObject {
         return cues
     }
 
-    private func nearestPresenterKeyframeIndex(
+    func nearestPresenterKeyframeIndex(
         in presenter: AutoEditPlan.PresenterCamera,
         sourceTime: Double,
         tolerance: Double = 0.05

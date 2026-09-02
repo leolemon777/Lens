@@ -2,10 +2,10 @@ import AppKit
 import LensCore
 import SwiftUI
 
-struct G4AccessibilityHostConfiguration {
+package struct G4AccessibilityHostConfiguration {
     let readyMarkerURL: URL
 
-    init?(arguments: [String]) {
+    package init?(arguments: [String]) {
         guard arguments.contains("--g4-accessibility-host"),
               let index = arguments.firstIndex(of: "--ready-marker"),
               arguments.indices.contains(index + 1) else { return nil }
@@ -15,12 +15,12 @@ struct G4AccessibilityHostConfiguration {
 }
 
 @MainActor
-enum G4AccessibilityHostRunner {
+package enum G4AccessibilityHostRunner {
     private static var windows: [NSWindow] = []
     private static var playback: VideoEditorPlaybackController?
     private static var recordingModel: RecordingControlModel?
 
-    static func start(_ configuration: G4AccessibilityHostConfiguration) -> Bool {
+    package static func start(_ configuration: G4AccessibilityHostConfiguration) -> Bool {
         let screenshotModel = ScreenshotAnnotationEditorModel(
             sourceDimensions: LensDimensions(width: 1_280, height: 720)
         )

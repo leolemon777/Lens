@@ -80,7 +80,7 @@ struct RecordingSetupView: View {
                     quickOptionsSection
                     advancedSettingsDisclosure
                 }
-                .padding(20)
+                .padding(LensSpacing.panel)
             }
             Divider().opacity(0.4)
             footer
@@ -97,11 +97,11 @@ struct RecordingSetupView: View {
         HStack(spacing: 12) {
             ZStack {
                 Circle()
-                    .fill(.red.opacity(0.14))
+                    .fill(LensGlassPalette.recording.opacity(0.14))
                     .frame(width: 38, height: 38)
                 Image(systemName: "record.circle")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(LensGlassPalette.recording)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("录屏工作台")
@@ -119,11 +119,11 @@ struct RecordingSetupView: View {
             .help("关闭")
             .accessibilityLabel("关闭录屏工作台")
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, LensSpacing.panel)
         .padding(.vertical, 15)
         .background(
             LinearGradient(
-                colors: [LensGlassPalette.coral.opacity(0.075), .clear],
+                colors: [LensGlassPalette.recording.opacity(0.075), .clear],
                 startPoint: .leading,
                 endPoint: .trailing
             )
@@ -141,7 +141,7 @@ struct RecordingSetupView: View {
                             VStack(alignment: .leading, spacing: 7) {
                                 Image(systemName: item.symbol)
                                     .font(.system(size: 17, weight: .semibold))
-                                    .foregroundStyle(source == item ? .red : .secondary)
+                                    .foregroundStyle(source == item ? LensGlassPalette.recording : .secondary)
                                 Text(item.title)
                                     .font(.system(size: 12, weight: .semibold))
                                 Text(item.subtitle)
@@ -150,10 +150,10 @@ struct RecordingSetupView: View {
                                     .lineLimit(1)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
+                            .padding(LensSpacing.m)
                         }
                         .buttonStyle(LensGlassButtonStyle(
-                            tint: .red,
+                            tint: LensGlassPalette.recording,
                             isSelected: source == item
                         ))
                         .accessibilityLabel("\(item.title)：\(item.subtitle)")
@@ -215,7 +215,7 @@ struct RecordingSetupView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, LensSpacing.card)
                 .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 13))
             } else {
                 ScrollView(.horizontal) {
@@ -229,10 +229,10 @@ struct RecordingSetupView: View {
                 .scrollIndicators(.visible)
             }
         }
-        .padding(12)
+        .padding(LensSpacing.m)
         .background(
             LinearGradient(
-                colors: [.red.opacity(0.065), .primary.opacity(0.025)],
+                colors: [LensGlassPalette.recording.opacity(0.065), .primary.opacity(0.025)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
@@ -257,7 +257,7 @@ struct RecordingSetupView: View {
                         Image(nsImage: thumbnail)
                             .resizable()
                             .scaledToFit()
-                            .padding(4)
+                            .padding(LensSpacing.xs)
                     } else {
                         Image(systemName: "macwindow")
                             .font(.system(size: LensIcon.xlarge, weight: .medium))
@@ -269,7 +269,7 @@ struct RecordingSetupView: View {
                                 Spacer()
                                 Image(systemName: "checkmark.circle.fill")
                                     .font(.system(size: 17, weight: .semibold))
-                                    .foregroundStyle(.white, .red)
+                                    .foregroundStyle(.white, LensGlassPalette.recording)
                                     .padding(7)
                             }
                             Spacer()
@@ -299,14 +299,14 @@ struct RecordingSetupView: View {
                     }
                 }
             }
-            .padding(8)
+            .padding(LensSpacing.s)
             .frame(width: 214, alignment: .leading)
             .background(.primary.opacity(isSelected ? 0.085 : 0.035))
             .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .strokeBorder(
-                        isSelected ? Color.red : Color.primary.opacity(0.09),
+                        isSelected ? LensGlassPalette.recording : Color.primary.opacity(0.09),
                         lineWidth: isSelected ? 1.8 : 0.7
                     )
             }
@@ -417,8 +417,8 @@ struct RecordingSetupView: View {
                         .font(.system(size: LensIcon.small, weight: .bold))
                         .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
+                .padding(.horizontal, LensSpacing.m)
+                .padding(.vertical, LensSpacing.inset)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 13))
             }
@@ -518,15 +518,15 @@ struct RecordingSetupView: View {
                 Label(startButtonTitle, systemImage: "record.circle.fill")
             }
             .buttonStyle(.borderedProminent)
-            .tint(.red)
+            .tint(LensGlassPalette.recording)
             .keyboardShortcut(.defaultAction)
             .disabled(source == .window && windowPicker.selectedSource == nil)
             .accessibilityLabel(startButtonTitle)
             .accessibilityValue(trackSummary)
             .accessibilityHint(startButtonHint)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.horizontal, LensSpacing.panel)
+        .padding(.vertical, LensSpacing.card)
         .background(.primary.opacity(0.025))
     }
 

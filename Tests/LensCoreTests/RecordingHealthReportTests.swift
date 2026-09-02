@@ -103,6 +103,24 @@ final class RecordingHealthReportTests: XCTestCase {
         XCTAssertTrue(aligned.isVerified)
     }
 
+    func testStartOffsetTracksAreReportedSeparatelyFromDurationDrift() {
+        let integrity = RecordingTrackIntegrityReport(
+            screenVideoDurationSeconds: 10,
+            systemAudioDurationSeconds: 10,
+            microphoneDurationSeconds: 10,
+            cameraDurationSeconds: 10,
+            requestedSystemAudio: true,
+            requestedMicrophone: true,
+            requestedCamera: true,
+            systemAudioStartOffsetSeconds: 0.4,
+            microphoneStartOffsetSeconds: 0,
+            cameraStartOffsetSeconds: 0
+        )
+        XCTAssertEqual(integrity.startOffsetTracks, [.systemAudio])
+        XCTAssertTrue(integrity.outOfSyncTracks.isEmpty)
+        XCTAssertFalse(integrity.isVerified)
+    }
+
     func testLegacyFrameRateRemainsAvailableAsEffectiveRequest() throws {
         let metadata = try JSONDecoder().decode(
             LensCaptureMetadata.self,

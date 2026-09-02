@@ -27,6 +27,36 @@ final class QuickAccessViewTests: XCTestCase {
         XCTAssertTrue(source.contains("不会自动上传"))
     }
 
+    func testQuickAccessPanelBecomesKeyForKeyboardShortcuts() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/QuickAccessWindowController.swift"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(
+            source.contains("nonactivating: true"),
+            "Quick Access must be able to become key so Esc and ⌘C land on the card"
+        )
+        XCTAssertTrue(source.contains("panel.makeKey()"))
+
+        let viewSource = try String(
+            contentsOf: QuickAccessView.sourceURL,
+            encoding: .utf8
+        )
+        XCTAssertTrue(viewSource.contains(".keyboardShortcut(.cancelAction)"))
+        XCTAssertTrue(viewSource.contains(".keyboardShortcut(\"c\", modifiers: .command)"))
+
+        let controller = QuickAccessWindowController()
+        controller.show(lens: makeStackLens(title: "Key"), image: makeTinyImage())
+        defer { controller.hide() }
+        let panel = try XCTUnwrap(controller.panelForTesting)
+        XCTAssertTrue(panel.canBecomeKey)
+        XCTAssertFalse(panel.styleMask.contains(.nonactivatingPanel))
+    }
+
     func testProcessingStateRendersDeterminateProgressNotAnIndefiniteSpinner() throws {
         let source = try String(
             contentsOf: QuickAccessView.sourceURL,
@@ -53,12 +83,6 @@ final class QuickAccessViewTests: XCTestCase {
 
         XCTAssertTrue(source.contains("isPreviewNeedsReview"))
         XCTAssertTrue(source.contains("建议打开编辑器复核"))
-        // Asserts the state actually driving the banner. This previously named
-        // `renderedPreviewRequiresReview`, a symbol that has never existed
-        // anywhere in the repository (`git log -S` finds no commit adding or
-        // removing it), so the assertion could only ever fail. The behaviour it
-        // was meant to guard is real: AppDelegate maps an unverified render to
-        // `.needsReview`, which is what `isPreviewNeedsReview` reads.
         XCTAssertTrue(source.contains("deliveryState == .needsReview"))
     }
 
@@ -469,6 +493,56 @@ final class QuickAccessViewTests: XCTestCase {
         NSRect(origin: .zero, size: image.size).fill()
         image.unlockFocus()
         return image
+    }
+
+    /// An extreme-aspect capture — a 1482×104 strip of text, say — must be
+    /// shown whole. Filling the thumbnail's own aspect instead cropped away
+    /// most of it, hiding the one thing the preview exists to confirm.
+    func testAWideStripCaptureIsFittedWholeRatherThanCroppedToTheThumbnail() throws {
+        let source = try String(contentsOf: QuickAccessView.sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains(".scaledToFit()"),
+            "the preview must fit the capture inside the thumbnail"
+        )
+        XCTAssertFalse(
+            source.contains(".scaledToFill()\n                .frame(width: thumbnailWidth"),
+            "the preview must not crop the capture to the thumbnail's aspect"
+        )
+    }
+
+    /// Sending a capture to the conversation folder is a per-screenshot habit
+    /// for anyone pasting shots into a terminal, so it is a direct button
+    /// rather than a menu round-trip on every single capture.
+    func testConversationInboxIsADirectActionNotBuriedInTheOverflowMenu() throws {
+        let source = try String(contentsOf: QuickAccessView.sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(
+            source.contains(#"quickButton("对话", symbol: "terminal", action: onConversationInbox)"#),
+            "对话 must be a direct action button"
+        )
+        XCTAssertFalse(
+            source.contains(#"Label("对话", systemImage: "terminal")"#),
+            "对话 must no longer be an overflow menu item"
+        )
+        // Still discoverable to VoiceOver with the same explanation it had
+        // as a menu item.
+        XCTAssertTrue(source.contains("保存到对话文件夹并复制路径"))
+    }
+
+    /// The card is a transient confirmation, so it stays close to notification
+    /// size. A full-width hero preview above the text cost roughly three times
+    /// the height to re-show an image the user had just framed themselves.
+    func testTheCardStaysCompactWithTheCaptureBesideTheTextNotAboveIt() throws {
+        let source = try String(contentsOf: QuickAccessView.sourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("HStack(alignment: .top, spacing: 11) {"))
+        XCTAssertTrue(source.contains("private var thumbnailWidth: CGFloat { 96 }"))
+        XCTAssertTrue(source.contains("private var thumbnailHeight: CGFloat { 64 }"))
+        XCTAssertFalse(
+            source.contains("heroHeight"),
+            "the full-width hero preview should be gone"
+        )
     }
 
     func testStackTracksUpToFiveCapturesMostRecentFirst() {

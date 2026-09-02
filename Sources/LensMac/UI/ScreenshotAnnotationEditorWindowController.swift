@@ -46,8 +46,12 @@ final class ScreenshotAnnotationEditorWindowController {
         // Capture quick access and the library already provide the full-size raw
         // image. Reusing it avoids decoding the same large PNG twice on the UI thread.
         let originalImage = fallbackImage
-        let existingPlan = try? store.loadScreenshotEditPlan(from: lens.packageURL)
-        let ocrDocument = try? store.loadOCR(from: lens.packageURL)
+        let existingPlan = LensFailureLog.optional("annotation.plan_load") {
+            try store.loadScreenshotEditPlan(from: lens.packageURL)
+        }
+        let ocrDocument = LensFailureLog.optional("annotation.ocr_load") {
+            try store.loadOCR(from: lens.packageURL)
+        }
         let suggestedRedactions = ocrDocument.map {
             SensitiveRedactionPlanner().suggestions(ocr: $0)
         } ?? []
@@ -305,18 +309,16 @@ final class ScreenshotAnnotationEditorWindowController {
     }
 }
 
-private final class AnnotationEditorWindow: NSWindow {
-    var onEscape: (() -> Void)?
+private final class AnnotationEditorWindow: LensChromeWindow {
     var onCopy: (() -> Void)?
-
-    override func cancelOperation(_ sender: Any?) {
-        onEscape?()
-    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if modifiers == .command,
            event.charactersIgnoringModifiers?.lowercased() == "c" {
+            if firstResponder is NSTextView || firstResponder is NSTextField {
+                return super.performKeyEquivalent(with: event)
+            }
             onCopy?()
             return true
         }

@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 final class QuickAccessWindowController {
-    private var panel: QuickAccessPanel?
+    private var panel: LensGlassPanel?
     private var hostingView: NSHostingView<QuickAccessView>?
     private var dismissTask: Task<Void, Never>?
     private var activeLens: SavedLens?
@@ -19,6 +19,7 @@ final class QuickAccessWindowController {
     var onRetryRequested: ((SavedLens) -> Void)?
     var onCopyResult: ((Bool) -> Void)?
     var isVisible: Bool { panel?.isVisible ?? false }
+    var panelForTesting: NSPanel? { panel }
     var stackModelForTesting: QuickAccessStackModel { stackModel }
     /// Overrides the real 9-second auto-dismiss so tests don't block for it.
     static var dismissDurationOverride: Duration?
@@ -89,9 +90,12 @@ final class QuickAccessWindowController {
         resizeToFitContent()
         if let outgoingWindow {
             LensPanelPresenter.handoff(from: outgoingWindow, to: panel, anchor: .bottomTrailing)
+        } else if panel.isVisible {
+            LensPanelPresenter.update(panel)
         } else {
             LensPanelPresenter.present(panel, from: .bottomTrailing)
         }
+        panel.makeKey()
 
         // Recordings stay until dismissed so the user can drag the file.
         // Screenshots already live on the clipboard, so the card can retire.
@@ -197,8 +201,16 @@ final class QuickAccessWindowController {
         guard let panel, let hostingView else { return }
         let fitted = hostingView.fittingSize
         guard fitted.width > 0, fitted.height > 0 else { return }
-        panel.setFrame(NSRect(origin: panel.frame.origin, size: fitted), display: true)
-        position(panel)
+        if panel.isVisible {
+            let origin = NSPoint(
+                x: panel.frame.maxX - fitted.width,
+                y: panel.frame.minY
+            )
+            panel.setFrame(NSRect(origin: origin, size: fitted), display: true)
+        } else {
+            panel.setFrame(NSRect(origin: panel.frame.origin, size: fitted), display: true)
+            position(panel)
+        }
     }
 
     func updateIfShowing(
@@ -235,19 +247,16 @@ final class QuickAccessWindowController {
         LensPanelPresenter.dismiss(panel)
     }
 
-    private func makePanel() -> QuickAccessPanel {
-        let panel = QuickAccessPanel(
+    private func makePanel() -> LensGlassPanel {
+        // Activating + key so Esc / ⌘C reach the card. Recording HUD stays
+        // nonactivating; this panel is a post-capture action surface.
+        let panel = LensGlassPanel(
             contentRect: NSRect(x: 0, y: 0, width: 376, height: 392),
-            styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
+            placement: .bottomTrailing
         )
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
         panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.hidesOnDeactivate = false
+        panel.onEscape = { [weak self] in self?.hide() }
         return panel
     }
 
@@ -295,7 +304,10 @@ final class QuickAccessWindowController {
         guard let activeLens else { return }
         let fileURL = QuickAccessFileTransfer.bestFileURL(for: activeLens)
             ?? activeLens.rawAssetURL
-        guard let pngData = try? Data(contentsOf: fileURL), !pngData.isEmpty else { return }
+        guard let pngData = LensFailureLog.optional(
+            "quickAccess.conversationInbox.read",
+            { try Data(contentsOf: fileURL) }
+        ), !pngData.isEmpty else { return }
         onConversationInboxRequested?(pngData)
     }
 
@@ -313,9 +325,4 @@ final class QuickAccessWindowController {
     private func revealURL(for lens: SavedLens) -> URL {
         QuickAccessFileTransfer.bestFileURL(for: lens) ?? lens.rawAssetURL
     }
-}
-
-private final class QuickAccessPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
-    override var canBecomeMain: Bool { false }
 }

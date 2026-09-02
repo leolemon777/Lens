@@ -22,16 +22,16 @@ private struct LensToastView: View {
                 }
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, LensSpacing.card)
+        .padding(.vertical, LensSpacing.inset)
         .lensGlassSurface(role: .panel, cornerRadius: LensGlassMetrics.panelCornerRadius)
-        .padding(24)
+        .padding(LensSpacing.xl)
     }
 }
 
 @MainActor
 final class ToastWindowController {
-    private var panel: NSPanel?
+    private var panel: LensGlassPanel?
     private var dismissTask: Task<Void, Never>?
 
     func show(title: String, detail: String? = nil, symbol: String = "checkmark.circle.fill") {
@@ -39,7 +39,7 @@ final class ToastWindowController {
         let panel = panel ?? makePanel()
         self.panel = panel
         panel.contentView = NSHostingView(rootView: LensToastView(title: title, detail: detail, symbol: symbol))
-        position(panel)
+        panel.placeOnScreen()
         LensPanelPresenter.present(panel, from: .top)
 
         dismissTask = Task { @MainActor [weak self] in
@@ -49,29 +49,14 @@ final class ToastWindowController {
         }
     }
 
-    private func makePanel() -> NSPanel {
-        let panel = NSPanel(
+    private func makePanel() -> LensGlassPanel {
+        let panel = LensGlassPanel(
             contentRect: NSRect(x: 0, y: 0, width: 360, height: 92),
-            styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
+            placement: .top,
+            allowsKey: false,
+            nonactivating: true
         )
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
         panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         return panel
-    }
-
-    private func position(_ panel: NSPanel) {
-        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
-            ?? NSScreen.main
-            ?? NSScreen.screens.first
-        guard let screen else { return }
-        panel.setFrameOrigin(NSPoint(
-            x: screen.visibleFrame.midX - panel.frame.width / 2,
-            y: screen.visibleFrame.maxY - panel.frame.height - 18
-        ))
     }
 }

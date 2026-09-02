@@ -51,7 +51,7 @@ struct ScrollingCaptureControlView: View {
         HStack(spacing: 12) {
             ZStack {
                 Circle()
-                    .fill(.orange.opacity(0.16))
+                    .fill(LensGlassPalette.warning.opacity(0.16))
                     .frame(width: 38, height: 38)
                 if model.isFinalizing {
                     ProgressView()
@@ -59,7 +59,7 @@ struct ScrollingCaptureControlView: View {
                 } else {
                     Image(systemName: "arrow.up.and.down.text.horizontal")
                         .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(LensGlassPalette.warning)
                 }
             }
             VStack(alignment: .leading, spacing: 3) {
@@ -87,12 +87,12 @@ struct ScrollingCaptureControlView: View {
             }
             .accessibilityLabel("完成长截图")
             .buttonStyle(.borderedProminent)
-            .tint(.orange)
+            .tint(LensGlassPalette.warning)
             .disabled(model.acceptedFrames == 0 || model.isFinalizing)
             .keyboardShortcut(.defaultAction)
         }
         .padding(.horizontal, 15)
-        .padding(.vertical, 12)
+        .padding(.vertical, LensSpacing.m)
         .lensGlassPanel(cornerRadius: 23)
         .padding(26)
     }
@@ -101,7 +101,7 @@ struct ScrollingCaptureControlView: View {
 @MainActor
 final class ScrollingCaptureSessionController {
     private let model = ScrollingCaptureControlModel()
-    private let panel: NSPanel
+    private let panel: LensGlassPanel
     private var assembler: VerticalScrollingCaptureAssembler?
     private var captureOperation: (() async throws -> CGImage)?
     private var captureTask: Task<Void, Never>?
@@ -116,11 +116,10 @@ final class ScrollingCaptureSessionController {
     var isActive: Bool { assembler != nil }
 
     init() {
-        panel = NSPanel(
+        panel = LensGlassPanel(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 104),
-            styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
+            placement: .bottomCenter,
+            nonactivating: true
         )
         configurePanel()
     }
@@ -301,13 +300,6 @@ final class ScrollingCaptureSessionController {
     }
 
     private func positionPanel() {
-        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) }
-            ?? NSScreen.main
-            ?? NSScreen.screens.first
-        guard let screen else { return }
-        panel.setFrameOrigin(NSPoint(
-            x: screen.visibleFrame.midX - panel.frame.width / 2,
-            y: screen.visibleFrame.minY + 24
-        ))
+        panel.placeOnScreen()
     }
 }

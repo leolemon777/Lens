@@ -123,6 +123,25 @@ final class RecordingSegmentAssemblerTests: XCTestCase {
     }
 
     @MainActor
+    func testAudioConcatenationPadsSilenceToRequestedSegmentDurations() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("microphone.caf")
+        let second = directory.appendingPathComponent("microphone-001.caf")
+        try makeAudio(at: first, frameCount: 2_400, phaseOffset: 0)
+        try makeAudio(at: second, frameCount: 2_400, phaseOffset: 2_400)
+
+        let output = try await RecordingSegmentAssembler().assembleAudioSegments(
+            [first, second],
+            outputURL: directory.appendingPathComponent("joined.caf"),
+            maximumDurations: [0.1, 0.1]
+        )
+
+        let audio = try AVAudioFile(forReading: output)
+        XCTAssertEqual(audio.length, 9_600)
+    }
+
+    @MainActor
     func testRecoveryAudioKeepsValidPrefixWhenFinalCAFIsCorrupt() async throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

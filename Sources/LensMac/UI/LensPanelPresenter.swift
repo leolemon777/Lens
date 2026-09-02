@@ -57,7 +57,17 @@ enum LensPanelPresenter {
         reduceMotionOverride ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
-    /// Shows `window` with a short fade-and-pop toward its current frame.
+    /// Brings an already-visible panel forward without replaying the enter
+    /// animation. Hidden windows still go through ``present``.
+    static func update(_ window: NSWindow) {
+        guard window.isVisible else {
+            present(window)
+            return
+        }
+        generationsByWindow[ObjectIdentifier(window), default: 0] += 1
+        window.alphaValue = 1
+        window.orderFrontRegardless()
+    }
     /// Callers must position the window (origin and size) *before* calling
     /// this — `present` treats `window.frame` as the destination and
     /// animates from a scaled-down variant anchored at `anchor`.

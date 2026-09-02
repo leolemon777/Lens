@@ -1,0 +1,20 @@
+# SwiftLint starts as a documentation-and-hygiene gate, not a rewrite.
+disabled_rules:
+  - trailing_whitespace
+  - line_length
+  - function_body_length
+  - type_body_length
+  - file_length
+  - cyclomatic_complexity
+  - identifier_name
+  - todo
+opt_in_rules:
+  - empty_count
+  - closing_brace
+included:
+  - Sources
+  - Tests
+excluded:
+  - .build
+  - Build
+reporter: xcode

@@ -51,6 +51,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(initial.quickScreenshotShortcut, .defaultQuickScreenshot)
         XCTAssertEqual(initial.actionCenterShortcut, .defaultActionCenter)
         XCTAssertEqual(initial.conversationInboxShortcut, .defaultConversationInbox)
+        XCTAssertEqual(initial.stopRecordingShortcut, .defaultStopRecording)
         XCTAssertEqual(
             initial.conversationInboxDirectory,
             ConversationInboxStore.defaultDirectory()
@@ -263,6 +264,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(model.quickScreenshotShortcut, .defaultQuickScreenshot)
         XCTAssertEqual(model.actionCenterShortcut, .defaultActionCenter)
         XCTAssertEqual(model.conversationInboxShortcut, .defaultConversationInbox)
+        XCTAssertEqual(model.stopRecordingShortcut, .defaultStopRecording)
         XCTAssertTrue(model.hotKeyConfiguration.isValid)
     }
 
@@ -289,6 +291,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(restored.quickScreenshotShortcut, .defaultQuickScreenshot)
         XCTAssertEqual(restored.actionCenterShortcut, .defaultActionCenter)
         XCTAssertEqual(restored.conversationInboxShortcut, .defaultConversationInbox)
+        XCTAssertEqual(restored.stopRecordingShortcut, .defaultStopRecording)
     }
 
     private func makeScreenshotEntry(root: URL, title: String) -> LensLibraryEntry {

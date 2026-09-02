@@ -19,6 +19,7 @@ final class RecordingControlModel: ObservableObject {
     @Published var capturesMicrophone = false
     @Published var capturesCamera = false
     @Published var isTransitioning = false
+    @Published var isFinalizing = false
     private(set) var systemAudioLevel: Double = 0
     private(set) var microphoneAudioLevel: Double = 0
     private(set) var eventCaptureHealth: EventCaptureHealth = .checking
@@ -44,6 +45,7 @@ final class RecordingControlModel: ObservableObject {
         self.capturesMicrophone = capturesMicrophone
         self.capturesCamera = capturesCamera
         isTransitioning = false
+        isFinalizing = false
         systemAudioLevel = 0
         microphoneAudioLevel = 0
         eventCaptureHealth = .checking
@@ -252,18 +254,27 @@ struct RecordingControlView: View {
     var body: some View {
         HStack(spacing: 10) {
             Circle()
-                .fill(model.isPaused ? .orange : .red)
+                .fill(model.isFinalizing ? LensGlassPalette.accent : (model.isPaused ? LensGlassPalette.warning : LensGlassPalette.recording))
                 .frame(width: 10, height: 10)
-                .shadow(color: (model.isPaused ? Color.orange : .red).opacity(0.6), radius: 6)
+                .shadow(
+                    color: (model.isFinalizing
+                        ? LensGlassPalette.accent
+                        : (model.isPaused ? LensGlassPalette.warning : LensGlassPalette.recording)).opacity(0.6),
+                    radius: 6
+                )
                 .accessibilityHidden(true)
 
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(model.elapsedAccessibilityValue(at: context.date))
+                Text(model.isFinalizing
+                    ? "保存中"
+                    : model.elapsedAccessibilityValue(at: context.date))
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     .frame(width: 64, alignment: .leading)
-                    .accessibilityLabel(model.recordingStateTitle)
+                    .accessibilityLabel(model.isFinalizing ? "正在保存录屏" : model.recordingStateTitle)
                     .accessibilityValue(
-                        "时长 \(model.elapsedAccessibilityValue(at: context.date))"
+                        model.isFinalizing
+                            ? "正在写入分片"
+                            : "时长 \(model.elapsedAccessibilityValue(at: context.date))"
                     )
             }
 
@@ -303,6 +314,7 @@ struct RecordingControlView: View {
                     .background(.primary.opacity(0.07), in: Circle())
             }
             .buttonStyle(.plain)
+            .disabled(model.isFinalizing)
             .help("隐藏浮标；录制仍会继续")
             .accessibilityLabel("隐藏录屏浮标")
             .accessibilityHint("录制继续；按 Fn 加空格或从菜单栏恢复")
@@ -315,28 +327,28 @@ struct RecordingControlView: View {
                     .background(.primary.opacity(0.07), in: Circle())
             }
             .buttonStyle(.plain)
-            .disabled(model.isTransitioning)
-            .opacity(model.isTransitioning ? 0.38 : 1)
+            .disabled(model.isTransitioning || model.isFinalizing)
+            .opacity((model.isTransitioning || model.isFinalizing) ? 0.38 : 1)
             .help(model.isPaused ? "继续并写入新分片" : "暂停并安全完成当前分片")
             .accessibilityLabel(model.pauseActionTitle)
             .accessibilityHint(model.isPaused ? "继续并写入新分片" : "暂停并安全完成当前分片")
 
             Button(action: onStop) {
-                Image(systemName: "stop.fill")
+                Image(systemName: model.isFinalizing ? "hourglass" : "stop.fill")
                     .font(.system(size: LensIcon.small, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: 30, height: 30)
-                    .background(.red, in: Circle())
+                    .background(model.isFinalizing ? LensGlassPalette.accent : LensGlassPalette.recording, in: Circle())
             }
             .buttonStyle(.plain)
-            .disabled(model.isTransitioning)
-            .opacity(model.isTransitioning ? 0.5 : 1)
-            .help("停止")
-            .accessibilityLabel("停止录制")
+            .disabled(model.isTransitioning || model.isFinalizing)
+            .opacity((model.isTransitioning || model.isFinalizing) ? 0.5 : 1)
+            .help(model.isFinalizing ? "正在保存录屏" : "停止")
+            .accessibilityLabel(model.isFinalizing ? "正在保存录屏" : "停止录制")
             .accessibilityHint("安全完成当前分片并生成预览")
         }
         .padding(.horizontal, 15)
-        .padding(.vertical, 10)
+        .padding(.vertical, LensSpacing.inset)
         .lensGlassSurface(role: .panel, cornerRadius: LensGlassMetrics.panelCornerRadius)
         .padding(.horizontal, 28)
         .padding(.vertical, 30)
@@ -347,7 +359,7 @@ struct RecordingControlView: View {
             Image(systemName: model.capturesSystemAudio
                 ? "speaker.wave.2.fill"
                 : "speaker.slash.fill")
-                .foregroundStyle(model.capturesSystemAudio ? .green : .secondary)
+                .foregroundStyle(model.capturesSystemAudio ? LensGlassPalette.success : .secondary)
                 .opacity(model.capturesSystemAudio ? 1 : 0.45)
                 .help(model.capturesSystemAudio ? "正在录制系统声音" : "系统声音已关闭")
                 .accessibilityLabel("系统声音")
@@ -355,7 +367,7 @@ struct RecordingControlView: View {
 
             if model.capturesMicrophone {
                 Image(systemName: "mic.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(LensGlassPalette.success)
                     .help("麦克风正在单独分轨录制")
                     .accessibilityLabel("麦克风")
                     .accessibilityValue(model.microphoneAccessibilityValue)
@@ -363,7 +375,7 @@ struct RecordingControlView: View {
 
             if model.capturesCamera {
                 Image(systemName: "video.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(LensGlassPalette.success)
                     .help("摄像头正在单独分轨录制")
                     .accessibilityLabel("摄像头")
                     .accessibilityValue("单独分轨录制中")
@@ -400,7 +412,7 @@ struct RecordingControlView: View {
                 Spacer(minLength: 18)
                 AudioLevelBars(level: model.capturesSystemAudio ? model.systemAudioLevel : 0)
                 Text(model.capturesSystemAudio ? "录制中" : "已关闭")
-                    .foregroundStyle(model.capturesSystemAudio ? .green : .secondary)
+                    .foregroundStyle(model.capturesSystemAudio ? LensGlassPalette.success : .secondary)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("系统声音")
@@ -412,7 +424,7 @@ struct RecordingControlView: View {
                     Spacer(minLength: 18)
                     AudioLevelBars(level: model.microphoneAudioLevel)
                     Text("分轨录制")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(LensGlassPalette.success)
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("麦克风")
@@ -424,7 +436,7 @@ struct RecordingControlView: View {
                     Label("摄像头", systemImage: "video.fill")
                     Spacer(minLength: 18)
                     Text("分轨录制")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(LensGlassPalette.success)
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("摄像头")
@@ -486,16 +498,16 @@ struct RecordingControlView: View {
             .accessibilityHint("停止当前录制，移到废纸篓后按相同来源重新开始")
         }
         .font(.system(size: 12, weight: .medium))
-        .padding(16)
+        .padding(LensSpacing.l)
         .frame(width: 310)
     }
 
     private var storageColor: Color {
         switch model.storageLevel {
         case .unknown: .secondary
-        case .healthy: .green
-        case .warning: .orange
-        case .critical: .red
+        case .healthy: LensGlassPalette.success
+        case .warning: LensGlassPalette.warning
+        case .critical: LensGlassPalette.recording
         }
     }
 
@@ -510,8 +522,8 @@ struct RecordingControlView: View {
     private var eventCaptureColor: Color {
         switch model.eventCaptureHealth {
         case .checking, .waitingForActivity: .secondary
-        case .healthy: .green
-        case .degraded: .orange
+        case .healthy: LensGlassPalette.success
+        case .degraded: LensGlassPalette.warning
         }
     }
 
@@ -530,7 +542,7 @@ struct RecordingControlView: View {
               let meetingTarget = performance.isMeetingRequestedFrameRate else {
             return .secondary
         }
-        return meetingTarget ? .green : .orange
+        return meetingTarget ? LensGlassPalette.success : LensGlassPalette.warning
     }
 }
 

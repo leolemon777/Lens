@@ -311,6 +311,7 @@ actor RecordingSegmentAssembler {
                 AVAudioFramePosition(max(0, $0[position]) * format.sampleRate)
             }
             let endingFrame = min(input.length, maximumFrameCount ?? input.length)
+            let segmentStartCount = writtenFrameCount
             while input.framePosition < endingFrame {
                 let remaining = endingFrame - input.framePosition
                 let frameCount = AVAudioFrameCount(min(Int64(capacity), remaining))
@@ -326,11 +327,55 @@ actor RecordingSegmentAssembler {
                 try output?.write(from: buffer)
                 writtenFrameCount += AVAudioFramePosition(buffer.frameLength)
             }
+            if let maximumFrameCount {
+                let writtenThisSegment = writtenFrameCount - segmentStartCount
+                let missing = maximumFrameCount - writtenThisSegment
+                if missing > 0 {
+                    try Self.writeSilence(
+                        frameCount: missing,
+                        format: format,
+                        to: output
+                    )
+                    writtenFrameCount += missing
+                }
+            }
         }
         guard writtenFrameCount > 0 else {
             throw RecordingSegmentAssemblerError.emptyOutput
         }
         output = nil
+    }
+
+    private static func writeSilence(
+        frameCount: AVAudioFramePosition,
+        format: AVAudioFormat,
+        to output: AVAudioFile?
+    ) throws {
+        guard frameCount > 0, let output else { return }
+        let capacity: AVAudioFrameCount = 8_192
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
+            throw RecordingSegmentAssemblerError.incompatibleAudioFormat
+        }
+        var remaining = frameCount
+        while remaining > 0 {
+            let count = AVAudioFrameCount(min(Int64(capacity), remaining))
+            buffer.frameLength = count
+            if let channels = buffer.floatChannelData {
+                for channel in 0..<Int(format.channelCount) {
+                    channels[channel].update(repeating: 0, count: Int(count))
+                }
+            } else if let channels = buffer.int16ChannelData {
+                for channel in 0..<Int(format.channelCount) {
+                    channels[channel].update(repeating: 0, count: Int(count))
+                }
+            } else if let channels = buffer.int32ChannelData {
+                for channel in 0..<Int(format.channelCount) {
+                    channels[channel].update(repeating: 0, count: Int(count))
+                }
+            }
+            try output.write(from: buffer)
+            remaining -= AVAudioFramePosition(count)
+        }
     }
 
     private static func replace(_ outputURL: URL, with temporaryURL: URL) throws {

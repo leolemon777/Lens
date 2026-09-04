@@ -1,0 +1,269 @@
+{
+  "audio" : {
+    "duckAttackSeconds" : 0.12,
+    "duckReleaseSeconds" : 0.36,
+    "duckedSystemVolume" : 0.32,
+    "ducksSystemUnderNarration" : true,
+    "isEnabled" : true,
+    "microphoneVolume" : 1,
+    "narrationThresholdDecibels" : -42,
+    "noiseReductionAmount" : 0.55,
+    "normalizesLoudness" : true,
+    "reducesMicrophoneNoise" : true,
+    "systemVolume" : 1,
+    "targetLoudnessLUFS" : -16
+  },
+  "camera" : {
+    "clickToZoom" : true,
+    "followPointer" : true,
+    "generationStrength" : "balanced",
+    "keyframes" : [
+      {
+        "center" : {
+          "x" : 0.5,
+          "y" : 0.5
+        },
+        "easing" : "spring-gentle",
+        "reason" : "baseline",
+        "scale" : 1,
+        "time" : 0
+      },
+      {
+        "center" : {
+          "x" : 0.62,
+          "y" : 0.41
+        },
+        "easing" : "spring-gentle",
+        "reason" : "clickFocus",
+        "scale" : 1.28,
+        "time" : 2.4
+      }
+    ],
+    "mode" : "event-driven",
+    "motionBlurStrength" : 0.12,
+    "zoomIntensity" : 0.42,
+    "zoomScale" : 1.28
+  },
+  "canvas" : {
+    "backgroundBottomHex" : "#9EA9A7",
+    "backgroundTopHex" : "#D9D6CF",
+    "cornerRadius" : 0.026,
+    "isEnabled" : true,
+    "margin" : 0.055,
+    "shadowOpacity" : 0.28
+  },
+  "captions" : {
+    "customCues" : [
+      {
+        "sourceEndSeconds" : 2.8,
+        "sourceStartSeconds" : 0.4,
+        "text" : "这是一条黄金字幕。"
+      }
+    ],
+    "fontScale" : 1,
+    "highlightsSpokenWords" : true,
+    "isEnabled" : true,
+    "maxCharactersPerCue" : 28,
+    "position" : "bottom",
+    "style" : "glass",
+    "verticalMargin" : 0.065
+  },
+  "cursor" : {
+    "accentColorHex" : "#5BD6FF",
+    "appearance" : "recorded",
+    "followStyle" : "smooth",
+    "hidesWhenIdle" : false,
+    "isEnabled" : true,
+    "keyframes" : [
+      {
+        "kind" : "moved",
+        "position" : {
+          "x" : 0.2,
+          "y" : 0.3
+        },
+        "time" : 0
+      },
+      {
+        "kind" : "dragged",
+        "position" : {
+          "x" : 0.6,
+          "y" : 0.55
+        },
+        "time" : 1.5
+      }
+    ],
+    "motionEffect" : "halo",
+    "motionEffectStrength" : 0.42,
+    "scale" : 1.15,
+    "shapeKeyframes" : [
+      {
+        "shape" : "arrow",
+        "time" : 0
+      },
+      {
+        "shape" : "pointingHand",
+        "time" : 1.5
+      }
+    ],
+    "smoothing" : 0.72,
+    "smoothingWindowMilliseconds" : 48
+  },
+  "export" : {
+    "aspectRatio" : "vertical9x16",
+    "preset" : "balanced"
+  },
+  "interaction" : {
+    "clickEffect" : "ripple",
+    "clickEffectStrength" : 1,
+    "clickPulseColorHex" : "#FF684D",
+    "clickPulseDuration" : 0.62,
+    "clickPulseScale" : 1.25,
+    "clickPulses" : [
+      {
+        "button" : "left",
+        "duration" : 0.62,
+        "position" : {
+          "x" : 0.62,
+          "y" : 0.41
+        },
+        "time" : 2.4
+      }
+    ],
+    "keystrokes" : [
+      {
+        "holdSeconds" : 1.15,
+        "text" : "⌘S",
+        "time" : 3.1
+      }
+    ],
+    "showsClickPulse" : true,
+    "showsKeystrokes" : true
+  },
+  "narrationTrims" : [
+    {
+      "endSeconds" : 5.1,
+      "id" : "00000000-0000-4000-8000-000000000005",
+      "kind" : "silence",
+      "startSeconds" : 4.2,
+      "status" : "pending"
+    },
+    {
+      "endSeconds" : 7.7,
+      "id" : "00000000-0000-4000-8000-000000000006",
+      "kind" : "fillerWord",
+      "label" : "嗯",
+      "startSeconds" : 7.4,
+      "status" : "accepted"
+    }
+  ],
+  "presenterCamera" : {
+    "anchor" : "bottomTrailing",
+    "automaticallyAvoidsContent" : true,
+    "cornerRadius" : 0.08,
+    "isEnabled" : true,
+    "isMirrored" : true,
+    "keyframes" : [
+      {
+        "center" : {
+          "x" : 0.82,
+          "y" : 0.78
+        },
+        "easing" : "spring-gentle",
+        "size" : 0.19,
+        "sourceTimeSeconds" : 0
+      }
+    ],
+    "margin" : 0.035,
+    "position" : {
+      "x" : 0.82,
+      "y" : 0.78
+    },
+    "shadowOpacity" : 0.3,
+    "shape" : "circle",
+    "size" : 0.19
+  },
+  "preset" : "natural",
+  "schemaVersion" : "1.3",
+  "timeline" : {
+    "segments" : [
+      {
+        "id" : "00000000-0000-4000-8000-000000000002",
+        "isEnabled" : true,
+        "playbackRate" : 1,
+        "sourceEndSeconds" : 6,
+        "sourceStartSeconds" : 0,
+        "transitionToNext" : {
+          "durationSeconds" : 0.35,
+          "kind" : "crossDissolve"
+        }
+      },
+      {
+        "id" : "00000000-0000-4000-8000-000000000003",
+        "isEnabled" : true,
+        "playbackRate" : 1.5,
+        "sourceEndSeconds" : 12.5,
+        "sourceStartSeconds" : 6
+      }
+    ],
+    "sourceDurationSeconds" : 12.5
+  },
+  "videoAnnotations" : [
+    {
+      "annotation" : {
+        "bounds" : {
+          "height" : 0.2,
+          "width" : 0.3,
+          "x" : 0.1,
+          "y" : 0.1
+        },
+        "end" : {
+          "x" : 0.4,
+          "y" : 0.3
+        },
+        "id" : "00000000-0000-4000-8000-000000000004",
+        "kind" : "rectangle",
+        "points" : [
+          {
+            "x" : 0.1,
+            "y" : 0.1
+          },
+          {
+            "x" : 0.4,
+            "y" : 0.3
+          }
+        ],
+        "start" : {
+          "x" : 0.1,
+          "y" : 0.1
+        },
+        "style" : {
+          "color" : {
+            "alpha" : 1,
+            "blue" : 0.19,
+            "green" : 0.23,
+            "red" : 1
+          },
+          "fillColor" : {
+            "alpha" : 1,
+            "blue" : 0,
+            "green" : 0.8,
+            "red" : 1
+          },
+          "fontSize" : 0.045,
+          "gradientEndColor" : {
+            "alpha" : 1,
+            "blue" : 0,
+            "green" : 0.58,
+            "red" : 1
+          },
+          "intensity" : 0.035,
+          "lineWidth" : 0.006
+        },
+        "text" : "Golden annotation"
+      },
+      "fadeDurationSeconds" : 0.16,
+      "sourceEndSeconds" : 4,
+      "sourceStartSeconds" : 1
+    }
+  ]
+}

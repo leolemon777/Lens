@@ -15,10 +15,19 @@ let package = Package(
         .executable(name: "LensG1", targets: ["LensG1"]),
         .executable(name: "LensG2", targets: ["LensG2"]),
         .executable(name: "LensG3", targets: ["LensG3"]),
-        .executable(name: "LensG4", targets: ["LensG4"])
+        .executable(name: "LensG4", targets: ["LensG4"]),
+        .executable(name: "lens-schema-golden", targets: ["lens-schema-golden"])
     ],
     targets: [
         .target(name: "LensCore"),
+        .target(
+            name: "LensSchemaGoldenKit",
+            dependencies: ["LensCore"]
+        ),
+        .executableTarget(
+            name: "lens-schema-golden",
+            dependencies: ["LensSchemaGoldenKit", "LensCore"]
+        ),
         .target(
             name: "LensMac",
             dependencies: ["LensCore"]
@@ -45,7 +54,7 @@ let package = Package(
         ),
         .testTarget(
             name: "LensCoreTests",
-            dependencies: ["LensCore"],
+            dependencies: ["LensCore", "LensSchemaGoldenKit"],
             resources: [.copy("Fixtures")]
         ),
         .testTarget(

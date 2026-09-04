@@ -1,0 +1,80 @@
+{
+  "annotations" : [
+    {
+      "bounds" : {
+        "height" : 0.15,
+        "width" : 0.3,
+        "x" : 0.2,
+        "y" : 0.25
+      },
+      "end" : {
+        "x" : 0.5,
+        "y" : 0.4
+      },
+      "id" : "00000000-0000-4000-8000-000000000007",
+      "kind" : "arrow",
+      "start" : {
+        "x" : 0.2,
+        "y" : 0.25
+      },
+      "style" : {
+        "color" : {
+          "alpha" : 1,
+          "blue" : 0.19,
+          "green" : 0.23,
+          "red" : 1
+        },
+        "fontSize" : 0.045,
+        "intensity" : 0.035,
+        "lineWidth" : 0.006
+      }
+    },
+    {
+      "bounds" : {
+        "height" : 0.1,
+        "width" : 0.3,
+        "x" : 0.55,
+        "y" : 0.6
+      },
+      "id" : "00000000-0000-4000-8000-000000000008",
+      "kind" : "text",
+      "style" : {
+        "color" : {
+          "alpha" : 1,
+          "blue" : 1,
+          "green" : 0.58,
+          "red" : 0.1
+        },
+        "fontSize" : 0.05,
+        "intensity" : 0.035,
+        "lineWidth" : 0.004
+      },
+      "text" : "标注文字"
+    }
+  ],
+  "canvasStyle" : {
+    "aspectRatio" : "automatic",
+    "backgroundKind" : "gradient",
+    "cornerRadius" : 0.025,
+    "padding" : 0.08,
+    "primaryColor" : {
+      "alpha" : 1,
+      "blue" : 0.92,
+      "green" : 0.35,
+      "red" : 0.2
+    },
+    "secondaryColor" : {
+      "alpha" : 1,
+      "blue" : 0.88,
+      "green" : 0.22,
+      "red" : 0.55
+    },
+    "shadowOpacity" : 0.32,
+    "shadowRadius" : 0.035
+  },
+  "schemaVersion" : "0.3",
+  "sourceDimensions" : {
+    "height" : 720,
+    "width" : 1280
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "documents" : [
+    {
+      "currentVersion" : "0.9",
+      "identifier" : "manifest.json",
+      "minimumReadableVersion" : "0.1",
+      "relativePath" : "manifest.json"
+    },
+    {
+      "currentVersion" : "1.3",
+      "identifier" : "edit-plan.json",
+      "minimumReadableVersion" : "0.1",
+      "relativePath" : "edits/edit-plan.json"
+    },
+    {
+      "currentVersion" : "0.3",
+      "identifier" : "screenshot-edit.json",
+      "minimumReadableVersion" : "0.2",
+      "relativePath" : "edits/screenshot-edit.json"
+    },
+    {
+      "currentVersion" : "0.1",
+      "identifier" : "segments.json",
+      "minimumReadableVersion" : "0.1",
+      "relativePath" : "events/segments.json"
+    },
+    {
+      "currentVersion" : "0.1",
+      "identifier" : "scrolling-capture.json",
+      "minimumReadableVersion" : "0.1",
+      "relativePath" : "events/scrolling-capture.json"
+    },
+    {
+      "currentVersion" : "0.1",
+      "identifier" : "ocr.json",
+      "minimumReadableVersion" : "0.1",
+      "relativePath" : "analysis/ocr.json"
+    },
+    {
+      "currentVersion" : "0.1",
+      "identifier" : "transcript.json",
+      "minimumReadableVersion" : "0.1",
+      "relativePath" : "analysis/transcript.json"
+    },
+    {
+      "currentVersion" : "0.2",
+      "identifier" : "insights.json",
+      "minimumReadableVersion" : "0.1",
+      "relativePath" : "analysis/insights.json"
+    }
+  ],
+  "schemaRegistryVersion" : 1
+}

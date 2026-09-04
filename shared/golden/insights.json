@@ -1,0 +1,48 @@
+{
+  "chapters" : [
+    {
+      "endSeconds" : 6,
+      "index" : 0,
+      "startSeconds" : 0,
+      "summary" : "开场章节摘要。",
+      "title" : "开场"
+    },
+    {
+      "endSeconds" : 12.5,
+      "index" : 1,
+      "startSeconds" : 6,
+      "summary" : "演示章节摘要。",
+      "title" : "演示"
+    }
+  ],
+  "customization" : {
+    "summary" : "人工校正后的摘要。",
+    "tags" : [
+      "校正"
+    ],
+    "title" : "人工校正后的标题"
+  },
+  "engine" : "golden-organizer",
+  "generatedAt" : "2026-01-01T00:00:00Z",
+  "keyPoints" : [
+    "第一个要点",
+    "第二个要点"
+  ],
+  "schemaVersion" : "0.2",
+  "sensitiveFindings" : [
+    {
+      "endSeconds" : 5.6,
+      "kind" : "emailAddress",
+      "occurrenceCount" : 2,
+      "redactedPreview" : "a***@example.com",
+      "source" : "transcript",
+      "startSeconds" : 3.1
+    }
+  ],
+  "suggestedTitle" : "黄金录屏",
+  "summary" : "这是一段用于跨语言校验的摘要。",
+  "tags" : [
+    "演示",
+    "golden"
+  ]
+}

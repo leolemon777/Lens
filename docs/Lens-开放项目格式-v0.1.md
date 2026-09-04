@@ -46,8 +46,8 @@ Example.lens/
 
 | 文档 | 路径 | 最低可读 | 当前写入 | 说明 |
 |---|---|---:|---:|---|
-| Manifest | `manifest.json` | 0.1 | 0.8 | 类型、状态、尺寸、来源和资产索引 |
-| 自动编辑计划 | `edits/edit-plan.json` | 0.1 | 1.2 | 运镜、光标形态/拖动状态与特效、音频、画中画、时间线、字幕、标注和导出意图 |
+| Manifest | `manifest.json` | 0.1 | 0.9 | 类型、状态、尺寸、来源和资产索引 |
+| 自动编辑计划 | `edits/edit-plan.json` | 0.1 | 1.3 | 运镜、光标形态/拖动状态与特效、音频、画中画、时间线、字幕、标注和导出意图 |
 | 截图编辑计划 | `edits/screenshot-edit.json` | 0.2 | 0.3 | 对象化标注与非破坏画布样式 |
 | 录制分片索引 | `events/segments.json` | 0.1 | 0.1 | 暂停无关时间线与三轨分片 |
 | 长截图计划 | `events/scrolling-capture.json` | 0.1 | 0.1 | 源帧、重叠结果与纵向放置 |
@@ -55,7 +55,9 @@ Example.lens/
 | 转写 | `analysis/transcript.json` | 0.1 | 0.1 | 引擎、语言、设备端标记与源时间片段 |
 | 整理结果 | `analysis/insights.json` | 0.1 | 0.2 | 标题、摘要、标签、章节、脱敏提示与人工校正层 |
 
-源码中的 `LensProjectSchema.portableDocuments` 是这张表的可执行权威来源，测试会校验它与各模型的 `currentSchemaVersion` 一致。`.index/library-v1.json` 是可删除重建的本机缓存，不属于开放项目格式。
+源码中的 `LensProjectSchema.portableDocuments` 是这张表的可执行权威来源，测试会校验它与各模型的 `currentSchemaVersion` 一致。`shared/golden/schema-registry.json` 是同一张表的机器可读镜像，供非 Swift 实现读取，`PortableSchemaGoldenTests` 校验两者一致。`.index/library-v1.json` 是可删除重建的本机缓存，不属于开放项目格式。
+
+字段级定义、编码约定和跨语言实现须知见《[Lens 可移植文档字段规范](Lens-可移植文档字段规范-v1.md)》。
 
 ## 兼容规则
 

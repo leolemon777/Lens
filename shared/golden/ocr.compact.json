@@ -1,0 +1,1 @@
+{"blocks":[{"confidence":0.97,"normalizedBounds":{"height":0.06,"width":0.4,"x":0.1,"y":0.1},"text":"第一行"},{"confidence":0.91,"normalizedBounds":{"height":0.06,"width":0.5,"x":0.1,"y":0.2},"text":"second line"}],"engine":"golden-ocr","fullText":"第一行\nsecond line","recognitionLanguages":["zh-Hans","en-US"],"recognizedAt":"2026-01-01T00:00:00Z","schemaVersion":"0.1"}

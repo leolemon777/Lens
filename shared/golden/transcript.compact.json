@@ -1,0 +1,1 @@
+{"engine":"golden-speech","fullText":"这是第一句。 这是第二句。","generatedAt":"2026-01-01T00:00:00Z","isOnDevice":true,"localeIdentifier":"zh-Hans","schemaVersion":"0.1","segments":[{"confidence":0.94,"endSeconds":2.8,"startSeconds":0.4,"text":"这是第一句。"},{"confidence":0.89,"endSeconds":5.6,"startSeconds":3.1,"text":"这是第二句。"}],"sourceRole":"microphone"}

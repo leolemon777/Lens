@@ -24,6 +24,7 @@ shared/golden/    JSON   — 两边都必须通过的黄金文件（唯一契约
 | 文档 | 作用 |
 |---|---|
 | [Lens 可移植文档字段规范](../docs/Lens-可移植文档字段规范-v1.md) | **必读。** 字段语义、钳制范围、解码默认值陷阱 |
+| [Lens Windows 平台接口与日志契约](../docs/Lens-Windows-平台接口与日志契约-v1.md) | **必读。** 必须两侧一致的纯策略，以及诊断日志的逐字段契约（含白名单） |
 | [Lens 开放项目格式](../docs/Lens-开放项目格式-v0.1.md) | 目录结构与兼容规则 |
 | `../shared/golden/` | 黄金文件；`*.compact.json` 用于逐字节比对 |
 | `../shared/golden/schema-registry.json` | 版本注册表的机器可读镜像 |
@@ -37,12 +38,14 @@ windows/
 ├── Cargo.toml                  workspace
 └── crates/
     ├── lens-format/            .lens 读写（纯逻辑，可在 macOS 上开发和测试）
+    ├── lens-policy/            任务身份/准入/包闸门/存储分类（纯逻辑，待建）
+    ├── lens-diagnostics/       诊断事件白名单与 JSONL 落盘（纯逻辑，待建）
     ├── lens-capture/           Windows.Graphics.Capture + WASAPI（需 Windows）
     ├── lens-render/            Skia 图像 + FFmpeg 视频（edit-plan 执行器）
     └── lens-app/               Tauri 外壳 + 原生截图浮层
 ```
 
-`lens-format` **不依赖任何 Windows API**，可以在 macOS 上完整开发和验证。这是第一个里程碑的落点。
+前三个 crate **不依赖任何 Windows API**，可以在 macOS 上完整开发和验证。`lens-format` 是第一个里程碑的落点；`lens-policy` 和 `lens-diagnostics` 的规范见[平台接口与日志契约](../docs/Lens-Windows-平台接口与日志契约-v1.md)，同样不必等 Windows 环境就能做。
 
 ## 技术选型
 
@@ -73,17 +76,25 @@ windows/
 
 ## 构建
 
-需要 Rust 工具链（尚未在开发机安装）：
+需要 Rust 工具链。macOS 开发机上：
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-安装后：
+Windows 上：
+
+```powershell
+winget install Rustlang.Rustup
+```
+
+装好之后：
 
 ```bash
 cd windows && cargo test
 ```
+
+`lens-format` 到目前为止**一次都没有编译过**，代码是在没有工具链的机器上写的。第一次运行请按"可能有编译错误"来预期，而不是按"跑一下确认没问题"。
 
 ## 状态
 

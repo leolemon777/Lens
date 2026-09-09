@@ -88,24 +88,42 @@ public enum LocalLensOrganizer {
                 ?? ""
         ).trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let firstContent = sentences.first
-            ?? normalizedWhitespace(fallbackText)
+        let firstContent = sentences
+            .compactMap { candidate -> String? in
+                let title = usableTitle(candidate)
+                return title.isEmpty ? nil : title
+            }
+            .first
+            ?? usableTitle(normalizedWhitespace(fallbackText))
         var contentTitle = usableTitle(firstContent)
         if contentTitle.isEmpty {
             contentTitle = usableTitle(privacyRedactedText(windowTitle))
         }
-        if contentTitle.isEmpty {
-            contentTitle = usableTitle(application)
+        if !contentTitle.isEmpty {
+            contentTitle = truncated(contentTitle, maximumCharacters: 32)
+            guard !application.isEmpty,
+                  !contentTitle.localizedCaseInsensitiveContains(application) else {
+                return contentTitle
+            }
+            return truncated("\(application) · \(contentTitle)", maximumCharacters: 46)
         }
-        if contentTitle.isEmpty {
-            return privacyRedactedText(manifest.title)
+
+        let manifestTitle = usableTitle(privacyRedactedText(manifest.title))
+        if !manifestTitle.isEmpty {
+            return truncated(manifestTitle, maximumCharacters: 46)
         }
-        contentTitle = truncated(contentTitle, maximumCharacters: 32)
-        guard !application.isEmpty,
-              !contentTitle.localizedCaseInsensitiveContains(application) else {
-            return contentTitle
-        }
-        return truncated("\(application) · \(contentTitle)", maximumCharacters: 46)
+
+        // When OCR/transcript and window identity are both weak, retain a
+        // deterministic source/date label instead of returning a bare
+        // "截图"/"录屏" or a clock/path fragment. The UTC date makes the
+        // fallback stable across devices and keeps it useful for later search.
+        let source = application.isEmpty
+            ? (manifest.kind == .screenshot ? "截图" : "录屏")
+            : application
+        return truncated(
+            "\(source) · \(fallbackDateString(manifest.createdAt))",
+            maximumCharacters: 46
+        )
     }
 
     /// Dated capture names and calendar chrome are not searchable. A library
@@ -114,8 +132,38 @@ public enum LocalLensOrganizer {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return true }
         if trimmed.count < 4 { return true }
+        if trimmed.range(of: #"^\d{1,2}:\d{2}(?::\d{2})?$"#, options: .regularExpression) != nil {
+            return true
+        }
+        if trimmed.range(of: #"^\d{4}[-/]\d{1,2}[-/]\d{1,2}$"#, options: .regularExpression) != nil {
+            return true
+        }
+        let lowercased = trimmed.lowercased()
+        if trimmed.hasPrefix("~/") || trimmed.hasPrefix("/") || trimmed.contains("\\")
+            || lowercased.contains("/users/")
+            || lowercased.contains("/volumes/")
+            || lowercased.contains("file://") {
+            return true
+        }
         if trimmed.range(
-            of: #"^(截图|长截图|多窗口截图|区域截图)\s"#,
+            of: #"\.(?:png|jpg|jpeg|gif|mov|mp4|m4v|swift|json|pdf|docx)$"#,
+            options: [.regularExpression, .caseInsensitive]
+        ) != nil {
+            return true
+        }
+        let interfaceChrome: Set<String> = [
+            "file", "edit", "view", "window", "help",
+            "文件", "编辑", "视图", "窗口", "帮助", "取消", "确定"
+        ]
+        let pathSuffixFragment: Set<String> = [
+            "com", "json", "jpg", "jpeg", "m4v", "mov", "mp4", "pdf", "png", "swift"
+        ]
+        if interfaceChrome.contains(trimmed.lowercased())
+            || pathSuffixFragment.contains(trimmed.lowercased()) {
+            return true
+        }
+        if trimmed.range(
+            of: #"^(截图|长截图|多窗口截图|区域截图|录屏)\s"#,
             options: .regularExpression
         ) != nil {
             return true
@@ -707,6 +755,18 @@ public enum LocalLensOrganizer {
             .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(
                 CharacterSet(charactersIn: ".!?。！？,;，；:-—")
             ))
+    }
+
+    private static func fallbackDateString(_ date: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 1970,
+            components.month ?? 1,
+            components.day ?? 1
+        )
     }
 
     private static func truncated(_ text: String, maximumCharacters: Int) -> String {

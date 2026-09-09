@@ -142,6 +142,102 @@ final class ProjectSchemaCompatibilityTests: XCTestCase {
         ))
     }
 
+    func testAssetPathTraversalAndOversizedDimensionsAreRejectedBeforeIndexing() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LensManifestValidationTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LensProjectStore(rootDirectory: root)
+        let saved = try store.saveScreenshot(
+            pngData: Data([1, 2, 3]),
+            width: 640,
+            height: 360
+        )
+        let manifestURL = saved.packageURL.appendingPathComponent("manifest.json")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var manifest = try decoder.decode(LensManifest.self, from: Data(contentsOf: manifestURL))
+        manifest.assets = [
+            LensAsset(role: .screenshot, relativePath: "../outside.png")
+        ]
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
+
+        XCTAssertThrowsError(try store.loadManifest(from: saved.packageURL)) { error in
+            XCTAssertEqual(
+                error as? LensManifestValidationError,
+                .invalidAssetPath("../outside.png")
+            )
+        }
+        XCTAssertTrue(store.libraryEntries().isEmpty)
+
+        manifest.assets = [LensAsset(role: .screenshot, relativePath: "raw/screenshot.png")]
+        manifest = LensManifest(
+            id: manifest.id,
+            kind: .screenshot,
+            createdAt: manifest.createdAt,
+            title: manifest.title,
+            dimensions: LensDimensions(width: 100_001, height: 360),
+            assets: manifest.assets
+        )
+        try encoder.encode(manifest).write(to: manifestURL, options: .atomic)
+        XCTAssertThrowsError(try store.loadManifest(from: saved.packageURL)) { error in
+            XCTAssertEqual(error as? LensManifestValidationError, .invalidDimensions)
+        }
+    }
+
+    func testAssetSymlinkCannotEscapeLensPackageDuringImport() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LensManifestSymlinkTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LensProjectStore(rootDirectory: root)
+        let saved = try store.saveScreenshot(
+            pngData: Data([1, 2, 3]),
+            width: 640,
+            height: 360
+        )
+        let outside = root.appendingPathComponent("outside.png")
+        try Data([9, 8, 7]).write(to: outside)
+        let rawAsset = saved.packageURL.appendingPathComponent("raw/screenshot.png")
+        try FileManager.default.removeItem(at: rawAsset)
+        try FileManager.default.createSymbolicLink(at: rawAsset, withDestinationURL: outside)
+
+        XCTAssertThrowsError(try store.loadManifest(from: saved.packageURL)) { error in
+            XCTAssertEqual(
+                error as? LensManifestValidationError,
+                .assetIsSymbolicLink("raw/screenshot.png")
+            )
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outside.path))
+        XCTAssertTrue(store.libraryEntries().isEmpty)
+    }
+
+    func testAssetPathThroughSymlinkedDirectoryIsRejectedEvenWhenAssetIsMissing() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LensManifestSymlinkDirectoryTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LensProjectStore(rootDirectory: root)
+        let saved = try store.saveScreenshot(
+            pngData: Data([1, 2, 3]),
+            width: 640,
+            height: 360
+        )
+        let outside = root.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let rawDirectory = saved.packageURL.appendingPathComponent("raw", isDirectory: true)
+        try FileManager.default.removeItem(at: rawDirectory)
+        try FileManager.default.createSymbolicLink(at: rawDirectory, withDestinationURL: outside)
+
+        XCTAssertThrowsError(try store.loadManifest(from: saved.packageURL)) { error in
+            XCTAssertEqual(
+                error as? LensManifestValidationError,
+                .assetIsSymbolicLink("raw/screenshot.png")
+            )
+        }
+        XCTAssertTrue(store.libraryEntries().isEmpty)
+    }
+
     private func workingCopyOfFixture(named name: String) throws -> URL {
         guard let resources = Bundle.module.resourceURL else {
             throw CocoaError(.fileNoSuchFile)

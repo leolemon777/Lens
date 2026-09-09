@@ -1,6 +1,11 @@
 import AppKit
+import ImageIO
 import LensCore
 import SwiftUI
+
+extension Notification.Name {
+    static let lensThumbnailDidChange = Notification.Name("LensThumbnailDidChange")
+}
 
 struct LensLibraryView: View {
     @ObservedObject var model: LensLibraryModel
@@ -125,10 +130,16 @@ struct LensLibraryView: View {
             .pickerStyle(.segmented)
             .frame(width: 250)
             Spacer()
-            if model.isLoading {
+            if model.isLoading || model.isFiltering {
                 ProgressView()
                     .controlSize(.small)
-                Text("正在更新索引…")
+                Text(model.isLoading ? "正在更新索引…" : "正在筛选…")
+                    .foregroundStyle(.secondary)
+            } else if let progress = model.recoveryScanProgress {
+                ProgressView(value: progress.fractionCompleted)
+                    .frame(width: 92)
+                    .controlSize(.small)
+                Text("正在检查录屏 \(progress.completed)/\(progress.total)…")
                     .foregroundStyle(.secondary)
             } else {
                 HStack(spacing: 8) {
@@ -181,6 +192,7 @@ struct LensLibraryView: View {
                             onDelete: { onDelete(entry) },
                             canDelete: model.canDelete(entry),
                             isTranscribing: model.isTranscribing(entry.id),
+                            transcriptionProgress: model.transcriptionProgress(for: entry.id),
                             isOrganizing: model.isOrganizing(entry.id),
                             recovery: model.recoveryAssessment(for: entry.id),
                             isRepairing: model.isRepairing(entry.id),
@@ -234,6 +246,7 @@ private struct LensLibraryCard: View {
     let onDelete: () -> Void
     let canDelete: Bool
     let isTranscribing: Bool
+    let transcriptionProgress: LensLibraryTranscriptionProgress?
     let isOrganizing: Bool
     let recovery: RecordingRecoveryAssessment?
     let isRepairing: Bool
@@ -248,8 +261,8 @@ private struct LensLibraryCard: View {
     }
 
     /// Hover alone would strand keyboard/VoiceOver users behind actions
-    /// that never appear, so focus reveals the same set opacity-only
-    /// (never removed from the tree) rather than requiring a pointer.
+    /// that never appear, so focus reveals the same set while the collapsed
+    /// row keeps a tiny semantic footprint for the accessibility tree.
     private var showsSecondaryActions: Bool {
         isHovering || focusedSecondaryAction != nil
     }
@@ -401,9 +414,13 @@ private struct LensLibraryCard: View {
                     } else {
                         cardButton("复制文件", symbol: "doc.on.doc", action: onCopy)
                             .focused($focusedSecondaryAction, equals: .copy)
-                        if let fileURL = QuickAccessFileTransfer.bestFileURL(for: entry) {
+                        if QuickAccessFileTransfer.bestFileURL(for: entry) != nil {
                             cardButton("分享", symbol: "square.and.arrow.up") {
-                                LensFileSharing.present(fileURL: fileURL)
+                                LensFileSharing.present(lens: SavedLens(
+                                    packageURL: entry.packageURL,
+                                    rawAssetURL: entry.primaryAssetURL,
+                                    manifest: entry.manifest
+                                ))
                             }
                             .help("打开 macOS 系统分享面板发送当前视频，不会自动上传")
                             .accessibilityHint("打开 macOS 系统分享面板发送当前视频，不会自动上传")
@@ -412,12 +429,24 @@ private struct LensLibraryCard: View {
                         Button(action: onTranscribe) {
                             HStack(spacing: 4) {
                                 if isTranscribing {
-                                    ProgressView()
-                                        .controlSize(.mini)
+                                    if let transcriptionProgress {
+                                        ProgressView(value: transcriptionProgress.fractionCompleted)
+                                            .controlSize(.mini)
+                                            .frame(width: 14)
+                                    } else {
+                                        ProgressView()
+                                            .controlSize(.mini)
+                                    }
                                 } else {
                                     Image(systemName: "waveform.badge.magnifyingglass")
                                 }
-                                Text(entry.transcriptText?.isEmpty == false ? "重转写" : "转写")
+                                if isTranscribing {
+                                    Text(transcriptionProgress.map {
+                                        "转写 \($0.completed)/\($0.total)"
+                                    } ?? "正在转写")
+                                } else {
+                                    Text(entry.transcriptText?.isEmpty == false ? "重转写" : "转写")
+                                }
                             }
                             .font(.system(size: LensType.micro, weight: .semibold))
                             .padding(.horizontal, 7)
@@ -426,14 +455,25 @@ private struct LensLibraryCard: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(isTranscribing)
+                        .accessibilityValue(
+                            transcriptionProgress.map {
+                                "已完成 \($0.completed) / \($0.total) 段"
+                            } ?? (isTranscribing ? "进行中" : "未开始")
+                        )
                         .focused($focusedSecondaryAction, equals: .transcribe)
                     }
                 }
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: showsSecondaryActions ? nil : 0, alignment: .leading)
+                // A zero-height, fully transparent SwiftUI subtree disappears
+                // from macOS AX. Keep one point of layout and a non-zero alpha
+                // when collapsed: it remains visually imperceptible, while
+                // VoiceOver and keyboard navigation can still discover the
+                // actual buttons. Focus/hover expands the row normally.
+                .frame(height: showsSecondaryActions ? nil : 1, alignment: .leading)
                 .clipped()
-                .opacity(showsSecondaryActions ? 1 : 0)
+                .opacity(showsSecondaryActions ? 1 : 0.001)
+                .accessibilityHidden(false)
 
                 HStack(spacing: 7) {
                     cardButton(
@@ -493,6 +533,14 @@ private struct LensLibraryCard: View {
         let suggested = entry.insights?.resolvedTitle
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return suggested.isEmpty ? entry.manifest.title : suggested
+    }
+
+    private var deliveryState: QuickAccessDeliveryState {
+        QuickAccessDeliveryState.derived(for: SavedLens(
+            packageURL: entry.packageURL,
+            rawAssetURL: entry.primaryAssetURL,
+            manifest: entry.manifest
+        ))
     }
 
     private var organizationButton: some View {
@@ -648,19 +696,23 @@ private struct LensLibraryCard: View {
     }
 
     private var stateTitle: String {
-        switch entry.manifest.state {
-        case .capturing: "录制中"
+        if entry.manifest.kind == .screenshot {
+            return "就绪"
+        }
+        return switch deliveryState {
+        case .ready: "可交付"
         case .processing: "智能处理中"
-        case .ready: "就绪"
+        case .needsReview: "需复核"
+        case .cancelled: "已取消"
         case .interrupted: "已中断"
-        case .failed: "失败"
+        case .failed: "生成失败"
         }
     }
 
     private var stateColor: Color {
-        switch entry.manifest.state {
+        switch deliveryState {
         case .ready: LensGlassPalette.success
-        case .capturing, .processing: LensGlassPalette.warning
+        case .processing, .needsReview, .cancelled: LensGlassPalette.warning
         case .interrupted, .failed: LensGlassPalette.recording
         }
     }
@@ -686,14 +738,76 @@ private struct LensLibraryCard: View {
 final class LensLibraryThumbnailCache {
     static let shared = LensLibraryThumbnailCache()
 
-    private let images = NSCache<NSURL, NSImage>()
+    private let images = NSCache<NSString, NSImage>()
+    private var latestKeys: [URL: NSString] = [:]
+
+    init() {
+        // A thumbnail is a display cache, never the source of truth. Bound
+        // both count and decoded-pixel cost so long screenshots cannot grow
+        // the process without limit.
+        images.countLimit = 512
+        images.totalCostLimit = 128 * 1_024 * 1_024
+    }
+
+    private func key(for url: URL) -> NSString {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let byteCount = (attributes?[.size] as? NSNumber)?.int64Value ?? -1
+        let modifiedAt = (attributes?[.modificationDate] as? Date)
+            .map { String(format: "%.9f", $0.timeIntervalSince1970) }
+            ?? "unknown"
+        return "\(url.standardizedFileURL.path)|\(byteCount)|\(modifiedAt)" as NSString
+    }
 
     func image(for url: URL) -> NSImage? {
-        images.object(forKey: url as NSURL)
+        let cacheKey = key(for: url)
+        latestKeys[url.standardizedFileURL] = cacheKey
+        return images.object(forKey: cacheKey)
     }
 
     func insert(_ image: NSImage, for url: URL) {
-        images.setObject(image, forKey: url as NSURL, cost: Int(image.size.width * image.size.height))
+        let normalizedURL = url.standardizedFileURL
+        let cacheKey = key(for: normalizedURL)
+        if let previousKey = latestKeys.updateValue(cacheKey, forKey: normalizedURL),
+           previousKey != cacheKey {
+            images.removeObject(forKey: previousKey)
+        }
+        images.setObject(
+            image,
+            forKey: cacheKey,
+            cost: max(Int(image.size.width * image.size.height * 4), 1)
+        )
+    }
+
+    func invalidate(_ url: URL) {
+        let normalizedURL = url.standardizedFileURL
+        if let previousKey = latestKeys.removeValue(forKey: normalizedURL) {
+            images.removeObject(forKey: previousKey)
+        }
+    }
+}
+
+enum LensThumbnailDecoder {
+    static let defaultMaximumPixelSize = 640
+
+    static func image(
+        from data: Data,
+        maximumPixelSize: Int = defaultMaximumPixelSize
+    ) -> NSImage? {
+        guard maximumPixelSize > 0,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(
+                  source,
+                  0,
+                  [
+                      kCGImageSourceCreateThumbnailFromImageAlways: true,
+                      kCGImageSourceCreateThumbnailWithTransform: true,
+                      kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize
+                  ] as CFDictionary
+              ) else { return nil }
+        return NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: cgImage.width, height: cgImage.height)
+        )
     }
 }
 
@@ -701,6 +815,7 @@ struct LensLibraryThumbnailView: View {
     let url: URL
 
     @State private var image: NSImage?
+    @State private var reloadToken = UUID()
 
     init(url: URL) {
         self.url = url
@@ -747,7 +862,21 @@ struct LensLibraryThumbnailView: View {
                 }
             }
             .clipped()
-            .task(id: url) {
+            .task(id: reloadToken) {
+                await loadImage()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .lensThumbnailDidChange)) { note in
+                guard let changedURL = note.object as? URL,
+                      changedURL.standardizedFileURL == url.standardizedFileURL else {
+                    return
+                }
+                LensLibraryThumbnailCache.shared.invalidate(url)
+                image = nil
+                reloadToken = UUID()
+            }
+    }
+
+    private func loadImage() async {
             if let cached = LensLibraryThumbnailCache.shared.image(for: url) {
                 image = cached
                 return
@@ -757,10 +886,9 @@ struct LensLibraryThumbnailView: View {
             }.value
             guard !Task.isCancelled,
                   let data,
-                  let loaded = NSImage(data: data) else { return }
+                  let loaded = LensThumbnailDecoder.image(from: data) else { return }
             LensLibraryThumbnailCache.shared.insert(loaded, for: url)
             image = loaded
-        }
     }
 }
 

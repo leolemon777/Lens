@@ -772,7 +772,7 @@ private struct VideoEditorTransportClockControls: View {
         Slider(
             value: Binding(
                 get: { clock.currentTimeSeconds },
-                set: { playback.seek(to: $0) }
+                set: { playback.seek(to: $0, coalescing: true) }
             ),
             in: 0...max(playback.durationSeconds, 0.01),
             onEditingChanged: { editing in

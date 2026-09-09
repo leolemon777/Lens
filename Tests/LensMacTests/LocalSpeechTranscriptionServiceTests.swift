@@ -61,6 +61,55 @@ final class LocalSpeechTranscriptionServiceTests: XCTestCase {
         }
     }
 
+    func testSpeechFrameworkFailureCodesBecomeActionableLocalErrors() {
+        let noSpeech = LocalSpeechTranscriptionService.classifyRecognitionError(
+            NSError(domain: "kAFAssistantErrorDomain", code: 1110),
+            localeIdentifier: "zh-CN"
+        )
+        XCTAssertEqual(noSpeech as? LocalSpeechTranscriptionError, .noSpeechDetected)
+
+        let dictationDisabled = LocalSpeechTranscriptionService.classifyRecognitionError(
+            NSError(domain: "kLSRErrorDomain", code: 201),
+            localeIdentifier: "zh-CN"
+        )
+        XCTAssertEqual(
+            dictationDisabled as? LocalSpeechTranscriptionError,
+            .authorizationDenied
+        )
+
+        let denied = LocalSpeechTranscriptionService.classifyRecognitionError(
+            NSError(domain: "kAFAssistantErrorDomain", code: 1700),
+            localeIdentifier: "zh-CN"
+        )
+        XCTAssertEqual(denied as? LocalSpeechTranscriptionError, .authorizationDenied)
+
+        let unavailable = LocalSpeechTranscriptionService.classifyRecognitionError(
+            NSError(domain: "kLSRErrorDomain", code: 300),
+            localeIdentifier: "en-US"
+        )
+        XCTAssertEqual(
+            unavailable as? LocalSpeechTranscriptionError,
+            .recognizerUnavailable("en-US")
+        )
+
+        let failed = LocalSpeechTranscriptionService.classifyRecognitionError(
+            NSError(domain: "kAFAssistantErrorDomain", code: 203),
+            localeIdentifier: "zh-CN"
+        )
+        XCTAssertEqual(failed as? LocalSpeechTranscriptionError, .recognitionFailed)
+        XCTAssertTrue(
+            (failed as? LocalSpeechTranscriptionError)?.errorDescription?.contains("原始音轨") == true
+        )
+    }
+
+    func testSpeechCancellationRemainsCancellationError() {
+        let classified = LocalSpeechTranscriptionService.classifyRecognitionError(
+            NSError(domain: "kLSRErrorDomain", code: 301),
+            localeIdentifier: "zh-CN"
+        )
+        XCTAssertTrue(classified is CancellationError)
+    }
+
     @MainActor
     func testMissingAudioIsRejectedBeforeRequestingSpeechPermission() async {
         let url = FileManager.default.temporaryDirectory

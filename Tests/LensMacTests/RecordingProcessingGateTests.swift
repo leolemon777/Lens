@@ -91,4 +91,22 @@ final class RecordingProcessingGateTests: XCTestCase {
             "不同包的调用者应能并发执行，而不是互相排队。"
         )
     }
+
+    func testCanceledWaiterLeavesTheGateAvailableForTheNextWorker() async throws {
+        let gate = RecordingProcessingGate()
+        let package = URL(fileURLWithPath: "/tmp/lens-cancel-gate.lens")
+        let firstAcquired = await gate.acquire(package)
+        XCTAssertTrue(firstAcquired)
+
+        let queued = Task { await gate.acquire(package) }
+        try await Task.sleep(for: .milliseconds(25))
+        queued.cancel()
+        let queuedAcquired = await queued.value
+        XCTAssertFalse(queuedAcquired)
+
+        await gate.release(package)
+        let nextAcquired = await gate.acquire(package)
+        XCTAssertTrue(nextAcquired)
+        await gate.release(package)
+    }
 }

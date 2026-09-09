@@ -56,6 +56,12 @@ final class AppModelPreferencesTests: XCTestCase {
             initial.conversationInboxDirectory,
             ConversationInboxStore.defaultDirectory()
         )
+        XCTAssertEqual(
+            initial.automaticCameraZoomScale,
+            RecordingExperiencePreset.defaultAutomaticZoomScale,
+            accuracy: 0.000_1
+        )
+        XCTAssertFalse(initial.automaticallyChecksForUpdates)
 
         initial.capturesSystemAudio = false
         initial.capturesMicrophone = true
@@ -80,6 +86,8 @@ final class AppModelPreferencesTests: XCTestCase {
         let customInbox = FileManager.default.temporaryDirectory
             .appendingPathComponent("ConversationInbox-\(UUID().uuidString)", isDirectory: true)
         initial.conversationInboxDirectory = customInbox
+        initial.automaticCameraZoomScale = 1.65
+        initial.automaticallyChecksForUpdates = true
         let restored = AppModel(defaults: defaults)
 
         XCTAssertFalse(restored.capturesSystemAudio)
@@ -106,6 +114,26 @@ final class AppModelPreferencesTests: XCTestCase {
             restored.conversationInboxDirectory,
             customInbox.standardizedFileURL
         )
+        XCTAssertEqual(restored.automaticCameraZoomScale, 1.65, accuracy: 0.000_1)
+        XCTAssertTrue(restored.automaticallyChecksForUpdates)
+    }
+
+    func testStorageMigrationProgressIsTransientAndNotPersisted() throws {
+        let suiteName = "LensStorageProgressTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let model = AppModel(defaults: defaults)
+        XCTAssertNil(model.storageMigrationProgress)
+        model.storageMigrationProgress = LensStorageMigrationProgress(
+            phase: .copying,
+            completedChildren: 2,
+            totalChildren: 4
+        )
+        XCTAssertEqual(model.storageMigrationProgress?.completedChildren, 2)
+
+        let restored = AppModel(defaults: defaults)
+        XCTAssertNil(restored.storageMigrationProgress)
     }
 
     func testPreviousReleasePreferencesLoadWhileCameraOptInResetsSafely() throws {
@@ -145,7 +173,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(natural.preset, "natural")
         XCTAssertTrue(natural.camera.followPointer)
         XCTAssertEqual(natural.camera.zoomIntensity, 0.42, accuracy: 0.001)
-        XCTAssertEqual(natural.camera.zoomScale, 1.60)
+        XCTAssertEqual(natural.camera.zoomScale, 1.28)
         XCTAssertEqual(natural.camera.generationStrength, .restrained)
         XCTAssertEqual(natural.camera.motionBlurStrength, 0, accuracy: 0.001)
         XCTAssertNil(natural.cursor.smoothingWindowMilliseconds)
@@ -170,7 +198,7 @@ final class AppModelPreferencesTests: XCTestCase {
             presentation.camera.zoomIntensity,
             natural.camera.zoomIntensity
         )
-        XCTAssertEqual(presentation.camera.zoomScale, 1.60)
+        XCTAssertEqual(presentation.camera.zoomScale, 1.28)
         XCTAssertEqual(presentation.camera.generationStrength, .active)
         XCTAssertEqual(presentation.camera.motionBlurStrength, 0, accuracy: 0.001)
         XCTAssertEqual(presentation.cursor.smoothingWindowMilliseconds, 30)
@@ -185,7 +213,7 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertEqual(presentation.export?.preset, .balanced)
 
         let teaching = RecordingExperiencePreset.teaching.makeEditPlan(includesCamera: true)
-        XCTAssertEqual(teaching.camera.zoomScale, 1.60)
+        XCTAssertEqual(teaching.camera.zoomScale, 1.28)
         XCTAssertTrue(teaching.audio?.reducesMicrophoneNoise == true)
         XCTAssertEqual(teaching.camera.generationStrength, .balanced)
         XCTAssertFalse(teaching.cursor.hidesWhenIdle)
@@ -210,6 +238,80 @@ final class AppModelPreferencesTests: XCTestCase {
         XCTAssertFalse(source.canvas?.isEnabled == true)
         XCTAssertFalse(source.presenterCamera?.isEnabled == true)
         XCTAssertEqual(source.export?.preset, .source)
+    }
+
+    func testAutomaticCameraZoomPreferenceClampsAndFeedsNewEditPlans() throws {
+        let suiteName = "LensCameraZoomPreference-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let model = AppModel(defaults: defaults)
+        XCTAssertEqual(
+            model.automaticCameraZoomScale,
+            RecordingExperiencePreset.defaultAutomaticZoomScale,
+            accuracy: 0.000_1
+        )
+
+        model.automaticCameraZoomScale = 9
+        XCTAssertEqual(model.automaticCameraZoomScale, 3, accuracy: 0.000_1)
+        model.automaticCameraZoomScale = 0.2
+        XCTAssertEqual(model.automaticCameraZoomScale, 1, accuracy: 0.000_1)
+        model.automaticCameraZoomScale = .nan
+        XCTAssertEqual(
+            model.automaticCameraZoomScale,
+            RecordingExperiencePreset.defaultAutomaticZoomScale,
+            accuracy: 0.000_1
+        )
+        model.automaticCameraZoomScale = 1.65
+        model.restoreDefaultAutomaticCameraZoomScale()
+        XCTAssertEqual(
+            model.automaticCameraZoomScale,
+            RecordingExperiencePreset.defaultAutomaticZoomScale,
+            accuracy: 0.000_1
+        )
+
+        let custom = RecordingExperiencePreset.natural.makeEditPlan(
+            includesCamera: false,
+            automaticZoomScale: 1.65
+        )
+        XCTAssertEqual(custom.camera.zoomScale, 1.65)
+        XCTAssertEqual(
+            RecordingExperiencePreset.presentation.makeEditPlan(
+                includesCamera: true,
+                automaticZoomScale: 1.65
+            ).camera.zoomScale,
+            1.65
+        )
+        XCTAssertEqual(
+            RecordingExperiencePreset.source.makeEditPlan(
+                includesCamera: true,
+                automaticZoomScale: 1.65
+            ).camera.zoomScale,
+            1
+        )
+    }
+
+    func testLensStorageRootPreferencePersistsAndRejectsFilesystemRoot() throws {
+        let suiteName = "LensStorageRootPreference-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let model = AppModel(defaults: defaults)
+        XCTAssertEqual(model.lensStorageRootDirectory, LensProjectStore.defaultRootDirectory)
+
+        let custom = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LensRoot-\(UUID().uuidString)", isDirectory: true)
+        model.lensStorageRootDirectory = custom
+        XCTAssertEqual(
+            AppModel.storedLensStorageRootDirectory(defaults: defaults).path,
+            custom.standardizedFileURL.path
+        )
+
+        defaults.set("/", forKey: "storage.lensRootDirectory")
+        XCTAssertEqual(
+            AppModel.storedLensStorageRootDirectory(defaults: defaults),
+            LensProjectStore.defaultRootDirectory
+        )
     }
 
     func testUnsupportedStoredFrameRateFallsBackToSixtyFPS() throws {

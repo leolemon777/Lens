@@ -5,8 +5,15 @@ import os
 enum LensCoreLog {
     private static let logger = Logger(subsystem: "app.lens", category: "core")
 
+    static func safeErrorMetadata(_ error: Error) -> [String: String] {
+        DiagnosticEvent.errorMetadata(error)
+    }
+
     static func record(_ code: String, error: Error) {
-        logger.error("\(code, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        let metadata = safeErrorMetadata(error)
+        logger.error(
+            "\(code, privacy: .public) domain=\(metadata["errorDomain", default: "unknown"], privacy: .public) code=\(metadata["errorCode", default: "unknown"], privacy: .public)"
+        )
     }
 
     static func optional<T>(_ code: String, _ body: () throws -> T) -> T? {

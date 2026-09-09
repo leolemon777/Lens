@@ -120,6 +120,34 @@ final class ScreenshotAnnotationRendererTests: XCTestCase {
         XCTAssertLessThan(outsideDifference, 2)
     }
 
+    func testOpaqueRedactionRectangleRemovesSourcePixelsInsideBounds() throws {
+        let source = try solidImage(width: 400, height: 240, gray: 1)
+        let plan = ScreenshotEditPlan(
+            sourceDimensions: LensDimensions(width: source.width, height: source.height),
+            annotations: [ScreenshotAnnotation(
+                kind: .rectangle,
+                bounds: LensRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5),
+                style: ScreenshotAnnotationStyle(
+                    lineWidth: 0,
+                    color: .black,
+                    fillColor: .black
+                )
+            )]
+        )
+
+        let output = try ScreenshotAnnotationRenderer().render(source: source, plan: plan)
+        let pixels = try rgbaPixels(output)
+        let center = pixels[120 * output.width + 200]
+        let outside = pixels[12 * output.width + 20]
+
+        XCTAssertLessThan(center.r, 32)
+        XCTAssertLessThan(center.g, 32)
+        XCTAssertLessThan(center.b, 32)
+        XCTAssertGreaterThan(outside.r, 240)
+        XCTAssertGreaterThan(outside.g, 240)
+        XCTAssertGreaterThan(outside.b, 240)
+    }
+
     func testFreehandHighlightAndStepRenderAsDistinctEditableObjects() throws {
         let source = try solidImage(width: 500, height: 320, gray: 1)
         let plan = ScreenshotEditPlan(

@@ -25,6 +25,7 @@ struct BuildIdentity: Codable, Equatable, Sendable {
     let version: String
     let buildNumber: String
     let gitCommit: String
+    let sourceSnapshotSHA256: String?
     let builtAt: Date?
     let channel: LensBuildChannel
     let bundleIdentifier: String
@@ -34,6 +35,7 @@ struct BuildIdentity: Codable, Equatable, Sendable {
         version: String,
         buildNumber: String,
         gitCommit: String = BuildIdentity.unknownCommit,
+        sourceSnapshotSHA256: String? = nil,
         builtAt: Date? = nil,
         channel: LensBuildChannel = .development,
         bundleIdentifier: String = "app.lens.mac",
@@ -42,6 +44,7 @@ struct BuildIdentity: Codable, Equatable, Sendable {
         self.version = version
         self.buildNumber = buildNumber
         self.gitCommit = gitCommit
+        self.sourceSnapshotSHA256 = sourceSnapshotSHA256
         self.builtAt = builtAt
         self.channel = channel
         self.bundleIdentifier = bundleIdentifier
@@ -53,6 +56,7 @@ struct BuildIdentity: Codable, Equatable, Sendable {
         version = info["CFBundleShortVersionString"] as? String ?? Self.developmentValue
         buildNumber = info["CFBundleVersion"] as? String ?? Self.developmentValue
         gitCommit = info["LensGitCommit"] as? String ?? Self.unknownCommit
+        sourceSnapshotSHA256 = info["LensSourceSnapshotSHA256"] as? String
         builtAt = Self.parseBuildDate(info["LensBuiltAt"] as? String)
         channel = LensBuildChannel(
             infoDictionaryValue: info["LensBuildChannel"] as? String
@@ -94,6 +98,9 @@ struct BuildIdentity: Codable, Equatable, Sendable {
         if let builtAt {
             metadata["builtAt"] = Self.iso8601String(from: builtAt)
         }
+        if let sourceSnapshotSHA256, !sourceSnapshotSHA256.isEmpty {
+            metadata["sourceSnapshotSHA256"] = String(sourceSnapshotSHA256.prefix(12))
+        }
         return metadata
     }
 
@@ -102,6 +109,7 @@ struct BuildIdentity: Codable, Equatable, Sendable {
             && version == other.version
             && buildNumber == other.buildNumber
             && gitCommit == other.gitCommit
+            && sourceSnapshotSHA256 == other.sourceSnapshotSHA256
             && executableURL == other.executableURL
     }
 

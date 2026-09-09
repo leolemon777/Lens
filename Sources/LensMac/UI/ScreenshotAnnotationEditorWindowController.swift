@@ -13,6 +13,7 @@ enum ScreenshotEditorClipboardStatus {
 final class ScreenshotAnnotationEditorWindowController {
     private let store: LensProjectStore
     private let editingService: ScreenshotEditingService
+    private let onStorageActivityChanged: () -> Void
     private var window: AnnotationEditorWindow?
     private var activeLens: SavedLens?
     private var sourceImage: NSImage?
@@ -22,6 +23,11 @@ final class ScreenshotAnnotationEditorWindowController {
     var onSaved: ((SavedLens, NSImage, ScreenshotEditorClipboardStatus) -> Void)?
     var onCopyResult: ((Bool) -> Void)?
     var onFailure: ((Error) -> Void)?
+
+    var activeStoragePackageURL: URL? {
+        guard activeLens != nil || operationTask != nil else { return nil }
+        return activeLens?.packageURL.standardizedFileURL
+    }
 
     private enum ScreenshotCodeCardError: LocalizedError {
         case renderingUnavailable
@@ -34,7 +40,11 @@ final class ScreenshotAnnotationEditorWindowController {
         }
     }
 
-    init(store: LensProjectStore) {
+    init(
+        store: LensProjectStore,
+        onStorageActivityChanged: @escaping () -> Void = {}
+    ) {
+        self.onStorageActivityChanged = onStorageActivityChanged
         self.store = store
         editingService = ScreenshotEditingService(store: store)
     }
@@ -98,6 +108,7 @@ final class ScreenshotAnnotationEditorWindowController {
         activeLens = nil
         sourceImage = nil
         activeModel = nil
+        onStorageActivityChanged()
     }
 
     private func save(_ plan: ScreenshotEditPlan) {

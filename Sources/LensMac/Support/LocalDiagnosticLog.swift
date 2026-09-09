@@ -42,7 +42,10 @@ actor LocalDiagnosticLog {
         do {
             try append(DiagnosticEvent(level: level, code: code, metadata: metadata))
         } catch {
-            Self.logger.error("Failed to persist diagnostic \(code, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            let nsError = error as NSError
+            Self.logger.error(
+                "Failed to persist diagnostic \(code, privacy: .public) domain=\(nsError.domain, privacy: .public) code=\(nsError.code)"
+            )
         }
         switch level {
         case .error:

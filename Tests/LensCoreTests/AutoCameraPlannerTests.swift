@@ -32,7 +32,7 @@ final class AutoCameraPlannerTests: XCTestCase {
         )
 
         XCTAssertTrue(result.contains { $0.reason == .pointerFollow })
-        XCTAssertGreaterThan(result.map(\.scale).max() ?? 1, 1.2)
+        XCTAssertGreaterThan(result.map(\.scale).max() ?? 1, 1.15)
         XCTAssertEqual(result.last?.reason, .returnToOverview)
         XCTAssertEqual(result.last?.scale, 1)
     }
@@ -174,10 +174,10 @@ final class AutoCameraPlannerTests: XCTestCase {
         })
 
         XCTAssertEqual(anchor.time, clickTime, accuracy: 0.000_1)
-        XCTAssertGreaterThan(focus.time, clickTime + 0.50)
+        XCTAssertGreaterThan(focus.time, clickTime + 0.40)
         XCTAssertEqual(
             focus.time - anchor.time,
-            log2(1.6) * 1.875 / 2.2,
+            0.45,
             accuracy: 0.000_1
         )
         XCTAssertEqual(
@@ -335,11 +335,11 @@ final class AutoCameraPlannerTests: XCTestCase {
         let farFocus = try XCTUnwrap(far.first { $0.reason == .clickFocus })
 
         // At the responsive velocities the zoom budget dominates every
-        // clamped pan a 1.6× focus can request, so typical transitions now
+        // clamped pan a 1.28× focus can request, so typical transitions now
         // share the zoom-budget duration; distance-awareness only lengthens
         // extreme cases and must never shorten a farther shot.
         XCTAssertGreaterThanOrEqual(farFocus.time - 1, nearbyFocus.time - 1)
-        XCTAssertGreaterThanOrEqual(nearbyFocus.time - 1, 0.45)
+        XCTAssertEqual(nearbyFocus.time - 1, 0.45, accuracy: 0.001)
         XCTAssertLessThanOrEqual(farFocus.time - 1, 0.90)
     }
 
@@ -439,7 +439,7 @@ final class AutoCameraPlannerTests: XCTestCase {
         XCTAssertFalse(fixed.contains { $0.reason == .pointerFollow })
         XCTAssertEqual(followed, fixed)
         let focus = followed.first { $0.reason == .clickFocus }
-        XCTAssertEqual(focus?.center.x ?? -1, 0.3125, accuracy: 0.000_1)
+        XCTAssertEqual(focus?.center.x ?? -1, 0.5 / 1.28, accuracy: 0.000_1)
     }
 
     func testScrollInertiaLocksCompositionAndDefersClickRefocus() throws {

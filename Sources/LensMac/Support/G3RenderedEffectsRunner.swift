@@ -459,7 +459,8 @@ package enum G3RenderedEffectsRunner {
             )
             let renderedPlanDigest = try RenderedPlanIdentity.digest(
                 for: plan,
-                transcript: transcript
+                transcript: transcript,
+                sourceURL: rawURL
             )
             let exportEvidence = RecordingHealthReport(
                 requestedFramesPerSecond: Int((
@@ -488,7 +489,8 @@ package enum G3RenderedEffectsRunner {
                 : plan.cursor.scale + 0.11
             let stalePlanDigest = try RenderedPlanIdentity.digest(
                 for: stalePlan,
-                transcript: transcript
+                transcript: transcript,
+                sourceURL: rawURL
             )
             let exportFreshnessVerified = RenderedPreviewExportGate.failureDescription(
                 for: exportEvidence,

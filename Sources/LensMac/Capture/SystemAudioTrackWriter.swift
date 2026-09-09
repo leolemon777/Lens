@@ -21,6 +21,7 @@ struct SystemAudioCaptureSnapshot: Equatable, Sendable {
     let deliveredCallbackCount: Int
     let receivedSampleCount: Int
     let appendedSampleCount: Int
+    let discardedBeforeVideoStartSampleCount: Int
     let observedTimelineSeconds: Double
     let pendingSampleCount: Int
 }
@@ -52,6 +53,7 @@ final class SystemAudioTrackWriter: NSObject, SCStreamOutput, @unchecked Sendabl
     private var deliveredCallbackCount = 0
     private var receivedSampleCount = 0
     private var appendedSampleCount = 0
+    private var discardedBeforeVideoStartSampleCount = 0
     private var firstObservedTime: CMTime?
     private var lastObservedEndTime: CMTime?
     private var videoStartTime: CMTime?
@@ -108,13 +110,14 @@ final class SystemAudioTrackWriter: NSObject, SCStreamOutput, @unchecked Sendabl
                 deliveredCallbackCount,
                 receivedSampleCount,
                 appendedSampleCount,
+                discardedBeforeVideoStartSampleCount,
                 firstObservedTime,
                 lastObservedEndTime
             )
         }
         let observed: Double
-        if let first = metrics.3,
-           let last = metrics.4,
+        if let first = metrics.4,
+           let last = metrics.5,
            first.isNumeric,
            last.isNumeric,
            last >= first {
@@ -126,6 +129,7 @@ final class SystemAudioTrackWriter: NSObject, SCStreamOutput, @unchecked Sendabl
             deliveredCallbackCount: metrics.0,
             receivedSampleCount: metrics.1,
             appendedSampleCount: metrics.2,
+            discardedBeforeVideoStartSampleCount: metrics.3,
             observedTimelineSeconds: observed,
             pendingSampleCount: 0
         )
@@ -145,7 +149,10 @@ final class SystemAudioTrackWriter: NSObject, SCStreamOutput, @unchecked Sendabl
     }
 
     func prepareToFinish() {
-        outputQueue.async { [self] in isAcceptingSamples = false }
+        // Keep accepting blocks already queued by ScreenCaptureKit. `finish()`
+        // runs on this same serial queue, so it closes the gate only after
+        // every callback that arrived before stopCapture has been appended.
+        // Closing it here would discard the final queued sample.
     }
 
     func finish() async throws {
@@ -192,6 +199,7 @@ final class SystemAudioTrackWriter: NSObject, SCStreamOutput, @unchecked Sendabl
               storedFailure == nil,
               sampleBuffer.presentationTimeStamp.isNumeric else { return }
         if let videoStartTime, sampleBuffer.presentationTimeStamp < videoStartTime {
+            metricsLock.withLock { discardedBeforeVideoStartSampleCount += 1 }
             return
         }
         let sampleDuration = sampleBuffer.duration.isNumeric

@@ -36,7 +36,12 @@ final class VideoEditorPlaybackController: ObservableObject {
     private var generation = 0
     private var loadTask: Task<Void, Never>?
     private var reloadDebounceTask: Task<Void, Never>?
+    private var interactiveSeekTask: Task<Void, Never>?
+    private var waveformTask: Task<Void, Never>?
+    private var pendingInteractiveSeekTime: Double?
     private var aspectRatioCache: [URL: Double] = [:]
+
+    private static let interactiveSeekDebounce = Duration.milliseconds(16)
 
     func load(
         sourceURL: URL,
@@ -60,11 +65,15 @@ final class VideoEditorPlaybackController: ObservableObject {
     }
 
     private func refreshWaveform(from url: URL) {
+        waveformTask?.cancel()
         waveformPeaks = []
-        Task { @MainActor [weak self] in
+        waveformTask = Task { @MainActor [weak self] in
             let peaks = await TimelineWaveformSampler.peaks(from: url)
-            guard let self, self.rawSourceURL == url else { return }
+            guard !Task.isCancelled,
+                  let self,
+                  self.rawSourceURL == url else { return }
             self.waveformPeaks = peaks
+            self.waveformTask = nil
         }
     }
 
@@ -197,11 +206,43 @@ final class VideoEditorPlaybackController: ObservableObject {
         refreshTime()
     }
 
-    func seek(to seconds: Double) {
+    func seek(to seconds: Double, coalescing: Bool = false) {
         let clamped = min(max(seconds.isFinite ? seconds : 0, 0), durationSeconds)
         clock.update(clamped)
+        if coalescing {
+            pendingInteractiveSeekTime = clamped
+            scheduleInteractiveSeekFlush()
+        } else {
+            flushInteractiveSeek()
+            performSeek(to: clamped)
+        }
+    }
+
+    private func scheduleInteractiveSeekFlush() {
+        guard interactiveSeekTask == nil else { return }
+        interactiveSeekTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: Self.interactiveSeekDebounce)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.interactiveSeekTask = nil
+            self.flushInteractiveSeek()
+        }
+    }
+
+    private func flushInteractiveSeek() {
+        interactiveSeekTask?.cancel()
+        interactiveSeekTask = nil
+        guard let pendingInteractiveSeekTime else { return }
+        self.pendingInteractiveSeekTime = nil
+        performSeek(to: pendingInteractiveSeekTime)
+    }
+
+    private func performSeek(to seconds: Double) {
         player.seek(
-            to: CMTime(seconds: clamped, preferredTimescale: 600),
+            to: CMTime(seconds: seconds, preferredTimescale: 600),
             toleranceBefore: .zero,
             toleranceAfter: .zero
         )
@@ -241,6 +282,7 @@ final class VideoEditorPlaybackController: ObservableObject {
     /// Call this after an interactive seek ends so time-dependent editor
     /// controls refresh once without laying out the full inspector every frame.
     func settlePlayhead() {
+        flushInteractiveSeek()
         objectWillChange.send()
     }
 
@@ -248,6 +290,11 @@ final class VideoEditorPlaybackController: ObservableObject {
         generation += 1
         reloadDebounceTask?.cancel()
         reloadDebounceTask = nil
+        interactiveSeekTask?.cancel()
+        interactiveSeekTask = nil
+        pendingInteractiveSeekTime = nil
+        waveformTask?.cancel()
+        waveformTask = nil
         loadTask?.cancel()
         loadTask = nil
         player.pause()

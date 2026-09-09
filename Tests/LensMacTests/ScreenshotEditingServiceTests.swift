@@ -6,6 +6,28 @@ import LensCore
 @testable import LensMac
 
 final class ScreenshotEditingServiceTests: XCTestCase {
+    @MainActor
+    func testThumbnailCacheDropsSamePathWhenFileVersionChanges() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("LensThumbnailCache-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data("first-version".utf8).write(to: url)
+
+        let image = NSImage(size: NSSize(width: 12, height: 8))
+        LensLibraryThumbnailCache.shared.insert(image, for: url)
+        XCTAssertNotNil(LensLibraryThumbnailCache.shared.image(for: url))
+
+        try Data("second-version-with-a-different-size".utf8).write(to: url)
+        XCTAssertNil(
+            LensLibraryThumbnailCache.shared.image(for: url),
+            "A rewritten annotated.png must not reuse the old image for the same URL."
+        )
+
+        LensLibraryThumbnailCache.shared.insert(image, for: url)
+        LensLibraryThumbnailCache.shared.invalidate(url)
+        XCTAssertNil(LensLibraryThumbnailCache.shared.image(for: url))
+    }
+
     func testJPEGExportFlattensTransparentPixelsOntoWhite() throws {
         guard let context = CGContext(
             data: nil,

@@ -21,12 +21,20 @@ struct Check: Encodable {
     let matched: Snapshot?
 }
 
+struct CandidateBuild: Encodable {
+    let version: String
+    let buildNumber: String
+    let appPath: String
+}
+
 struct Report: Encodable {
     let schemaVersion = 1
     let generatedAt = Date()
     let gate = "G4-accessibility-runtime"
     let result: String
-    let evidenceLevel = "E4-installed-native-app-system-AX"
+    let evidenceLevel: String
+    let candidate: Bool?
+    let candidateBuild: CandidateBuild?
     let accessibilityTrusted: Bool
     let processIdentifier: Int32
     let windowCount: Int
@@ -45,6 +53,14 @@ guard let pidText = option("--pid"), let pid = pid_t(pidText),
       let reportPath = option("--report") else {
     FileHandle.standardError.write(Data("Usage: --pid <pid> --report <path>\n".utf8))
     exit(64)
+}
+
+let evidenceLevel = option("--evidence-level") ?? "E4-installed-native-app-system-AX"
+let candidateApp = option("--candidate-app")
+let candidateBuild = candidateApp.flatMap { appPath -> CandidateBuild? in
+    guard let version = option("--candidate-version"),
+          let buildNumber = option("--candidate-build") else { return nil }
+    return CandidateBuild(version: version, buildNumber: buildNumber, appPath: appPath)
 }
 
 func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -129,6 +145,9 @@ let accessibilityTrusted = AXIsProcessTrusted()
 let passed = accessibilityTrusted && windows.count >= 2 && checks.allSatisfy(\.passed)
 let report = Report(
     result: passed ? "passed" : "failed",
+    evidenceLevel: evidenceLevel,
+    candidate: candidateApp == nil ? nil : true,
+    candidateBuild: candidateBuild,
     accessibilityTrusted: accessibilityTrusted,
     processIdentifier: pid,
     windowCount: windows.count,

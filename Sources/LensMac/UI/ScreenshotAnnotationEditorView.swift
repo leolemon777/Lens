@@ -535,6 +535,15 @@ struct ScreenshotAnnotationEditorView: View {
                             .controlSize(.mini)
                             .buttonStyle(.borderedProminent)
                             .tint(LensGlassPalette.warning)
+                            Button("安全遮挡") {
+                                model.applySuggestedRedaction(
+                                    suggestion.id,
+                                    application: .opaque
+                                )
+                            }
+                            .controlSize(.mini)
+                            .buttonStyle(.bordered)
+                            .help("使用不透明黑色遮挡；原图仍保留在 Lens 项目中")
                         }
                         .padding(.vertical, 3)
                     }
@@ -549,6 +558,12 @@ struct ScreenshotAnnotationEditorView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(LensGlassPalette.warning)
+                Button("全部安全遮挡") {
+                    model.applySuggestedRedactions(application: .opaque)
+                    showsRedactionReview = false
+                }
+                .buttonStyle(.bordered)
+                .help("用不透明黑色遮挡全部建议；原图仍保留")
                 Button("关闭") {
                     showsRedactionReview = false
                 }

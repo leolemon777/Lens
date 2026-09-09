@@ -8,16 +8,31 @@ final class PermissionCenterWindowController {
     private let appModel: AppModel
     private let onShortcutsChanged: () -> Void
     private let onShortcutCaptureActiveChange: (Bool) -> Void
+    private let onManageStorage: () -> Void
+    private let onCancelStorageMigration: () -> Void
+    private let updateModel: LensUpdateCheckModel
+    private let activityStateProvider: @MainActor () -> LensUpdateActivityState
 
     init(
         appModel: AppModel,
         onShortcutsChanged: @escaping () -> Void,
         onShortcutCaptureActiveChange: @escaping (Bool) -> Void = { _ in },
+        onManageStorage: @escaping () -> Void = {},
+        onCancelStorageMigration: @escaping () -> Void = {},
+        updateModel: LensUpdateCheckModel = LensUpdateCheckModel(),
+        activityStateProvider: @escaping @MainActor () -> LensUpdateActivityState = {
+            LensUpdateActivityState()
+        },
         diagnosticSummaryProvider: @escaping @MainActor () async -> String
     ) {
         self.appModel = appModel
         self.onShortcutsChanged = onShortcutsChanged
         self.onShortcutCaptureActiveChange = onShortcutCaptureActiveChange
+        self.onManageStorage = onManageStorage
+        self.onCancelStorageMigration = onCancelStorageMigration
+        self.updateModel = updateModel
+        self.activityStateProvider = activityStateProvider
+        updateModel.bindActivityStateProvider(activityStateProvider)
         model = PermissionCenterModel(
             diagnosticSummaryProvider: diagnosticSummaryProvider
         )
@@ -32,6 +47,7 @@ final class PermissionCenterWindowController {
 
     func show() {
         model.refresh()
+        updateModel.refreshActivityState()
         if let screen = NSScreen.main ?? NSScreen.screens.first {
             let size = window.frame.size
             window.setFrameOrigin(NSPoint(
@@ -63,9 +79,12 @@ final class PermissionCenterWindowController {
         let root = PermissionCenterView(
             model: model,
             appModel: appModel,
+            updateModel: updateModel,
             onShortcutsChanged: onShortcutsChanged,
             onShortcutCaptureActiveChange: onShortcutCaptureActiveChange,
-            onClose: { [weak self] in self?.hide() }
+            onClose: { [weak self] in self?.hide() },
+            onManageStorage: onManageStorage,
+            onCancelStorageMigration: onCancelStorageMigration
         )
         let hostingView = NSHostingView(rootView: root)
         hostingView.frame = window.contentView?.bounds ?? .zero

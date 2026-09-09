@@ -317,9 +317,12 @@ final class QuickAccessWindowController {
     }
 
     private func shareActive() {
-        guard let activeLens,
-              let fileURL = QuickAccessFileTransfer.bestFileURL(for: activeLens) else { return }
-        LensFileSharing.present(fileURL: fileURL)
+        guard let activeLens else { return }
+        if activeLens.manifest.kind == .recording {
+            LensFileSharing.present(lens: activeLens)
+        } else if let fileURL = QuickAccessFileTransfer.bestFileURL(for: activeLens) {
+            LensFileSharing.present(fileURL: fileURL)
+        }
     }
 
     private func revealURL(for lens: SavedLens) -> URL {

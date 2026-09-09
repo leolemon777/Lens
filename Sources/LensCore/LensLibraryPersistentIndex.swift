@@ -1,9 +1,9 @@
 import Foundation
 
 struct LensLibraryPersistentIndex: Codable, Equatable, Sendable {
-    // Version 3 guarantees every cached portable document passed the central
-    // project-schema compatibility gate before its searchable fields were stored.
-    static let currentSchemaVersion = 3
+    // Version 4 stores normalized searchable fields so query work does not
+    // rebuild and fold every title, OCR body, and tag on the main actor.
+    static let currentSchemaVersion = 4
 
     var schemaVersion: Int
     var records: [LensLibraryIndexRecord]
@@ -27,6 +27,7 @@ struct LensLibraryIndexRecord: Codable, Equatable, Sendable {
     let ocrText: String?
     let transcriptText: String?
     let insights: LensInsightsDocument?
+    let searchFields: LensLibrarySearchFields
 
     var cacheKey: String { packagePathComponents.joined(separator: "/") }
 }
@@ -116,7 +117,8 @@ struct LensLibraryPersistentIndexStore: Sendable {
         decoder.dateDecodingStrategy = .iso8601
         guard let manifestData = try? Data(contentsOf: manifestURL),
               let manifest = try? decoder.decode(LensManifest.self, from: manifestData),
-              (try? LensProjectSchema.manifest.validate(manifest.schemaVersion)) != nil else {
+              (try? LensProjectSchema.manifest.validate(manifest.schemaVersion)) != nil,
+              (try? manifest.validateAssetPaths(in: manifestURL.deletingLastPathComponent())) != nil else {
             return nil
         }
         let ocrText: String?
@@ -146,6 +148,12 @@ struct LensLibraryPersistentIndexStore: Sendable {
         } else {
             insights = nil
         }
+        let searchFields = LensLibrarySearchFields(
+            manifest: manifest,
+            ocrText: ocrText,
+            transcriptText: transcriptText,
+            insights: insights
+        )
         return LensLibraryIndexRecord(
             packagePathComponents: packagePathComponents,
             manifestFingerprint: manifestFingerprint,
@@ -155,7 +163,8 @@ struct LensLibraryPersistentIndexStore: Sendable {
             manifest: manifest,
             ocrText: ocrText,
             transcriptText: transcriptText,
-            insights: insights
+            insights: insights,
+            searchFields: searchFields
         )
     }
 
@@ -191,7 +200,8 @@ struct LensLibraryPersistentIndexStore: Sendable {
             displayAssetURL: displayURL,
             ocrText: record.ocrText,
             transcriptText: record.transcriptText,
-            insights: record.insights
+            insights: record.insights,
+            searchFields: record.searchFields
         )
     }
 

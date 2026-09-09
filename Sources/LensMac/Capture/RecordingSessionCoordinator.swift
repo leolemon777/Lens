@@ -27,6 +27,7 @@ protocol RecordingSessionHost: AnyObject {
     func processRecording(_ saved: SavedLens) async -> AutoEditPlan?
     func trackProcessingTask(_ task: Task<Void, Never>, for packageURL: URL)
     func beginAutomaticTranscription(for saved: SavedLens)
+    func startNextPendingAutomaticTranscriptionIfIdle()
 }
 
 /// Owns start / stop / pause / discard orchestration. AppDelegate remains the
@@ -190,7 +191,8 @@ final class RecordingSessionCoordinator {
             capturesMicrophone: plan.capturesMicrophone,
             capturesCamera: plan.capturesCamera,
             initialEditPlan: experiencePreset.makeEditPlan(
-                includesCamera: capturesCamera
+                includesCamera: capturesCamera,
+                automaticZoomScale: model.automaticCameraZoomScale
             )
         )
         toast.show(
@@ -319,7 +321,7 @@ final class RecordingSessionCoordinator {
         startTitle: String? = nil,
         startDetail: String? = nil
     ) {
-        guard let model, let recordingService, let recordingControl,
+        guard let model, let store, let recordingService, let recordingControl,
               let toast, let quickAccess, let lensLibrary, let videoEditor else { return }
         guard recordingService.isRecording else { return }
         guard beginStop() else { return }
@@ -338,6 +340,7 @@ final class RecordingSessionCoordinator {
                 recordingControl.prepareForHandoff()
                 endControlSession()
                 markIdle()
+                host?.startNextPendingAutomaticTranscriptionIfIdle()
                 let healthReport = recordingService.lastRecordingHealthReport
                     ?? loadHealthReport(from: saved.packageURL)
                 var stopMetadata = [
@@ -407,6 +410,21 @@ final class RecordingSessionCoordinator {
                     )
                 }
                 lensLibrary.reloadIfVisible()
+                let captionsEnabledBeforeTranscription: Bool = {
+                    guard shouldAutomaticallyTranscribe,
+                          let plan = try? store.loadAutoEditPlan(from: saved.packageURL) else {
+                        return false
+                    }
+                    return plan.captions?.isEnabled == true
+                }()
+                // A teaching recording needs its transcript before captions
+                // are rendered. Starting the speech phase first avoids an
+                // unnecessary encode that would immediately be discarded and
+                // keeps the pipeline at one final video pass.
+                if captionsEnabledBeforeTranscription {
+                    host?.beginAutomaticTranscription(for: saved)
+                    return
+                }
                 let processing = Task { @MainActor [weak self] in
                     guard let self else { return }
                     let renderedPlan = await host?.processRecording(saved)
@@ -420,6 +438,7 @@ final class RecordingSessionCoordinator {
                     if shouldAutomaticallyTranscribe {
                         host?.beginAutomaticTranscription(for: saved)
                     }
+                    host?.startNextPendingAutomaticTranscriptionIfIdle()
                 }
                 host?.trackProcessingTask(processing, for: saved.packageURL)
             } catch {
@@ -431,6 +450,7 @@ final class RecordingSessionCoordinator {
                     recordingControl.hide()
                     endControlSession()
                     markIdle()
+                    host?.startNextPendingAutomaticTranscriptionIfIdle()
                 }
                 host?.showRecordingError(error, phase: "stop")
             }

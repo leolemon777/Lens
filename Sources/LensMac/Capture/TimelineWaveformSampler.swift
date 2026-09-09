@@ -36,6 +36,10 @@ enum TimelineWaveformSampler {
         let duration = (try? await asset.load(.duration).seconds) ?? 0
         let safeDuration = max(duration.isFinite ? duration : 0, 0.001)
         while let sampleBuffer = output.copyNextSampleBuffer() {
+            if Task.isCancelled {
+                reader.cancelReading()
+                return []
+            }
             guard let block = CMSampleBufferGetDataBuffer(sampleBuffer) else { continue }
             let length = CMBlockBufferGetDataLength(block)
             guard length >= 2 else { continue }

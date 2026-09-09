@@ -8,7 +8,7 @@ extension VideoEditorModel {
     }
 
     func setAutomaticZoomScale(_ value: Double) {
-        let requestedScale = min(max(value.isFinite ? value : 1.60, 1), 3)
+        let requestedScale = min(max(value.isFinite ? value : 1.28, 1), 3)
         if let current = plan.camera.zoomScale, abs(current - requestedScale) < 0.0001 {
             return
         }

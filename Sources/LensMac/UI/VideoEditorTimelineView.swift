@@ -53,7 +53,7 @@ struct VideoEditorTimelineView: View {
                                             value.location.x / availableWidth,
                                             0
                                         ), 1)
-                                        playback.seek(to: progress * total)
+                                        playback.seek(to: progress * total, coalescing: true)
                                     }
                                     .onEnded { _ in
                                         playback.settlePlayhead()
@@ -395,7 +395,7 @@ struct VideoEditorTimelineView: View {
                             (x + 3 + value.translation.width) / availableWidth,
                             0
                         ), 1)
-                        playback.seek(to: progress * total)
+                        playback.seek(to: progress * total, coalescing: true)
                     }
                     .onEnded { value in
                         let progress = min(max(

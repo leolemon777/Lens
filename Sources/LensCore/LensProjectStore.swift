@@ -99,6 +99,7 @@ public struct LensProjectStore: Sendable {
                 screenshotCaptureSource: captureSource,
                 assets: [LensAsset(role: .screenshot, relativePath: "raw/screenshot.png")]
             )
+            try manifest.validateForStorage()
 
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -121,6 +122,7 @@ public struct LensProjectStore: Sendable {
         decoder.dateDecodingStrategy = .iso8601
         let manifest = try decoder.decode(LensManifest.self, from: data)
         try LensProjectSchema.manifest.validate(manifest.schemaVersion)
+        try manifest.validateAssetPaths(in: packageURL)
         return manifest
     }
 
@@ -1183,6 +1185,7 @@ public struct LensProjectStore: Sendable {
     }
 
     private func writeManifest(_ manifest: LensManifest, to packageURL: URL) throws {
+        try manifest.validateAssetPaths(in: packageURL)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601

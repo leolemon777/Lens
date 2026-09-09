@@ -9,6 +9,9 @@ final class DiagnosticEventTests: XCTestCase {
                 "phase": "stop",
                 "count": "2",
                 "durationMilliseconds": "4.125",
+                "renderEncodePassCount": "2",
+                "renderMilliseconds": "8.125",
+                "renderPeakPhysicalFootprintBytes": "1024",
                 "averageMilliseconds": "0.031",
                 "maximumMilliseconds": "0.114",
                 "totalMilliseconds": "2.480",
@@ -27,6 +30,9 @@ final class DiagnosticEventTests: XCTestCase {
             "durationMilliseconds": "4.125",
             "maximumMilliseconds": "0.114",
             "phase": "stop",
+            "renderEncodePassCount": "2",
+            "renderMilliseconds": "8.125",
+            "renderPeakPhysicalFootprintBytes": "1024",
             "totalMilliseconds": "2.480"
         ])
 
@@ -49,5 +55,43 @@ final class DiagnosticEventTests: XCTestCase {
             ["errorDomain": "Lens.Test", "errorCode": "42"]
         )
         XCTAssertFalse(DiagnosticEvent.errorMetadata(error).values.contains("secret transcript"))
+    }
+
+    func testTaskTimingMetadataKeepsSafeCancellationReasonAndDropsPaths() {
+        let event = DiagnosticEvent(
+            code: "task.render.cancelled",
+            metadata: [
+                "taskKind": "render",
+                "taskOutcome": "cancelled",
+                "cancellationReason": "superseded",
+                "queueMilliseconds": "120",
+                "executionMilliseconds": "450",
+                "projectPath": "/Users/example/private.lens"
+            ]
+        )
+
+        XCTAssertEqual(event.metadata, [
+            "cancellationReason": "superseded",
+            "executionMilliseconds": "450",
+            "queueMilliseconds": "120",
+            "taskKind": "render",
+            "taskOutcome": "cancelled"
+        ])
+    }
+
+    func testCoreFailureLogUsesOnlySanitizedErrorMetadata() {
+        let error = NSError(
+            domain: "Lens.Test / private path",
+            code: 42,
+            userInfo: [NSLocalizedDescriptionKey: "/Users/example/secret transcript"]
+        )
+
+        XCTAssertEqual(
+            LensCoreLog.safeErrorMetadata(error),
+            ["errorDomain": "Lens.Test___private_path", "errorCode": "42"]
+        )
+        XCTAssertFalse(
+            LensCoreLog.safeErrorMetadata(error).values.contains("secret transcript")
+        )
     }
 }

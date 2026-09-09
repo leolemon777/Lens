@@ -60,7 +60,7 @@ final class VideoEditorViewTests: XCTestCase {
         XCTAssertTrue(source.contains("把当前播放头设为所选片段的开始"))
         XCTAssertTrue(source.contains("在当前播放头位置分割所选片段"))
         XCTAssertTrue(source.contains("从成片中移出所选片段，原始录制仍保留"))
-        XCTAssertTrue(source.contains("playback.seek(to: progress * total)"))
+        XCTAssertTrue(source.contains("playback.seek(to: progress * total, coalescing: true)"))
         XCTAssertTrue(source.contains("playback.settlePlayhead()"))
         XCTAssertTrue(source.contains("timelineTrimHandle"))
         XCTAssertTrue(source.contains("timelineZoom"))
@@ -114,6 +114,46 @@ final class VideoEditorViewTests: XCTestCase {
         playback.settlePlayhead()
         XCTAssertEqual(editorInvalidations, 1)
         withExtendedLifetime(observation) {}
+    }
+
+    func testInteractiveSeekContractCoalescesBeforeSettling() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent(
+                    "Sources/LensMac/UI/VideoEditorPlaybackController.swift"
+                ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("pendingInteractiveSeekTime"))
+        XCTAssertTrue(source.contains("interactiveSeekTask"))
+        XCTAssertTrue(source.contains("interactiveSeekDebounce"))
+        XCTAssertTrue(source.contains("flushInteractiveSeek()"))
+        XCTAssertTrue(source.contains("func seek(to seconds: Double, coalescing: Bool = false)"))
+        XCTAssertTrue(source.contains("func settlePlayhead()"))
+        XCTAssertTrue(source.contains("waveformTask?.cancel()"))
+        XCTAssertTrue(source.contains("guard !Task.isCancelled"))
+    }
+
+    func testPresenterThumbnailGenerationIsCancellableAndGenerationGuarded() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent(
+                    "Sources/LensMac/UI/VideoEditorWindowController.swift"
+                ),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("presenterThumbnailTask?.cancel()"))
+        XCTAssertTrue(source.contains("generator.cancelAllCGImageGeneration()"))
+        XCTAssertTrue(source.contains("guard !Task.isCancelled, self.model === model"))
+        XCTAssertTrue(source.contains("presenterThumbnailTask = Task"))
     }
 
     func testInvalidatingAlreadyRawPreviewDoesNotPublishOrPause() {

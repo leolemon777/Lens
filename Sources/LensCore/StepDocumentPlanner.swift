@@ -26,6 +26,13 @@ public struct StepDocument: Equatable, Sendable {
     }
 
     public var markdown: String {
+        markdown(imageDirectory: nil)
+    }
+
+    /// Renders the document with an optional document-owned image directory.
+    /// Keeping the default references unchanged preserves the core format,
+    /// while exporters can give each Markdown file an isolated asset namespace.
+    public func markdown(imageDirectory: String?) -> String {
         var lines: [String] = [
             "# 操作步骤",
             "",
@@ -34,10 +41,14 @@ public struct StepDocument: Equatable, Sendable {
         ]
         for step in steps {
             lines.append("\(step.index). **[\(Self.timestamp(step.time))] \(step.title)**")
+            let imageName = "step-\(String(format: "%02d", step.index)).png"
+            let imageReference = imageDirectory.map {
+                "\($0)/\(imageName)"
+            } ?? imageName
             if let detail = step.detail, !detail.isEmpty {
-                lines.append("   - \(detail)（截图：step-\(String(format: "%02d", step.index)).png）")
+                lines.append("   - \(detail)（截图：\(imageReference)）")
             } else {
-                lines.append("   - 截图：step-\(String(format: "%02d", step.index)).png")
+                lines.append("   - 截图：\(imageReference)")
             }
         }
         lines.append("")

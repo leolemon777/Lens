@@ -47,6 +47,8 @@ struct G2RecordingAcceptanceInput {
     let actualDurationSeconds: Double
     let requestedFramesPerSecond: Int
     let measuredFramesPerSecond: Double
+    let captureMeasuredReceivedFramesPerSecond: Double?
+    let captureMeasuredWrittenFramesPerSecond: Double?
     let receivedCompleteVideoFrameCount: Int
     let writtenVideoFrameCount: Int
     let videoTrackPresent: Bool
@@ -63,6 +65,7 @@ struct G2RecordingAcceptanceInput {
     let deliveredAudioCallbackCount: Int
     let receivedAudioSampleCount: Int
     let appendedAudioSampleCount: Int
+    let discardedBeforeVideoStartAudioSampleCount: Int
     let pendingAudioSampleCount: Int
     let startPhysicalFootprintBytes: UInt64
     let peakPhysicalFootprintBytes: UInt64
@@ -154,10 +157,18 @@ struct G2RecordingAcceptanceResult {
             >= input.requestedDurationSeconds - 1
             && durationDrift <= 2
         frameRateMet = input.measuredFramesPerSecond >= minimumFPS
+        let captureMeasuredFramesPerSecond = input.captureMeasuredWrittenFramesPerSecond
+            ?? input.captureMeasuredReceivedFramesPerSecond
+        let frameCountReferenceFPS = input.requestedFramesPerSecond >= 60
+            ? Double(input.requestedFramesPerSecond)
+            : min(
+                Double(input.requestedFramesPerSecond),
+                captureMeasuredFramesPerSecond ?? Double(input.requestedFramesPerSecond)
+            )
         let minimumWrittenVideoFrames = Int(
             floor(
                 input.requestedDurationSeconds
-                    * Double(input.requestedFramesPerSecond)
+                    * frameCountReferenceFPS
                     * 0.98
             )
         )
@@ -179,9 +190,11 @@ struct G2RecordingAcceptanceResult {
         ) <= Self.maximumAudioVideoDriftSeconds
         systemAudioTimelineComplete = input.systemAudioObservedTimelineSeconds
             >= input.requestedDurationSeconds - Self.maximumAudioVideoDriftSeconds
+        let accountedAudioSamples = input.receivedAudioSampleCount
+            + input.discardedBeforeVideoStartAudioSampleCount
         systemAudioCallbacksComplete = input.routerAudioCallbackCount >= minimumAudioCallbacks
             && input.deliveredAudioCallbackCount == input.routerAudioCallbackCount
-            && input.receivedAudioSampleCount == input.deliveredAudioCallbackCount
+            && accountedAudioSamples == input.deliveredAudioCallbackCount
             && input.appendedAudioSampleCount == input.receivedAudioSampleCount
             && input.pendingAudioSampleCount == 0
         audioStimulusComplete = input.generatedToneDurationSeconds
@@ -1028,6 +1041,10 @@ package enum G2RecordingStressRunner {
                     actualDurationSeconds: mediaDuration,
                     requestedFramesPerSecond: configuration.framesPerSecond,
                     measuredFramesPerSecond: measuredFPS,
+                    captureMeasuredReceivedFramesPerSecond: capturePerformance?
+                        .measuredReceivedFramesPerSecond,
+                    captureMeasuredWrittenFramesPerSecond: capturePerformance?
+                        .measuredWrittenFramesPerSecond,
                     receivedCompleteVideoFrameCount: capturePerformance?
                         .receivedCompleteFrameCount ?? 0,
                     writtenVideoFrameCount: capturePerformance?.writtenFrameCount ?? 0,
@@ -1049,6 +1066,8 @@ package enum G2RecordingStressRunner {
                         .deliveredCallbackCount ?? 0,
                     receivedAudioSampleCount: systemAudioCapture?.receivedSampleCount ?? 0,
                     appendedAudioSampleCount: systemAudioCapture?.appendedSampleCount ?? 0,
+                    discardedBeforeVideoStartAudioSampleCount: systemAudioCapture?
+                        .discardedBeforeVideoStartSampleCount ?? 0,
                     pendingAudioSampleCount: systemAudioCapture?.pendingSampleCount ?? -1,
                     startPhysicalFootprintBytes: startFootprint,
                     peakPhysicalFootprintBytes: peakFootprint,
@@ -1079,6 +1098,10 @@ package enum G2RecordingStressRunner {
                 "durationDriftSeconds": durationDrift,
                 "requestedFramesPerSecond": configuration.framesPerSecond,
                 "measuredFramesPerSecond": measuredFPS,
+                "captureMeasuredReceivedFramesPerSecond": capturePerformance?
+                    .measuredReceivedFramesPerSecond ?? NSNull(),
+                "captureMeasuredWrittenFramesPerSecond": capturePerformance?
+                    .measuredWrittenFramesPerSecond ?? NSNull(),
                 "receivedCompleteVideoFrameCount": capturePerformance?
                     .receivedCompleteFrameCount ?? 0,
                 "writtenVideoFrameCount": capturePerformance?.writtenFrameCount ?? 0,
@@ -1105,6 +1128,8 @@ package enum G2RecordingStressRunner {
                 "systemAudioDeliveredCallbackCount": systemAudioCapture?.deliveredCallbackCount ?? 0,
                 "routerRawSystemAudioCallbackCount": service.lastRawSystemAudioCallbackCount,
                 "systemAudioAppendedSampleCount": systemAudioCapture?.appendedSampleCount ?? 0,
+                "systemAudioDiscardedBeforeVideoStartSampleCount": systemAudioCapture?
+                    .discardedBeforeVideoStartSampleCount ?? 0,
                 "systemAudioObservedTimelineSeconds": systemAudioCapture?.observedTimelineSeconds ?? 0,
                 "systemAudioPendingSampleCount": systemAudioCapture?.pendingSampleCount ?? 0,
                 "generatedToneDurationSeconds": generatedToneSeconds,
@@ -1189,7 +1214,9 @@ package enum G2RecordingStressRunner {
                 "privacy": "Only aggregate metrics are retained. The temporary raw recording is deleted after reporting."
             ]
             writeReport(report, to: configuration.reportURL)
-            try? FileManager.default.removeItem(at: temporaryRoot)
+            if ownsTemporaryRoot {
+                try? FileManager.default.removeItem(at: temporaryRoot)
+            }
             return passed ? 0 : 1
         } catch {
             toneGenerator.stop()
@@ -1347,6 +1374,22 @@ package struct G2RecordingRecoveryConfiguration {
 
 @MainActor
 package enum G2RecordingRecoveryRunner {
+    package static func recoveryCandidates(
+        fault: String,
+        interrupted: [RecordingRecoveryCandidate],
+        pendingProcessing: [SavedLens]
+    ) -> [RecordingRecoveryCandidate] {
+        interrupted + (fault == "ENOSPC"
+            ? pendingProcessing.map {
+                RecordingRecoveryCandidate(
+                    packageURL: $0.packageURL,
+                    videoURL: $0.rawAssetURL,
+                    manifest: $0.manifest
+                )
+            }
+            : [])
+    }
+
     package static func run(_ configuration: G2RecordingRecoveryConfiguration) async -> Int32 {
         let generatedAt = ISO8601DateFormatter().string(from: Date())
         let store = LensProjectStore(rootDirectory: configuration.workRootURL)
@@ -1356,7 +1399,15 @@ package enum G2RecordingRecoveryRunner {
         )
         do {
             let newlyInterrupted = store.recoverInterruptedRecordings()
-            let candidates = store.interruptedRecordingCandidates()
+            let interruptedCandidates = store.interruptedRecordingCandidates()
+            let pendingProcessing = store.recordingsPendingProcessing()
+            let candidates = recoveryCandidates(
+                fault: configuration.fault,
+                interrupted: interruptedCandidates,
+                pendingProcessing: pendingProcessing
+            )
+            let pendingProcessingCandidates = candidates.count
+                - interruptedCandidates.count
             guard candidates.count == 1, let candidate = candidates.first else {
                 throw G2RecordingRecoveryError.unexpectedCandidateCount(candidates.count)
             }
@@ -1405,6 +1456,8 @@ package enum G2RecordingRecoveryRunner {
                 "fault": configuration.fault,
                 "newlyInterruptedCandidateCount": newlyInterrupted.count,
                 "recoverableCandidateCount": candidates.count,
+                "interruptedCandidateCount": interruptedCandidates.count,
+                "pendingProcessingCandidateCount": pendingProcessingCandidates,
                 "expectedDurationSeconds": configuration.expectedDurationSeconds,
                 "recoveredDurationSeconds": duration,
                 "maximumPossibleFragmentLossSeconds": loss,

@@ -7,6 +7,7 @@ final class LensLibraryWindowController {
     private let store: LensProjectStore
     private let model: LensLibraryModel
     private let window: LensChromeWindow
+    private let onStorageActivityChanged: () -> Void
 
     var onAnnotateRequested: ((SavedLens, NSImage) -> Void)?
     var onOCRRequested: ((LensLibraryEntry) -> Void)?
@@ -20,8 +21,12 @@ final class LensLibraryWindowController {
     /// post-processing path regenerates its preview and plan for the new length.
     var onRecordingRepaired: ((LensLibraryEntry, RebuiltRecording) -> Void)?
 
-    init(store: LensProjectStore) {
+    init(
+        store: LensProjectStore,
+        onStorageActivityChanged: @escaping () -> Void = {}
+    ) {
         self.store = store
+        self.onStorageActivityChanged = onStorageActivityChanged
         model = LensLibraryModel(store: store)
         window = LensChromeWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1_020, height: 690),
@@ -34,6 +39,11 @@ final class LensLibraryWindowController {
 
     var isVisible: Bool { window.isVisible }
 
+    /// The library exposes destructive actions and insight edits. Keep it
+    /// closed while a migration copies the root so a late click cannot write
+    /// to the old location after the copy has passed that package.
+    var blocksStorageMigration: Bool { isVisible }
+
     func show() {
         model.reload()
         window.center()
@@ -43,6 +53,7 @@ final class LensLibraryWindowController {
 
     func hide() {
         window.orderOut(nil)
+        onStorageActivityChanged()
     }
 
     func reloadIfVisible() {
@@ -52,6 +63,13 @@ final class LensLibraryWindowController {
 
     func setTranscribing(_ isTranscribing: Bool, lensID: UUID) {
         model.setTranscribing(isTranscribing, id: lensID)
+    }
+
+    func setTranscriptionProgress(
+        _ progress: LensLibraryTranscriptionProgress?,
+        lensID: UUID
+    ) {
+        model.setTranscriptionProgress(progress, id: lensID)
     }
 
     func setOrganizing(_ isOrganizing: Bool, lensID: UUID) {

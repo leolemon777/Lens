@@ -1125,7 +1125,7 @@ public struct AutoEditPlan: Codable, Equatable, Sendable {
             zoomIntensity: 0.42,
             followPointer: true,
             clickToZoom: true,
-            zoomScale: 1.60,
+            zoomScale: 1.28,
             generationStrength: .balanced,
             motionBlurStrength: 0.12
         ),

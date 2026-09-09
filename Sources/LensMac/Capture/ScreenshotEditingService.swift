@@ -29,6 +29,10 @@ struct ScreenshotEditingService: Sendable {
             withIntermediateDirectories: true
         )
         try pngData.write(to: outputURL, options: .atomic)
+        NotificationCenter.default.post(
+            name: .lensThumbnailDidChange,
+            object: outputURL
+        )
         _ = try store.writeScreenshotEditPlan(plan, to: lens)
         let completed = try store.completeScreenshotEditing(
             packageURL: lens.packageURL,

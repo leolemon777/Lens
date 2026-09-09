@@ -50,6 +50,32 @@ public struct LensAsset: Codable, Equatable, Sendable {
     }
 }
 
+public enum LensManifestValidationError: LocalizedError, Equatable, Sendable {
+    case invalidAssetPath(String)
+    case assetPathEscapesPackage(String)
+    case assetIsSymbolicLink(String)
+    case invalidDimensions
+    case invalidDuration
+    case oversizedTitle
+
+    public var errorDescription: String? {
+        switch self {
+        case let .invalidAssetPath(path):
+            return "Lens 项目包含越界或非法资产路径：\(path)。"
+        case let .assetPathEscapesPackage(path):
+            return "Lens 项目资产路径跳出了项目包：\(path)。"
+        case let .assetIsSymbolicLink(path):
+            return "Lens 项目资产不能通过符号链接读取：\(path)。"
+        case .invalidDimensions:
+            return "Lens 项目尺寸超出可读取范围。"
+        case .invalidDuration:
+            return "Lens 项目时长无效。"
+        case .oversizedTitle:
+            return "Lens 项目标题过长。"
+        }
+    }
+}
+
 public struct LensDimensions: Codable, Equatable, Sendable {
     public let width: Int
     public let height: Int
@@ -236,6 +262,70 @@ public struct LensManifest: Codable, Equatable, Sendable {
         self.captureSource = captureSource
         self.screenshotCaptureSource = screenshotCaptureSource
         self.assets = assets
+    }
+
+    /// Validates fields that are later used to construct paths or allocate
+    /// media buffers. Reading and writing use the same gate so an unsupported
+    /// future project is rejected instead of being silently rewritten.
+    public func validateForStorage() throws {
+        if let dimensions,
+           dimensions.width <= 0 || dimensions.height <= 0
+            || dimensions.width > 100_000 || dimensions.height > 100_000 {
+            throw LensManifestValidationError.invalidDimensions
+        }
+        if let durationSeconds,
+           !durationSeconds.isFinite || durationSeconds < 0 || durationSeconds > 2_592_000 {
+            throw LensManifestValidationError.invalidDuration
+        }
+        guard title.utf8.count <= 4_096 else {
+            throw LensManifestValidationError.oversizedTitle
+        }
+
+        for asset in assets {
+            let path = asset.relativePath
+            let components = path.split(separator: "/", omittingEmptySubsequences: false)
+            let isRelativeSafe = !path.isEmpty
+                && path.utf8.count <= 4_096
+                && !path.hasPrefix("/")
+                && !path.contains("\\")
+                && !path.contains("\0")
+                && !components.isEmpty
+                && !components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." })
+            guard isRelativeSafe else {
+                throw LensManifestValidationError.invalidAssetPath(path)
+            }
+        }
+    }
+
+    /// Validates the resolved location of every declared asset before a
+    /// project is imported or an asset is read. Lexical checks alone do not
+    /// catch a package child that is a symlink to a path outside the package.
+    /// Missing optional assets remain valid so interrupted/capturing projects
+    /// can still be opened and repaired.
+    public func validateAssetPaths(in packageURL: URL) throws {
+        try validateForStorage()
+
+        let packageRoot = packageURL.standardizedFileURL
+        let resolvedPackageRoot = packageRoot.resolvingSymlinksInPath()
+        for asset in assets {
+            let candidate = packageRoot.appendingPathComponent(asset.relativePath)
+            var cursor = packageRoot
+            for component in asset.relativePath.split(separator: "/") {
+                cursor.appendPathComponent(String(component))
+                if (try? cursor.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+                    throw LensManifestValidationError.assetIsSymbolicLink(asset.relativePath)
+                }
+            }
+
+            let resolvedCandidate = candidate.resolvingSymlinksInPath()
+            let rootPath = resolvedPackageRoot.path.hasSuffix("/")
+                ? resolvedPackageRoot.path
+                : resolvedPackageRoot.path + "/"
+            guard resolvedCandidate.path == resolvedPackageRoot.path
+                || resolvedCandidate.path.hasPrefix(rootPath) else {
+                throw LensManifestValidationError.assetPathEscapesPackage(asset.relativePath)
+            }
+        }
     }
 }
 

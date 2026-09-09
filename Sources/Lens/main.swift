@@ -6,7 +6,11 @@ let application = NSApplication.shared
 if let accessibilityConfiguration = G4AccessibilityHostConfiguration(
     arguments: CommandLine.arguments
 ) {
-    application.setActivationPolicy(.accessory)
+    // The runtime AX audit needs real window roles and descendants. The
+    // production app remains an LSUIElement/accessory app, but this isolated
+    // host must be regular so VoiceOver and ApplicationServices can inspect
+    // the hosted editor surfaces as windows rather than application proxies.
+    application.setActivationPolicy(.regular)
     guard G4AccessibilityHostRunner.start(accessibilityConfiguration) else {
         Darwin.exit(79)
     }

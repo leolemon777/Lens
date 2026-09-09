@@ -66,6 +66,7 @@ enum RenderedPreviewExportGate {
 @MainActor
 final class VideoEditorWindowController: NSObject, NSWindowDelegate {
     private let store: LensProjectStore
+    private let onStorageActivityChanged: () -> Void
     private let window: VideoEditorWindow
     private var model: VideoEditorModel?
     private var playback: VideoEditorPlaybackController?
@@ -75,6 +76,7 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
     private var previewRefreshTask: Task<Void, Never>?
     private var cameraRegenerationRevision: UInt64 = 0
     private var cameraRegenerationTask: Task<Void, Never>?
+    private var presenterThumbnailTask: Task<Void, Never>?
     private var persistTask: Task<URL?, Never>?
     private let presenterThumbnailCache: NSCache<NSURL, NSImage> = {
         let cache = NSCache<NSURL, NSImage>()
@@ -86,8 +88,12 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
     var onFailure: ((Error) -> Void)?
     var onCancelBackgroundProcessing: ((URL) -> Void)?
 
-    init(store: LensProjectStore) {
+    init(
+        store: LensProjectStore,
+        onStorageActivityChanged: @escaping () -> Void = {}
+    ) {
         self.store = store
+        self.onStorageActivityChanged = onStorageActivityChanged
         window = VideoEditorWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1_260, height: 780),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -99,6 +105,18 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
     }
 
     var isVisible: Bool { window.isVisible }
+
+    /// A visible editor or an editor retaining unsaved changes must keep the
+    /// storage root stable while a migration is being prepared.
+    var activeStoragePackageURL: URL? {
+        guard window.isVisible || hasUnsavedEdits || isProcessing else { return nil }
+        return packageURL?.standardizedFileURL
+    }
+
+    /// Exposed to safety gates that must not replace the app while the editor
+    /// still owns unsaved user changes or an active preview render.
+    var hasUnsavedEdits: Bool { model?.isDirty == true }
+    var isProcessing: Bool { model?.isProcessing == true }
 
     func show(entry: LensLibraryEntry) {
         guard entry.manifest.kind == .recording else { return }
@@ -163,6 +181,8 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
         previewRefreshTask = nil
         cameraRegenerationTask?.cancel()
         cameraRegenerationTask = nil
+        presenterThumbnailTask?.cancel()
+        presenterThumbnailTask = nil
         previewRefreshRevision &+= 1
         cameraRegenerationRevision &+= 1
         self.model = model
@@ -243,9 +263,12 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
         previewRefreshTask = nil
         cameraRegenerationTask?.cancel()
         cameraRegenerationTask = nil
+        presenterThumbnailTask?.cancel()
+        presenterThumbnailTask = nil
         model?.endProcessing()
         playback?.stop()
         window.orderOut(nil)
+        onStorageActivityChanged()
     }
 
     func cancelProcessing() {
@@ -265,7 +288,10 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         guard canDiscardUnsavedChanges() else { return false }
+        presenterThumbnailTask?.cancel()
+        presenterThumbnailTask = nil
         playback?.stop()
+        onStorageActivityChanged()
         return true
     }
 
@@ -552,11 +578,20 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
                     try store.loadTranscript(from: packageURL)
                 }
                 : nil
-            let expectedPlanDigest = LensFailureLog.optional("editor.plan_digest") {
-                try RenderedPlanIdentity.digest(
+            let sourceURL = LensFailureLog.optional("editor.source_asset_load") {
+                try store.loadManifest(from: packageURL)
+            }?.assets.first(where: { $0.role == .screenVideo })
+                .map { packageURL.appendingPathComponent($0.relativePath) }
+            let expectedPlanDigest: String?
+            do {
+                expectedPlanDigest = try await RenderedPlanIdentity.digestAsync(
                     for: model.plan,
-                    transcript: currentTranscript
+                    transcript: currentTranscript,
+                    sourceURL: sourceURL
                 )
+            } catch {
+                LensFailureLog.record("editor.plan_digest", error: error)
+                expectedPlanDigest = nil
             }
             let mustRegenerate = model.isDirty
                 || !FileManager.default.fileExists(atPath: previewURL.path)
@@ -748,12 +783,19 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
     }
 
     private func loadPresenterThumbnail(from cameraURL: URL, into model: VideoEditorModel) {
-        Task { @MainActor [weak self, weak model] in
+        presenterThumbnailTask?.cancel()
+        presenterThumbnailTask = Task { @MainActor [weak self, weak model] in
             guard let self, let model else { return }
             let asset = AVURLAsset(url: cameraURL)
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true
             generator.maximumSize = CGSize(width: 640, height: 640)
+            defer {
+                generator.cancelAllCGImageGeneration()
+                if self.model === model {
+                    self.presenterThumbnailTask = nil
+                }
+            }
             do {
                 let duration = try await asset.load(.duration).seconds
                 let safeDuration = duration.isFinite ? max(duration, 0) : 0
@@ -762,7 +804,7 @@ final class VideoEditorWindowController: NSObject, NSWindowDelegate {
                     seconds: requestedTime,
                     preferredTimescale: 600
                 )).image
-                guard self.model === model else { return }
+                guard !Task.isCancelled, self.model === model else { return }
                 let image = NSImage(
                     cgImage: frame,
                     size: NSSize(width: frame.width, height: frame.height)

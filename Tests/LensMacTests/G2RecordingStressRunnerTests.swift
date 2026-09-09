@@ -1,7 +1,49 @@
 import XCTest
+import LensCore
 @testable import LensMac
 
 final class G2RecordingStressRunnerTests: XCTestCase {
+    @MainActor
+    func testENOSPCRecoveryIncludesPendingProcessingProjects() {
+        let manifest = LensManifest(
+            kind: .recording,
+            title: "recovery",
+            state: .processing,
+            durationSeconds: 12,
+            dimensions: LensDimensions(width: 1_920, height: 1_080),
+            assets: [LensAsset(role: .screenVideo, relativePath: "raw/screen.mp4")]
+        )
+        let pending = SavedLens(
+            packageURL: URL(fileURLWithPath: "/tmp/recovery.lens"),
+            rawAssetURL: URL(fileURLWithPath: "/tmp/recovery.lens/raw/screen.mp4"),
+            manifest: manifest
+        )
+        let interrupted = RecordingRecoveryCandidate(
+            packageURL: URL(fileURLWithPath: "/tmp/interrupted.lens"),
+            videoURL: URL(fileURLWithPath: "/tmp/interrupted.lens/raw/screen.mp4"),
+            manifest: manifest
+        )
+
+        let enospc = G2RecordingRecoveryRunner.recoveryCandidates(
+            fault: "ENOSPC",
+            interrupted: [interrupted],
+            pendingProcessing: [pending]
+        )
+        XCTAssertEqual(enospc.map(\.packageURL.path), [
+            "/tmp/interrupted.lens",
+            "/tmp/recovery.lens"
+        ])
+
+        let sigkill = G2RecordingRecoveryRunner.recoveryCandidates(
+            fault: "SIGKILL",
+            interrupted: [interrupted],
+            pendingProcessing: [pending]
+        )
+        XCTAssertEqual(sigkill.map(\.packageURL.path), [
+            "/tmp/interrupted.lens"
+        ])
+    }
+
     func testDistributedEvidenceSamplingScalesForEnduranceRuns() {
         XCTAssertEqual(
             G2RecordingAcceptanceResult.requiredDistributedSampleCount(
@@ -112,6 +154,19 @@ final class G2RecordingStressRunnerTests: XCTestCase {
         XCTAssertFalse(result.passed)
     }
 
+    func testThirtyFPSFrameCompletenessUsesMeasuredCaptureSupply() {
+        let result = G2RecordingAcceptanceResult(makeAcceptanceInput(
+            requestedFramesPerSecond: 30,
+            measuredFramesPerSecond: 30,
+            captureMeasuredReceivedFramesPerSecond: 29.34,
+            captureMeasuredWrittenFramesPerSecond: 29.34,
+            writtenVideoFrameCount: 1_762
+        ))
+
+        XCTAssertTrue(result.frameRateMet)
+        XCTAssertTrue(result.videoFrameCountComplete)
+    }
+
     func testAcceptanceRejectsVisuallyFrozenRecording() {
         let result = G2RecordingAcceptanceResult(makeAcceptanceInput(
             sampledVideoFrameCount: 6,
@@ -143,6 +198,18 @@ final class G2RecordingStressRunnerTests: XCTestCase {
     func testAcceptancePassesCompleteSynchronizedCapture() {
         let result = G2RecordingAcceptanceResult(makeAcceptanceInput())
 
+        XCTAssertTrue(result.passed)
+    }
+
+    func testAcceptanceAccountsAudioSampleBeforeFirstVideoTimestamp() {
+        let result = G2RecordingAcceptanceResult(makeAcceptanceInput(
+            deliveredAudioCallbackCount: 3_000,
+            receivedAudioSampleCount: 2_999,
+            appendedAudioSampleCount: 2_999,
+            discardedBeforeVideoStartAudioSampleCount: 1
+        ))
+
+        XCTAssertTrue(result.systemAudioCallbacksComplete)
         XCTAssertTrue(result.passed)
     }
 
@@ -257,6 +324,10 @@ final class G2RecordingStressRunnerTests: XCTestCase {
     }
 
     private func makeAcceptanceInput(
+        requestedFramesPerSecond: Int = 60,
+        measuredFramesPerSecond: Double = 60,
+        captureMeasuredReceivedFramesPerSecond: Double? = nil,
+        captureMeasuredWrittenFramesPerSecond: Double? = nil,
         systemAudioDurationSeconds: Double = 60,
         systemAudioObservedTimelineSeconds: Double = 60,
         generatedToneDurationSeconds: Double = 60,
@@ -264,6 +335,7 @@ final class G2RecordingStressRunnerTests: XCTestCase {
         deliveredAudioCallbackCount: Int = 3_000,
         receivedAudioSampleCount: Int = 3_000,
         appendedAudioSampleCount: Int = 3_000,
+        discardedBeforeVideoStartAudioSampleCount: Int = 0,
         peakPhysicalFootprintBytes: UInt64 = 100 * 1_024 * 1_024,
         endPhysicalFootprintBytes: UInt64 = 42 * 1_024 * 1_024,
         stopToPlayableMilliseconds: Double = 500,
@@ -276,8 +348,12 @@ final class G2RecordingStressRunnerTests: XCTestCase {
         G2RecordingAcceptanceInput(
             requestedDurationSeconds: 60,
             actualDurationSeconds: 60.05,
-            requestedFramesPerSecond: 60,
-            measuredFramesPerSecond: 60,
+            requestedFramesPerSecond: requestedFramesPerSecond,
+            measuredFramesPerSecond: measuredFramesPerSecond,
+            captureMeasuredReceivedFramesPerSecond:
+                captureMeasuredReceivedFramesPerSecond,
+            captureMeasuredWrittenFramesPerSecond:
+                captureMeasuredWrittenFramesPerSecond,
             receivedCompleteVideoFrameCount: 600,
             writtenVideoFrameCount: writtenVideoFrameCount,
             videoTrackPresent: true,
@@ -294,6 +370,8 @@ final class G2RecordingStressRunnerTests: XCTestCase {
             deliveredAudioCallbackCount: deliveredAudioCallbackCount,
             receivedAudioSampleCount: receivedAudioSampleCount,
             appendedAudioSampleCount: appendedAudioSampleCount,
+            discardedBeforeVideoStartAudioSampleCount:
+                discardedBeforeVideoStartAudioSampleCount,
             pendingAudioSampleCount: 0,
             startPhysicalFootprintBytes: 25 * 1_024 * 1_024,
             peakPhysicalFootprintBytes: peakPhysicalFootprintBytes,

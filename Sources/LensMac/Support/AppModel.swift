@@ -44,13 +44,24 @@ enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    func makeEditPlan(includesCamera: Bool) -> AutoEditPlan {
+    /// Default click-focus scale for newly generated automatic camera plans.
+    /// Kept gentle so the surrounding UI stays readable.
+    static let defaultAutomaticZoomScale = 1.28
+    static let automaticZoomScaleRange: ClosedRange<Double> = 1...3
+
+    static func clampedAutomaticZoomScale(_ value: Double) -> Double {
+        min(max(value.isFinite ? value : defaultAutomaticZoomScale, 1), 3)
+    }
+
+    func makeEditPlan(
+        includesCamera: Bool,
+        automaticZoomScale: Double = defaultAutomaticZoomScale
+    ) -> AutoEditPlan {
         var plan = AutoEditPlan(preset: rawValue)
         switch self {
         case .natural:
             plan.camera.mode = "event-driven"
             plan.camera.zoomIntensity = 0.42
-            plan.camera.zoomScale = 1.60
             plan.camera.generationStrength = .restrained
             plan.camera.motionBlurStrength = 0
             plan.camera.clickToZoom = true
@@ -79,7 +90,6 @@ enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
         case .presentation:
             plan.camera.mode = "event-driven"
             plan.camera.zoomIntensity = 0.62
-            plan.camera.zoomScale = 1.60
             plan.camera.generationStrength = .active
             plan.camera.motionBlurStrength = 0
             plan.camera.clickToZoom = true
@@ -112,7 +122,6 @@ enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
         case .teaching:
             plan.camera.mode = "event-driven"
             plan.camera.zoomIntensity = 0.50
-            plan.camera.zoomScale = 1.60
             plan.camera.generationStrength = .balanced
             plan.camera.motionBlurStrength = 0
             plan.camera.clickToZoom = true
@@ -168,6 +177,7 @@ enum RecordingExperiencePreset: String, CaseIterable, Identifiable, Sendable {
             plan.export?.preset = .source
         }
         if self != .source {
+            plan.camera.zoomScale = Self.clampedAutomaticZoomScale(automaticZoomScale)
             plan.presenterCamera?.isEnabled = includesCamera
         }
         return plan
@@ -253,6 +263,25 @@ final class AppModel: ObservableObject {
         static let conversationInboxShortcut = "shortcuts.conversationInbox"
         static let stopRecordingShortcut = "shortcuts.stopRecording"
         static let conversationInboxDirectory = "inbox.directoryPath"
+        static let automaticCameraZoomScale = "recording.automaticCameraZoomScale"
+        static let lensStorageRootDirectory = "storage.lensRootDirectory"
+        static let automaticallyChecksForUpdates = "updates.automaticallyChecksForUpdates"
+    }
+
+    /// The storage root is applied when the next AppDelegate is created. A
+    /// migration therefore never swaps a live store underneath open windows.
+    /// The caller writes this value only after the copy-and-verify receipt has
+    /// been produced.
+    static func storedLensStorageRootDirectory(
+        defaults: UserDefaults = .standard
+    ) -> URL {
+        guard let rawPath = defaults.string(forKey: PreferenceKey.lensStorageRootDirectory),
+              !rawPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return LensProjectStore.defaultRootDirectory
+        }
+        let candidate = URL(fileURLWithPath: rawPath).standardizedFileURL
+        guard candidate.path != "/" else { return LensProjectStore.defaultRootDirectory }
+        return candidate
     }
 
     private let defaults: UserDefaults
@@ -313,6 +342,41 @@ final class AppModel: ObservableObject {
             )
         }
     }
+    @Published var automaticCameraZoomScale: Double {
+        didSet {
+            let clamped = RecordingExperiencePreset.clampedAutomaticZoomScale(
+                automaticCameraZoomScale
+            )
+            if !automaticCameraZoomScale.isFinite
+                || abs(automaticCameraZoomScale - clamped) > 0.000_1 {
+                automaticCameraZoomScale = clamped
+                return
+            }
+            defaults.set(clamped, forKey: PreferenceKey.automaticCameraZoomScale)
+        }
+    }
+    @Published var lensStorageRootDirectory: URL {
+        didSet {
+            defaults.set(
+                lensStorageRootDirectory.standardizedFileURL.path,
+                forKey: PreferenceKey.lensStorageRootDirectory
+            )
+        }
+    }
+    /// Automatic update checks stay opt-in and are not scheduled by the
+    /// current release until a trusted host and rollback path are configured.
+    @Published var automaticallyChecksForUpdates: Bool {
+        didSet {
+            defaults.set(
+                automaticallyChecksForUpdates,
+                forKey: PreferenceKey.automaticallyChecksForUpdates
+            )
+        }
+    }
+    /// A transient, non-persisted snapshot for the settings panel. The
+    /// migration service owns the copy/verify work; this value only exposes
+    /// its current phase while the app remains open.
+    @Published var storageMigrationProgress: LensStorageMigrationProgress?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -362,6 +426,18 @@ final class AppModel: ObservableObject {
         conversationInboxDirectory = ConversationInboxStore.resolvedDirectory(
             storedPath: defaults.string(forKey: PreferenceKey.conversationInboxDirectory)
         )
+        if defaults.object(forKey: PreferenceKey.automaticCameraZoomScale) == nil {
+            automaticCameraZoomScale = RecordingExperiencePreset.defaultAutomaticZoomScale
+        } else {
+            automaticCameraZoomScale = RecordingExperiencePreset.clampedAutomaticZoomScale(
+                defaults.double(forKey: PreferenceKey.automaticCameraZoomScale)
+            )
+        }
+        lensStorageRootDirectory = Self.storedLensStorageRootDirectory(defaults: defaults)
+        automaticallyChecksForUpdates = defaults.object(
+            forKey: PreferenceKey.automaticallyChecksForUpdates
+        ) as? Bool ?? false
+        storageMigrationProgress = nil
     }
 
     var hotKeyConfiguration: HotKeyConfiguration {
@@ -382,6 +458,10 @@ final class AppModel: ObservableObject {
 
     func restoreDefaultConversationInboxDirectory() {
         conversationInboxDirectory = ConversationInboxStore.defaultDirectory()
+    }
+
+    func restoreDefaultAutomaticCameraZoomScale() {
+        automaticCameraZoomScale = RecordingExperiencePreset.defaultAutomaticZoomScale
     }
 
     private func persistShortcut(_ shortcut: HotKeyShortcut, forKey key: String) {

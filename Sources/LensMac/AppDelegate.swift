@@ -17,7 +17,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let buildIdentity = BuildIdentity.current
     private let model = AppModel()
-    private let store = LensProjectStore(rootDirectory: LensProjectStore.defaultRootDirectory)
+    private let store = LensProjectStore(
+        rootDirectory: AppModel.storedLensStorageRootDirectory()
+    )
     private let quickAccess = QuickAccessWindowController()
     private let pinnedImages = PinnedImageWindowController()
     private let ocrResults = OCRResultWindowController()
@@ -43,6 +45,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         onShortcutCaptureActiveChange: { [weak self] active in
             self?.setShortcutCaptureActive(active)
         },
+        onManageStorage: { [weak self] in
+            self?.manageLensStorage()
+        },
+        onCancelStorageMigration: { [weak self] in
+            self?.cancelLensStorageMigration()
+        },
+        activityStateProvider: { [weak self] in
+            self?.currentLensUpdateActivityState ?? LensUpdateActivityState()
+        },
         diagnosticSummaryProvider: { [weak self] in
             await self?.makeDiagnosticSummary() ?? "Lens 诊断摘要\n应用尚未完成启动。"
         }
@@ -52,9 +63,33 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         onQuitRequested: { NSApp.terminate(nil) },
         onFinished: { [weak self] in self?.actionCenter.show() }
     )
-    private lazy var annotationEditor = ScreenshotAnnotationEditorWindowController(store: store)
-    private lazy var lensLibrary = LensLibraryWindowController(store: store)
-    private lazy var videoEditor = VideoEditorWindowController(store: store)
+    private lazy var annotationEditor = ScreenshotAnnotationEditorWindowController(
+        store: store,
+        onStorageActivityChanged: { [weak self] in
+            self?.startPendingLensStorageMigrationIfReady()
+        }
+    )
+    private lazy var lensLibrary = LensLibraryWindowController(
+        store: store,
+        onStorageActivityChanged: { [weak self] in
+            self?.startPendingLensStorageMigrationIfReady()
+        }
+    )
+    private lazy var videoEditor = VideoEditorWindowController(
+        store: store,
+        onStorageActivityChanged: { [weak self] in
+            self?.startPendingLensStorageMigrationIfReady()
+        }
+    )
+
+    private var currentLensUpdateActivityState: LensUpdateActivityState {
+        LensUpdateActivityState(
+            isRecording: recordingSession.isRecording || recordingService.isRecording,
+            isRendering: !recordingRenderTaskRegistry.activePackageURLs.isEmpty
+                || videoEditor.isProcessing,
+            hasUnsavedEdits: videoEditor.hasUnsavedEdits
+        )
+    }
 
     private lazy var captureCoordinator = CaptureCoordinator(
         store: store,
@@ -62,6 +97,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         quickAccess: quickAccess,
         onLensChanged: { [weak self] in
             self?.lensLibrary.reloadIfVisible()
+            self?.startPendingLensStorageMigrationIfReady()
         },
         onRecordingSourceSelected: { [weak self] source, capturesCamera in
             self?.startRecording(source: source, capturesCamera: capturesCamera)
@@ -113,6 +149,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         },
         onMagnifierHexCopied: { [weak self] hex in
             self?.toast.show(title: "已复制 \(hex)", symbol: "eyedropper")
+        },
+        storageWritesAllowed: { [weak self] in
+            self?.storageWritesAllowed ?? true
         }
     )
     private lazy var recordingService: ScreenRecordingService = {
@@ -151,15 +190,40 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeysBlockedByAccessibility = false
     private var suspendHotKeysForShortcutCapture = false
     private var shortcutCaptureDepth = 0
-    private let recordingProcessingGate = RecordingProcessingGate()
-    private var transcribingRecordingPackages: Set<URL> = []
-    private var organizingLensPackages: Set<URL> = []
-    private var pendingAutomaticTranscriptions: [LensLibraryEntry] = []
+    private let recordingTaskCoordinator = RecordingTaskCoordinator()
+    private let recordingContentTaskRegistry = RecordingContentTaskRegistry()
+    private let pendingAutomaticTranscriptions = RecordingContentTaskQueue()
     private var launchHealthSessionStarted = false
     private var didCompleteApplicationLaunch = false
     private let recordingSession = RecordingSessionCoordinator()
-    private var recordingProcessingTasks: [URL: Task<Void, Never>] = [:]
-    private var recordingRenderTasks: [URL: Task<AutoEditPlan?, Never>] = [:]
+    private let recordingProcessingTaskRegistry = RecordingProcessingTaskRegistry()
+    private let recordingRenderTaskRegistry = RecordingRenderTaskRegistry()
+    private lazy var recordingContentTaskExecution = RecordingContentTaskExecution(
+        coordinator: recordingTaskCoordinator
+    )
+    private lazy var recordingRenderPipeline = makeRecordingRenderPipeline()
+    private lazy var recordingRenderExecution = makeRecordingRenderExecution()
+    private lazy var recordingRenderPresentation = makeRecordingRenderPresentation()
+    private lazy var recordingContentTaskPresentation = makeRecordingContentTaskPresentation()
+    private lazy var recordingTaskMetricsReporter = makeRecordingTaskMetricsReporter()
+    private lazy var recordingContentTaskFinalizer = makeRecordingContentTaskFinalizer()
+    private lazy var recordingOrganizationTaskCoordinator =
+        makeRecordingOrganizationTaskCoordinator()
+    private lazy var recordingTranscriptionTaskCoordinator =
+        makeRecordingTranscriptionTaskCoordinator()
+    private lazy var recordingRenderTaskCoordinator =
+        makeRecordingRenderTaskCoordinator()
+    private let storageMigrationQueue = LensStorageMigrationQueue()
+    private var storageMigrationTask: Task<Void, Never>?
+    private var cancelStorageMigrationWorker: (() -> Void)?
+
+    /// Once a migration has started, every new package-producing entry point
+    /// must stop admitting work. Existing work is drained before the queue
+    /// starts; the app exits after publish so all stores are rebound together
+    /// on the next launch.
+    private var storageWritesAllowed: Bool {
+        !storageMigrationQueue.isRunning && storageMigrationTask == nil
+    }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         switch instanceCoordinator.resolveLaunch() {
@@ -187,6 +251,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         configureApplicationMenu()
         configureStatusItem()
         wireControllers()
+        resumePendingAutomaticTranscriptions()
         startHotKeys()
         // The shipped shortcuts are modifier-only, so they are delivered by a
         // global event monitor that stays silent until accessibility is
@@ -523,11 +588,71 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func resumePendingAutomaticTranscriptions() {
+        let discarded = pendingAutomaticTranscriptions.discardExhaustedRecords()
+        if discarded > 0 {
+            logDiagnostic(
+                "transcription.queue_retry_limit_reached",
+                level: .warning,
+                metadata: ["count": String(discarded)]
+            )
+        }
+
+        var resumed = 0
+        for record in pendingAutomaticTranscriptions.recoverableRecords {
+            do {
+                let manifest = try store.loadManifest(from: record.packageURL)
+                guard let primaryAsset = manifest.assets.first(where: { $0.role == .screenVideo }) else {
+                    pendingAutomaticTranscriptions.complete(lensID: record.lensID)
+                    continue
+                }
+                let saved = SavedLens(
+                    packageURL: record.packageURL,
+                    rawAssetURL: record.packageURL.appendingPathComponent(primaryAsset.relativePath),
+                    manifest: manifest
+                )
+                guard let entry = libraryEntry(for: saved),
+                      pendingAutomaticTranscriptions.restore(entry) else {
+                    pendingAutomaticTranscriptions.complete(lensID: record.lensID)
+                    continue
+                }
+                resumed += 1
+            } catch {
+                pendingAutomaticTranscriptions.complete(lensID: record.lensID)
+                logDiagnosticFailure(
+                    "transcription.queue_resume_failed",
+                    error: error,
+                    metadata: ["lensID": record.lensID.uuidString]
+                )
+            }
+        }
+        if resumed > 0 {
+            logDiagnostic(
+                "transcription.queue_resumed",
+                metadata: ["count": String(resumed)]
+            )
+        }
+        startNextPendingAutomaticTranscriptionIfIdle()
+    }
+
+    func startNextPendingAutomaticTranscriptionIfIdle() {
+        guard !recordingSession.isRecording,
+              recordingContentTaskRegistry.count(kind: .transcription)
+                < RecordingTaskSchedulingPolicy.maximumConcurrentTranscriptions,
+              let next = pendingAutomaticTranscriptions.dequeue() else {
+            return
+        }
+        beginTranscription(for: next, automatic: true)
+    }
+
     private func resumeRecordingRecovery(_ scan: RecordingRecoveryScan) async {
         let store = self.store
         let recovered = scan.interrupted
         let pendingProcessing = scan.pendingProcessing
-        guard !recovered.isEmpty || !pendingProcessing.isEmpty else { return }
+        guard !recovered.isEmpty || !pendingProcessing.isEmpty else {
+            resumePendingLensStorageMigrationIfNeeded()
+            return
+        }
         if !recovered.isEmpty {
             logDiagnostic(
                 "recording.recovery_detected",
@@ -604,6 +729,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 symbol: "exclamationmark.arrow.triangle.2.circlepath"
             )
         }
+        resumePendingLensStorageMigrationIfNeeded()
     }
 
     private func startHotKeys() {
@@ -734,6 +860,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(moreItem)
 
         menu.addItem(menuItem(ActionCenterAction.openLibrary.menuTitle, action: #selector(showLensLibrary)))
+        menu.addItem(menuItem("管理 Lens 存储…", action: #selector(manageLensStorage)))
         menu.addItem(menuItem("在 Finder 中打开 Lens 目录", action: #selector(openLensDirectory)))
         menu.addItem(menuItem("在 Finder 中打开对话文件夹", action: #selector(openConversationInbox)))
         menu.addItem(menuItem(ActionCenterAction.openSettings.menuTitle, action: #selector(openSettingsAndPermissions)))
@@ -758,6 +885,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         aboutItem.target = NSApp
         applicationMenu.addItem(aboutItem)
+        applicationMenu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(
+            title: "设置…",
+            action: #selector(openSettingsAndPermissions),
+            keyEquivalent: ","
+        )
+        settingsItem.target = target
+        applicationMenu.addItem(settingsItem)
         applicationMenu.addItem(.separator())
 
         let hideItem = NSMenuItem(
@@ -900,7 +1036,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             pinClipboardOrRecent()
         case .openLibrary:
             actionCenter.hide()
-            lensLibrary.show()
+            showLensLibrary()
         case .openSettings:
             actionCenter.hide()
             permissionCenter.show()
@@ -988,6 +1124,346 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(store.rootDirectory)
     }
 
+    private func activeStoragePackages() -> Set<URL> {
+        ActiveStoragePackagePolicy.resolve(
+            rootDirectory: store.rootDirectory,
+            taskPackageURLs: recordingProcessingTaskRegistry.activePackageURLs
+                + recordingRenderTaskRegistry.activePackageURLs
+                + recordingContentTaskRegistry.activePackageURLs,
+            editingPackageURLs: [
+                videoEditor.activeStoragePackageURL,
+                annotationEditor.activeStoragePackageURL
+            ],
+            hasUnnamedWrite: recordingSession.isStarting
+                || recordingSession.isRecording
+                || recordingSession.isStopping
+                || recordingService.isRecording
+                || captureCoordinator.hasActiveStorageWrite
+                || lensLibrary.blocksStorageMigration
+        )
+    }
+
+    @objc private func manageLensStorage() {
+        let manager = LensStorageManager(rootDirectory: store.rootDirectory)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await Task.detached(priority: .utility) {
+                Result { try manager.inventory() }
+            }.value
+            guard case let .success(inventory) = result else {
+                toast.show(
+                    title: "暂时无法读取 Lens 存储",
+                    detail: "原始素材不会受到影响，请稍后再试",
+                    symbol: "externaldrive.badge.xmark"
+                )
+                return
+            }
+
+            let formatter = ByteCountFormatter()
+            formatter.countStyle = .file
+            let total = formatter.string(fromByteCount: inventory.totalBytes)
+            let source = formatter.string(
+                fromByteCount: inventory.bytesByCategory[.source] ?? 0
+            )
+            let rendered = formatter.string(
+                fromByteCount: inventory.bytesByCategory[.rendered] ?? 0
+            )
+            let derived = formatter.string(
+                fromByteCount: inventory.bytesByCategory[.derived] ?? 0
+            )
+            let index = formatter.string(
+                fromByteCount: inventory.bytesByCategory[.index] ?? 0
+            )
+            let rebuildable = formatter.string(
+                fromByteCount: inventory.bytesByCategory[.rebuildable] ?? 0
+            )
+            let temporary = formatter.string(
+                fromByteCount: inventory.bytesByCategory[.temporary] ?? 0
+            )
+            let pendingMigration: LensStoragePendingMigration?
+            do {
+                pendingMigration = try manager.pendingMigration()
+            } catch {
+                toast.show(
+                    title: "迁移记录需要复核",
+                    detail: error.localizedDescription,
+                    symbol: "externaldrive.badge.xmark"
+                )
+                return
+            }
+            let alert = NSAlert()
+            alert.alertStyle = .informational
+            alert.messageText = "Lens 存储"
+            let migrationHint = pendingMigration.map {
+                "\n上次迁移尚未完成（\($0.phase)），选择新的位置可继续校验。"
+            } ?? ""
+            let queuedHint = storageMigrationQueue.pendingDestination.map {
+                "\n已有迁移请求排队，任务结束后将复制到 \($0.path)。"
+            } ?? ""
+            alert.informativeText = "项目 \(inventory.packageCount) 个 · 总占用 \(total)\n原始素材 \(source) · 成片 \(rendered) · 派生数据 \(derived)\n索引 \(index) · 可重建缓存 \(rebuildable) · 可清理临时文件 \(temporary)\(migrationHint)\(queuedHint)"
+            alert.addButton(withTitle: "更改存储位置…")
+            alert.addButton(withTitle: "清理临时文件")
+            alert.addButton(withTitle: "在 Finder 中打开")
+            alert.addButton(withTitle: "取消")
+            switch alert.runModal() {
+            case .alertFirstButtonReturn:
+                changeLensStorageLocation()
+            case .alertSecondButtonReturn:
+                let protectedPackages = activeStoragePackages()
+                let cleanupResult = await Task.detached(priority: .utility) {
+                    Result {
+                        try manager.cleanupTemporaryFiles(protecting: protectedPackages)
+                    }
+                }.value
+                guard case let .success(report) = cleanupResult else {
+                    toast.show(
+                        title: "临时文件未清理",
+                        detail: "正在使用的录制文件会保留，原始素材不会受到影响",
+                        symbol: "externaldrive.badge.xmark"
+                    )
+                    return
+                }
+                if report.removedItems.isEmpty {
+                    toast.show(
+                        title: "没有可清理的临时文件",
+                        detail: report.skippedItems.isEmpty
+                            ? "当前 Lens 存储已经是干净状态"
+                            : "正在使用的录制任务仍保留其临时文件",
+                        symbol: "checkmark.circle"
+                    )
+                } else {
+                    let removed = formatter.string(fromByteCount: report.removedBytes)
+                    toast.show(
+                        title: "已清理临时文件",
+                        detail: "释放 \(removed)；原始素材和成片均未删除",
+                        symbol: "checkmark.circle.fill"
+                    )
+                }
+            case .alertThirdButtonReturn:
+                openLensDirectory()
+            default:
+                break
+            }
+        }
+    }
+
+    private func changeLensStorageLocation() {
+        let panel = NSSavePanel()
+        panel.title = "选择新的 Lens 存储目录"
+        panel.message = "Lens 会先复制并校验全部项目；原目录会保留，完成后会自动退出并在重新打开后切换到新目录。"
+        panel.nameFieldStringValue = "Lens"
+        panel.canCreateDirectories = true
+        panel.canSelectHiddenExtension = true
+        panel.isExtensionHidden = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+
+        guard storageMigrationQueue.request(
+            destination: destination,
+            activePackages: activeStoragePackages()
+        ) else {
+            toast.show(
+                title: "存储迁移已排队",
+                detail: "当前有录制、转写、整理或另一项迁移正在进行；任务结束后会自动复制并校验，原目录会继续保留",
+                symbol: "externaldrive.badge.exclamationmark"
+            )
+            return
+        }
+        startLensStorageMigration(to: destination)
+    }
+
+    private func startLensStorageMigration(to destination: URL) {
+        let manager = LensStorageManager(rootDirectory: store.rootDirectory)
+        storageMigrationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let (progressStream, progressContinuation) = AsyncStream.makeStream(
+                of: LensStorageMigrationProgress.self
+            )
+            let migrationTask = Task.detached(priority: .utility) {
+                defer { progressContinuation.finish() }
+                return Result {
+                    let receipt = try manager.migrate(
+                        to: destination,
+                        progress: { progress in
+                            progressContinuation.yield(progress)
+                        }
+                    )
+                    // Build the destination index from the copied project
+                    // facts before the preference points the next launch at
+                    // it. A stale source index can never become authoritative
+                    // just because the directory was copied.
+                    _ = LensProjectStore(rootDirectory: destination).libraryEntries()
+                    return receipt
+                }
+            }
+            cancelStorageMigrationWorker = { migrationTask.cancel() }
+            var lastToastPhase: LensStorageMigrationPhase?
+            for await progress in progressStream {
+                model.storageMigrationProgress = progress
+                guard progress.phase != lastToastPhase else { continue }
+                lastToastPhase = progress.phase
+                let title: String
+                let symbol: String
+                switch progress.phase {
+                case .copying:
+                    title = "正在迁移 Lens 存储"
+                    symbol = "externaldrive.fill"
+                case .verifying:
+                    title = "正在校验 Lens 存储"
+                    symbol = "checkmark.shield"
+                case .publishing:
+                    title = "正在切换 Lens 存储"
+                    symbol = "arrow.triangle.2.circlepath"
+                case .completed:
+                    title = "Lens 存储迁移完成"
+                    symbol = "checkmark.circle.fill"
+                }
+                toast.show(
+                    title: title,
+                    detail: "已完成 \(progress.completedChildren)/\(progress.totalChildren)",
+                    symbol: symbol
+                )
+            }
+            let result = await migrationTask.value
+            model.storageMigrationProgress = nil
+            cancelStorageMigrationWorker = nil
+            switch result {
+            case let .success(receipt):
+                model.lensStorageRootDirectory = destination.standardizedFileURL
+                let verified = ByteCountFormatter.string(
+                    fromByteCount: receipt.copiedBytes,
+                    countStyle: .file
+                )
+                let alert = NSAlert()
+                alert.alertStyle = .informational
+                alert.messageText = "Lens 存储已迁移"
+                alert.informativeText = "已校验 \(receipt.verifiedFileCount) 个文件（\(verified)）。原目录仍保留。Lens 将退出，请重新打开应用以从新位置读写。"
+                alert.addButton(withTitle: "退出并重新打开")
+                alert.runModal()
+                NSApp.terminate(nil)
+            case let .failure(error) where error is CancellationError:
+                toast.show(
+                    title: "已取消存储迁移",
+                    detail: "原目录和已复制的暂存内容均保留，可稍后继续",
+                    symbol: "xmark.circle"
+                )
+            case let .failure(error):
+                toast.show(
+                    title: "存储迁移未完成",
+                    detail: "原目录未删除；下次可从同一入口继续。\n\(error.localizedDescription)",
+                    symbol: "externaldrive.badge.xmark"
+                )
+            }
+            storageMigrationQueue.finish()
+            storageMigrationTask = nil
+            startPendingLensStorageMigrationIfReady()
+        }
+    }
+
+    private func cancelLensStorageMigration() {
+        guard storageMigrationTask != nil else { return }
+        cancelStorageMigrationWorker?()
+        storageMigrationTask?.cancel()
+        toast.show(
+            title: "正在取消存储迁移",
+            detail: "原目录不会删除，已复制内容会保留以便继续",
+            symbol: "xmark.circle"
+        )
+    }
+
+    private func startPendingLensStorageMigrationIfReady() {
+        guard let destination = storageMigrationQueue.takeNextIfReady(
+            activePackages: activeStoragePackages()
+        ) else { return }
+        startLensStorageMigration(to: destination)
+    }
+
+    /// A forced quit or power loss leaves a migration journal beside the
+    /// current root. Resume it after launch instead of requiring the user to
+    /// rediscover the destination in the storage dialog. Recording recovery
+    /// runs first; an active package writer keeps the destination queued until
+    /// its task finishes.
+    private func resumePendingLensStorageMigrationIfNeeded() {
+        let manager = LensStorageManager(rootDirectory: store.rootDirectory)
+        do {
+            if let recovered = try manager.recoverPublishedMigrationIfNeeded() {
+                let destination = URL(
+                    fileURLWithPath: recovered.destinationPath,
+                    isDirectory: true
+                ).standardizedFileURL
+                model.lensStorageRootDirectory = destination
+                logDiagnostic(
+                    "storage.migration.resume_published",
+                    metadata: ["destination": destination.path]
+                )
+                toast.show(
+                    title: "Lens 存储迁移已完成",
+                    detail: "上次迁移已完成校验，Lens 将退出；重新打开后从新位置读写",
+                    symbol: "checkmark.circle.fill"
+                )
+                NSApp.terminate(nil)
+                return
+            }
+        } catch {
+            logDiagnostic(
+                "storage.migration.resume_verification_failed",
+                level: .error,
+                metadata: ["error": error.localizedDescription]
+            )
+            toast.show(
+                title: "Lens 存储迁移需要复核",
+                detail: "迁移记录仍保留，原目录没有被删除",
+                symbol: "externaldrive.badge.xmark"
+            )
+            return
+        }
+        let pending: LensStoragePendingMigration
+        do {
+            guard let value = try manager.pendingMigration() else { return }
+            pending = value
+        } catch {
+            logDiagnostic(
+                "storage.migration.resume_journal_failed",
+                level: .error,
+                metadata: ["error": error.localizedDescription]
+            )
+            toast.show(
+                title: "Lens 存储迁移需要复核",
+                detail: error.localizedDescription,
+                symbol: "externaldrive.badge.xmark"
+            )
+            return
+        }
+        let destination = URL(
+            fileURLWithPath: pending.plan.destinationPath,
+            isDirectory: true
+        )
+        let canStart = storageMigrationQueue.request(
+            destination: destination,
+            activePackages: activeStoragePackages()
+        )
+        guard canStart else {
+            logDiagnostic(
+                "storage.migration.resume_queued",
+                level: .warning,
+                metadata: ["phase": pending.phase]
+            )
+            return
+        }
+        logDiagnostic(
+            "storage.migration.resume_started",
+            metadata: [
+                "phase": pending.phase,
+                "destination": destination.path
+            ]
+        )
+        toast.show(
+            title: "正在继续 Lens 存储迁移",
+            detail: "上次迁移未完成，Lens 将继续复制并校验",
+            symbol: "arrow.counterclockwise.circle.fill"
+        )
+        startLensStorageMigration(to: destination)
+    }
+
     @objc private func openConversationInbox() {
         let directory = model.conversationInboxDirectory
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -1063,8 +1539,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showLensLibrary() {
+        guard storageWritesAllowed else {
+            showStorageMigrationBlockedToast()
+            return
+        }
         actionCenter.hide()
         lensLibrary.show()
+    }
+
+    private func showStorageMigrationBlockedToast() {
+        toast.show(
+            title: "素材库正在迁移",
+            detail: "迁移完成后才能开始新的录制、截图或编辑",
+            symbol: "externaldrive.badge.arrow.right"
+        )
     }
 
     private func showOCRResult(for entry: LensLibraryEntry) {
@@ -1140,13 +1628,83 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    private func makeRecordingTranscriptionWorker() -> RecordingTranscriptionWorker {
+        RecordingTranscriptionWorker(
+            authorizationStatus: {
+                LocalSpeechTranscriptionService.authorizationState
+            },
+            requestAuthorization: {
+                await LocalSpeechTranscriptionService.requestAuthorizationState()
+            },
+            source: { [weak self] entry in
+                guard let self else { throw CancellationError() }
+                let source = try self.transcriptionSource(for: entry)
+                return RecordingTranscriptionSource(url: source.url, role: source.role)
+            },
+            presentPermission: { [weak self] in
+                self?.permissionCenter.show()
+            },
+            presentToast: { [weak self] title, detail, symbol in
+                self?.toast.show(title: title, detail: detail, symbol: symbol)
+            },
+            reportProgress: { [weak self] lensID, completed, total in
+                self?.lensLibrary.setTranscriptionProgress(
+                    LensLibraryTranscriptionProgress(
+                        completed: completed,
+                        total: total
+                    ),
+                    lensID: lensID
+                )
+            },
+            localeIdentifier: { [weak self] in
+                self?.model.transcriptionLanguage.localeIdentifier ?? "zh-Hans"
+            },
+            transcribe: { [weak self] audioURL, localeIdentifier, sourceRole, progress in
+                guard let self else { throw CancellationError() }
+                return try await self.transcriptionService.transcribe(
+                    audioURL: audioURL,
+                    localeIdentifier: localeIdentifier,
+                    sourceRole: sourceRole,
+                    progress: progress
+                )
+            }
+        )
+    }
+
     private func beginTranscription(
         for entry: LensLibraryEntry,
         automatic: Bool = false
     ) {
+        guard storageWritesAllowed else {
+            if !automatic { showStorageMigrationBlockedToast() }
+            return
+        }
         let packageKey = entry.packageURL.standardizedFileURL
-        guard !transcribingRecordingPackages.contains(packageKey),
-              !pendingAutomaticTranscriptions.contains(where: { $0.id == entry.id }) else {
+        let isActive = recordingContentTaskRegistry.contains(
+            packageURL: packageKey,
+            kind: .transcription
+        )
+        let isPending = pendingAutomaticTranscriptions.contains(lensID: entry.id)
+        let admission = RecordingTaskSchedulingPolicy.admission(
+            // Manual requests remain user-visible and may start while a new
+            // recording is active; only automatic background work yields.
+            priority: automatic ? .background : .recordingFinalization,
+            whileRecording: recordingSession.isRecording,
+            isActive: isActive,
+            isPending: isPending,
+            activeCount: recordingContentTaskRegistry.count(kind: .transcription)
+        )
+        switch admission {
+        case .start:
+            break
+        case .deferredWhileRecording:
+            guard pendingAutomaticTranscriptions.enqueue(entry) else { return }
+            logDiagnostic(
+                "transcription.queued_while_recording",
+                metadata: ["queueDepth": String(pendingAutomaticTranscriptions.count)]
+            )
+            return
+        case .alreadyQueued:
             if !automatic {
                 toast.show(
                     title: "这条录屏已经在转写队列中",
@@ -1155,10 +1713,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             }
             return
-        }
-        guard transcribingRecordingPackages.isEmpty else {
+        case .atCapacity:
             if automatic {
-                pendingAutomaticTranscriptions.append(entry)
+                _ = pendingAutomaticTranscriptions.enqueue(entry)
             } else {
                 toast.show(
                     title: "另一条本机转写仍在进行",
@@ -1168,100 +1725,55 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
-        transcribingRecordingPackages.insert(packageKey)
-        lensLibrary.setTranscribing(true, lensID: entry.id)
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer {
-                transcribingRecordingPackages.remove(packageKey)
-                lensLibrary.setTranscribing(false, lensID: entry.id)
-                if !pendingAutomaticTranscriptions.isEmpty {
-                    let next = pendingAutomaticTranscriptions.removeFirst()
-                    beginTranscription(for: next, automatic: true)
-                }
-            }
-            do {
-                var status = LocalSpeechTranscriptionService.authorizationStatus
-                if status == .notDetermined {
-                    status = await LocalSpeechTranscriptionService.requestAuthorization()
-                }
-                switch status {
-                case .authorized:
-                    break
-                case .denied, .notDetermined:
-                    permissionCenter.show()
-                    throw LocalSpeechTranscriptionError.authorizationDenied
-                case .restricted:
-                    permissionCenter.show()
-                    throw LocalSpeechTranscriptionError.authorizationRestricted
-                @unknown default:
-                    throw LocalSpeechTranscriptionError.authorizationRestricted
-                }
-
-                let source = try transcriptionSource(for: entry)
-                toast.show(
-                    title: "正在本机生成转写",
-                    detail: "不会上传录屏或声音；完成后可直接搜索文字",
-                    symbol: "waveform.badge.magnifyingglass"
-                )
-                let document = try await transcriptionService.transcribe(
-                    audioURL: source.url,
-                    localeIdentifier: model.transcriptionLanguage.localeIdentifier,
-                    sourceRole: source.role
-                )
-                let saved = SavedLens(
-                    packageURL: entry.packageURL,
-                    rawAssetURL: entry.primaryAssetURL,
-                    manifest: entry.manifest
-                )
-                var updatedLens = try store.attachTranscript(document, to: saved)
-                logDiagnostic(
-                    "transcription.completed",
-                    metadata: ["count": String(document.segments.count)]
-                )
-                lensLibrary.reloadIfVisible()
-                let trimmed = document.fullText.trimmingCharacters(in: .whitespacesAndNewlines)
-                toast.show(
-                    title: trimmed.isEmpty ? "没有识别到讲解" : "本机转写已完成",
-                    detail: trimmed.isEmpty
-                        ? "录屏与原始音轨保持不变"
-                        : "\(document.segments.count) 个时间片段 · 已加入本地搜索",
-                    symbol: trimmed.isEmpty ? "text.magnifyingglass" : "captions.bubble.fill"
-                )
-                if !trimmed.isEmpty {
-                    var plan = try store.loadAutoEditPlan(from: entry.packageURL)
-                    let isFirstTranscript = entry.transcriptText?.isEmpty != false
-                    if isFirstTranscript {
-                        if plan.captions == nil { plan.captions = .init() }
-                        plan.captions?.isEnabled = true
-                        updatedLens = try store.writeAutoEditPlan(
-                            plan,
-                            to: entry.packageURL
-                        )
-                    }
-                    beginOrganization(lens: updatedLens, transcript: document)
-                    if plan.captions?.isEnabled == true {
-                        await processRecording(updatedLens)
-                    }
-                } else {
-                    beginOrganization(lens: updatedLens, transcript: document)
-                }
-            } catch is CancellationError {
-                logDiagnostic("transcription.cancelled", level: .warning)
-                toast.show(
-                    title: "转写已取消",
-                    detail: "录屏与原始音轨保持不变",
-                    symbol: "xmark.circle"
-                )
-            } catch {
-                logDiagnosticFailure("transcription.failed", error: error)
-                toast.show(
-                    title: "原始录屏仍然安全",
-                    detail: "本机转写未完成：\(error.localizedDescription)",
-                    symbol: "exclamationmark.arrow.triangle.2.circlepath"
-                )
-            }
+        if automatic, !pendingAutomaticTranscriptions.claim(entry) {
+            logDiagnostic(
+                "transcription.queue_retry_limit_reached",
+                level: .warning,
+                metadata: ["count": "1", "lensID": entry.id.uuidString]
+            )
+            return
         }
+        let startedTask = recordingTranscriptionTaskCoordinator.start(
+            entry: entry,
+            automatic: automatic
+        ) { [weak self] in
+            guard let self else { return }
+            pendingAutomaticTranscriptions.complete(lensID: entry.id)
+            startNextPendingAutomaticTranscriptionIfIdle()
+        }
+        guard startedTask != nil else {
+            if automatic {
+                _ = pendingAutomaticTranscriptions.requeueFront(entry)
+            }
+            return
+        }
+    }
+
+    private func makeRecordingOrganizationWorker(
+        store: LensProjectStore,
+        diagnostics: LocalDiagnosticLog
+    ) -> RecordingOrganizationWorker {
+        RecordingOrganizationWorker(
+            loadManifest: { packageURL in
+                try store.loadManifest(from: packageURL)
+            },
+            loadOCR: { packageURL in
+                try store.loadOCR(from: packageURL)
+            },
+            loadTranscript: { packageURL in
+                try store.loadTranscript(from: packageURL)
+            },
+            loadInsights: { packageURL in
+                try store.loadInsights(from: packageURL)
+            },
+            recordDiagnostic: { event, metadata in
+                await diagnostics.record(
+                    event,
+                    level: .warning,
+                    metadata: metadata
+                )
+            }
+        )
     }
 
     private func beginOrganization(for entry: LensLibraryEntry) {
@@ -1278,123 +1790,26 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         transcript suppliedTranscript: TranscriptDocument? = nil,
         announcesResult: Bool = false
     ) {
-        let packageKey = lens.packageURL.standardizedFileURL
-        guard organizingLensPackages.insert(packageKey).inserted else {
-            if announcesResult {
-                toast.show(
-                    title: "这条 Lens 正在整理",
-                    detail: "完成后会自动更新标题、摘要、标签和章节",
-                    symbol: "sparkles"
-                )
-            }
+        guard storageWritesAllowed else {
+            if announcesResult { showStorageMigrationBlockedToast() }
             return
         }
-        lensLibrary.setOrganizing(true, lensID: lens.manifest.id)
-        let store = store
-        let diagnostics = diagnostics
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            defer {
-                organizingLensPackages.remove(packageKey)
-                lensLibrary.setOrganizing(false, lensID: lens.manifest.id)
-            }
-            do {
-                let insights = try await Task.detached(priority: .userInitiated) {
-                    let manifest = try store.loadManifest(from: lens.packageURL)
-                    let ocr: OCRDocument?
-                    if let suppliedOCR {
-                        ocr = suppliedOCR
-                    } else {
-                        do {
-                            ocr = try store.loadOCR(from: lens.packageURL)
-                        } catch {
-                            await diagnostics.record(
-                                "organization.ocr_load_failed",
-                                level: .warning,
-                                metadata: DiagnosticEvent.errorMetadata(error)
-                            )
-                            ocr = nil
-                        }
-                    }
-                    let transcript: TranscriptDocument?
-                    if let suppliedTranscript {
-                        transcript = suppliedTranscript
-                    } else {
-                        do {
-                            transcript = try store.loadTranscript(from: lens.packageURL)
-                        } catch {
-                            await diagnostics.record(
-                                "organization.transcript_load_failed",
-                                level: .warning,
-                                metadata: DiagnosticEvent.errorMetadata(error)
-                            )
-                            transcript = nil
-                        }
-                    }
-                    let previous: LensInsightsDocument?
-                    do {
-                        previous = try store.loadInsights(from: lens.packageURL)
-                    } catch {
-                        await diagnostics.record(
-                            "organization.insights_load_failed",
-                            level: .warning,
-                            metadata: DiagnosticEvent.errorMetadata(error)
-                        )
-                        previous = nil
-                    }
-                    return LocalLensOrganizer.organize(
-                        manifest: manifest,
-                        ocr: ocr,
-                        transcript: transcript,
-                        tokenizer: NaturalLanguageTokenizer()
-                    ).replacingCustomization(previous?.customization)
-                }.value
-                _ = try store.attachInsights(insights, to: lens)
-                logDiagnostic(
-                    "organization.completed",
-                    metadata: ["count": String(insights.chapters.count)]
-                )
-                lensLibrary.reloadIfVisible()
-
-                var details: [String] = []
-                if !insights.tags.isEmpty {
-                    details.append(insights.tags.prefix(3).joined(separator: "、"))
-                }
-                if !insights.chapters.isEmpty {
-                    details.append("\(insights.chapters.count) 个章节")
-                }
-                if !insights.sensitiveFindings.isEmpty {
-                    details.append("\(insights.sensitiveFindings.count) 项敏感信息提示")
-                }
-                if announcesResult {
-                    toast.show(
-                        title: "本地整理已完成",
-                        detail: details.isEmpty
-                            ? "标题与内容索引已更新"
-                            : details.joined(separator: " · "),
-                        symbol: "sparkles.rectangle.stack.fill"
-                    )
-                }
-            } catch is CancellationError {
-                return
-            } catch {
-                logDiagnosticFailure("organization.failed", error: error)
-                if announcesResult {
-                    toast.show(
-                        title: "原始内容仍然安全",
-                        detail: "本地整理未完成：\(error.localizedDescription)",
-                        symbol: "exclamationmark.arrow.triangle.2.circlepath"
-                    )
-                }
-            }
-        }
+        recordingOrganizationTaskCoordinator.begin(
+            lens: lens,
+            suppliedOCR: suppliedOCR,
+            suppliedTranscript: suppliedTranscript,
+            announcesResult: announcesResult
+        )
     }
 
     private func saveInsightsCustomization(
         for entry: LensLibraryEntry,
         customization: LensInsightsCustomization?
     ) {
+        guard storageWritesAllowed else {
+            showStorageMigrationBlockedToast()
+            return
+        }
         do {
             let current = try store.loadInsights(from: entry.packageURL)
             let updated = current.replacingCustomization(customization)
@@ -1544,6 +1959,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         source: RecordingCaptureSource,
         capturesCamera: Bool = false
     ) {
+        guard storageWritesAllowed else {
+            showStorageMigrationBlockedToast()
+            return
+        }
         recordingSession.start(source: source, capturesCamera: capturesCamera)
     }
 
@@ -1647,13 +2066,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
     }
 
-    private static func performanceMilliseconds(since startedAt: TimeInterval) -> String {
-        String(format: "%.3f", max(
-            (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000,
-            0
-        ))
-    }
-
     func showRecordingError(_ error: Error, phase: String) {
         logDiagnosticFailure(
             "recording.failed",
@@ -1710,380 +2122,237 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @discardableResult
     func processRecording(_ saved: SavedLens) async -> AutoEditPlan? {
-        let packageKey = saved.packageURL.standardizedFileURL
-        recordingRenderTasks[packageKey]?.cancel()
-        let task = Task { @MainActor [weak self] in
-            await self?.performProcessRecording(saved)
-        }
-        recordingRenderTasks[packageKey] = task
-        let result = await withTaskCancellationHandler {
-            await task.value
-        } onCancel: {
-            task.cancel()
-        }
-        if recordingRenderTasks[packageKey] == task {
-            recordingRenderTasks[packageKey] = nil
-        }
-        return result
+        await recordingRenderTaskCoordinator.process(saved)
     }
 
     func trackProcessingTask(_ task: Task<Void, Never>, for packageURL: URL) {
-        let packageKey = packageURL.standardizedFileURL
-        recordingProcessingTasks[packageKey]?.cancel()
-        recordingProcessingTasks[packageKey] = task
-        Task { @MainActor [weak self] in
-            await task.value
-            if self?.recordingProcessingTasks[packageKey] == task {
-                self?.recordingProcessingTasks[packageKey] = nil
+        recordingProcessingTaskRegistry.track(
+            task,
+            for: packageURL,
+            onCompletion: { [weak self] in
+                self?.startPendingLensStorageMigrationIfReady()
             }
-        }
+        )
     }
 
     func cancelRecordingProcessing(for packageURL: URL) {
         let packageKey = packageURL.standardizedFileURL
-        recordingProcessingTasks[packageKey]?.cancel()
-        recordingRenderTasks[packageKey]?.cancel()
+        recordingProcessingTaskRegistry.cancel(for: packageKey)
+        recordingRenderTaskRegistry.cancel(for: packageKey)
     }
 
-    @discardableResult
-    private func performProcessRecording(_ saved: SavedLens) async -> AutoEditPlan? {
-        let processingStartedAt = ProcessInfo.processInfo.systemUptime
-        let packageKey = saved.packageURL.standardizedFileURL
-        await recordingProcessingGate.acquire(packageKey)
-        defer { Task { await recordingProcessingGate.release(packageKey) } }
-        do {
-            let plan = try store.loadAutoEditPlan(from: saved.packageURL)
-            try Task.checkCancellation()
-            var healthReport: RecordingHealthReport?
-            do {
-                healthReport = try store.loadRecordingHealthReport(from: saved.packageURL)
-            } catch {
-                logDiagnostic(
-                    "preview.health_report_load_failed",
-                    level: .warning,
-                    metadata: DiagnosticEvent.errorMetadata(error)
+    private func makeRecordingRenderPipeline() -> RecordingRenderPipeline {
+        RecordingRenderPipeline(
+            audioMixdownRenderer: audioMixdownRenderer,
+            previewRenderer: previewRenderer,
+            renderedEffectVerifier: renderedEffectVerifier,
+            advancePhase: { [weak self] taskToken, phase in
+                guard let self else { return }
+                await self.recordingTaskCoordinator.advance(
+                    taskToken,
+                    to: phase,
+                    now: Date()
                 )
-            }
-            let outputURL = saved.packageURL.appendingPathComponent("previews/auto.mp4")
-            let cameraURL = saved.manifest.assets.first(where: { $0.role == .camera })
-                .map { saved.packageURL.appendingPathComponent($0.relativePath) }
-                .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
-            let transcript: TranscriptDocument?
-            if plan.captions?.isEnabled == true {
-                do {
-                    transcript = try store.loadTranscript(from: saved.packageURL)
-                } catch {
-                    logDiagnostic(
-                        "preview.transcript_load_failed",
-                        level: .warning,
-                        metadata: DiagnosticEvent.errorMetadata(error)
-                    )
-                    transcript = nil
-                }
-            } else {
-                transcript = nil
-            }
-            let microphoneURL = saved.manifest.assets.first(where: { $0.role == .microphone })
-                .map { saved.packageURL.appendingPathComponent($0.relativePath) }
-                .flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
-            var audioMixError: Error?
-            var microphoneWasMixed = false
-            var voiceProcessingFellBack = false
-            let requiresAudioMixdown = plan.audio.map { audioPlan in
-                AudioMixdownRenderer.requiresMixdown(
-                    microphoneURL: microphoneURL,
-                    plan: audioPlan
+            },
+            reportProgress: { [weak self] fraction, saved in
+                self?.quickAccess.updateProgress(fraction, for: saved)
+                self?.videoEditor.updateProcessingProgress(
+                    fraction,
+                    packageURL: saved.packageURL
                 )
-            } ?? false
-            // Single pass: prepare the narration/system mix as audio only,
-            // then the effects render embeds it during its only video encode.
-            // A sidecar failure falls back to the legacy two-pass mix below
-            // rather than failing the preview.
-            let mixedAudioSidecarURL = requiresAudioMixdown
-                ? saved.packageURL.appendingPathComponent(
-                    "previews/.audio-mix-\(UUID().uuidString).caf"
-                )
-                : nil
-            var mixedAudioReady = false
-            // Two-segment overall progress (audio 0–15%, video 15–100%,
-            // or a plain 0–100% when no mixdown runs at all) so the panel
-            // reflects one continuous number across both renderers instead
-            // of restarting when the video pass begins.
-            if let mixedAudioSidecarURL, let audioPlan = plan.audio {
-                defer { try? FileManager.default.removeItem(at: mixedAudioSidecarURL) }
-                do {
-                    let mixReport = try await audioMixdownRenderer.prepareMixedAudioSidecar(
-                        sourceURL: saved.rawAssetURL,
-                        microphoneURL: microphoneURL,
-                        outputURL: mixedAudioSidecarURL,
-                        plan: audioPlan,
-                        timeline: plan.timeline,
-                        progress: { [weak self] fraction in
-                            Task { @MainActor in
-                                self?.quickAccess.updateProgress(fraction * 0.15, for: saved)
-                                self?.videoEditor.updateProcessingProgress(
-                                    fraction * 0.15,
-                                    packageURL: saved.packageURL
-                                )
-                            }
-                        }
-                    )
-                    voiceProcessingFellBack = mixReport
-                        .voiceProcessingErrorDescription != nil
-                    microphoneWasMixed = microphoneURL != nil
-                    mixedAudioReady = true
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    audioMixError = error
-                }
+            },
+            recordDiagnostic: { [weak self] code, level, metadata in
+                self?.logDiagnostic(code, level: level, metadata: metadata)
             }
-            let videoProgressBase = requiresAudioMixdown ? 0.15 : 0.0
-            let videoProgressScale = requiresAudioMixdown ? 0.85 : 1.0
-            try Task.checkCancellation()
-            _ = try await previewRenderer.render(
-                inputURL: saved.rawAssetURL,
-                cameraURL: cameraURL,
-                outputURL: outputURL,
-                plan: plan,
-                transcript: transcript,
-                mixedAudioURL: mixedAudioReady ? mixedAudioSidecarURL : nil,
-                progress: { [weak self] fraction in
-                    Task { @MainActor in
-                        self?.quickAccess.updateProgress(
-                            videoProgressBase + fraction * videoProgressScale,
-                            for: saved
-                        )
-                        self?.videoEditor.updateProcessingProgress(
-                            videoProgressBase + fraction * videoProgressScale,
-                            packageURL: saved.packageURL
-                        )
-                    }
-                }
-            )
-            if requiresAudioMixdown, !mixedAudioReady, let audioPlan = plan.audio {
-                let mixedURL = saved.packageURL.appendingPathComponent(
-                    "previews/.auto-mixed-\(UUID().uuidString).mp4"
-                )
-                defer { try? FileManager.default.removeItem(at: mixedURL) }
-                do {
-                    let mixReport = try await audioMixdownRenderer.renderWithReport(
-                        inputURL: outputURL,
-                        microphoneURL: microphoneURL,
-                        outputURL: mixedURL,
-                        plan: audioPlan,
-                        timeline: plan.timeline,
-                        export: plan.export
-                    )
-                    voiceProcessingFellBack = mixReport
-                        .voiceProcessingErrorDescription != nil
-                    _ = try FileManager.default.replaceItemAt(
-                        outputURL,
-                        withItemAt: mixedURL
-                    )
-                    microphoneWasMixed = microphoneURL != nil
-                    audioMixError = nil
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    audioMixError = error
-                }
-            }
-            let renderedEffectVerification = await renderedEffectVerifier.validate(
-                rawURL: saved.rawAssetURL,
-                previewURL: outputURL,
-                plan: plan,
-                cameraURL: cameraURL,
-                microphoneURL: microphoneURL,
-                transcript: transcript
-            )
-            let renderedPlanDigest = try RenderedPlanIdentity.digest(
-                for: plan,
-                transcript: transcript
-            )
-            let baseHealthReport = healthReport ?? RecordingHealthReport(
-                requestedFramesPerSecond: saved.manifest.captureSource?
-                    .effectiveRequestedFramesPerSecond
-                    ?? Int((renderedEffectVerification.rawMeasuredFramesPerSecond ?? 30).rounded()),
-                measuredFramesPerSecond: renderedEffectVerification
-                    .rawMeasuredFramesPerSecond,
-                p95FrameIntervalMilliseconds: nil,
-                droppedFrameCount: 0,
-                videoStatus: renderedEffectVerification.rawMeasuredFramesPerSecond == nil
-                    ? .notMeasured
-                    : .healthy,
-                eventStatus: .notMeasured,
-                pointerEventCount: 0,
-                clickEventCount: 0,
-                keyboardEventCount: 0,
-                windowEventCount: 0,
-                effectiveCameraKeyframeCount: plan.camera.keyframes.filter {
-                    $0.reason != .baseline
-                }.count,
-                cursorKeyframeCount: plan.cursor.keyframes.count,
-                clickPulseCount: plan.interaction?.clickPulses.count ?? 0,
-                warnings: []
-            )
-            let verifiedHealthReport = baseHealthReport
-                .addingRenderedEffectVerification(
-                    renderedEffectVerification,
-                    renderedPlanDigest: renderedPlanDigest
-                )
-            healthReport = verifiedHealthReport
-            do {
-                _ = try store.writeRecordingHealthReport(
-                    verifiedHealthReport,
-                    to: saved.packageURL
-                )
-            } catch {
-                logDiagnosticFailure("preview.health_report_write_failed", error: error)
-            }
-            logDiagnostic(
-                "preview.effects_verified",
-                level: renderedEffectVerification.isVerified ? .info : .warning,
-                metadata: [
-                    "status": renderedEffectVerification.isVerified
-                        ? "verified"
-                        : "needsReview",
-                    "verifiedEffects": renderedEffectVerification.verifiedEffects
-                        .map(\.rawValue)
-                        .joined(separator: ","),
-                    "previewFramesPerSecond": renderedEffectVerification
-                        .previewMeasuredFramesPerSecond
-                        .map { String(format: "%.2f", $0) } ?? "unavailable"
-                ]
-            )
-            let updated = try store.completeProcessing(
-                packageURL: saved.packageURL,
-                renderedVideoURL: outputURL
-            )
-            lensLibrary.reloadIfVisible()
-            // A completed render is the one moment worth surfacing actual
-            // speed as a visible advantage rather than just a checkmark.
-            let renderedSeconds = max(
-                ProcessInfo.processInfo.systemUptime - processingStartedAt,
-                0
-            )
-            let quickAccessConfirmation = renderedEffectVerification.isVerified
-                ? String(format: "成片已可发送 · %.1f 秒", renderedSeconds)
-                : "成片已生成 · 建议复核"
-            quickAccess.updateIfShowing(
-                updated,
-                thumbnail: deliveryImage(for: updated),
-                confirmationTitle: quickAccessConfirmation,
-                deliveryState: renderedEffectVerification.isVerified
-                    ? .ready
-                    : .needsReview
-            )
-            let includesCamera = saved.manifest.assets.contains { $0.role == .camera }
-            let presenterWasRendered = plan.presenterCamera?.isEnabled == true
-                && cameraURL != nil
-                && previewRenderer.lastPresenterCameraError == nil
-            let includesMicrophone = saved.manifest.assets.contains { $0.role == .microphone }
-            let presetTitle = RecordingExperiencePreset(rawValue: plan.preset)?.title
-                ?? "自然成片"
-            if !renderedEffectVerification.isVerified {
-            toast.show(
-                title: "\(presetTitle)预览需复核",
-                detail: {
-                    var completedEffects = healthReport?.completedSmartEffects ?? [
-                        plan.camera.keyframes.contains { $0.reason != .baseline }
-                            ? "自动运镜" : nil,
-                        plan.cursor.keyframes.isEmpty ? nil : "平滑光标",
-                        plan.interaction?.clickPulses.isEmpty == false ? "点击反馈" : nil
-                    ].compactMap { $0 }
-                    completedEffects = Array(NSOrderedSet(array: completedEffects))
-                        .compactMap { $0 as? String }
-                    let unverifiedEffects = renderedEffectVerification.effects.compactMap {
-                        $0.state == .failed || $0.state == .inconclusive
-                            ? $0.effect.title
-                            : nil
-                    }
-                    var verificationNotes: [String] = []
-                    if !unverifiedEffects.isEmpty {
-                        verificationNotes.append(
-                            "\(unverifiedEffects.joined(separator: "、"))未通过媒体验证"
-                        )
-                    }
-                    if !renderedEffectVerification.isFrameRateVerified {
-                        verificationNotes.append("成片帧率未达交付门槛")
-                    }
-                    if microphoneWasMixed, voiceProcessingFellBack {
-                        verificationNotes.append("旁白降噪失败，已保留原声混音")
-                    }
-                    var preservedTracks: [String] = []
-                    if includesCamera {
-                        if cameraURL == nil {
-                            verificationNotes.append("摄像头原始轨缺失")
-                        } else if !presenterWasRendered {
-                            preservedTracks.append("摄像头")
-                        }
-                    }
-                    if includesMicrophone {
-                        if microphoneURL == nil {
-                            verificationNotes.append("麦克风原始轨缺失")
-                        } else if !microphoneWasMixed {
-                            preservedTracks.append("麦克风")
-                        }
-                    }
-                    if !preservedTracks.isEmpty {
-                        let reason = audioMixError == nil ? "未叠加" : "混音未完成"
-                        let effects = completedEffects.isEmpty
-                            ? "基础预览已完成"
-                            : "\(completedEffects.joined(separator: "、"))已完成"
-                        let notes = verificationNotes.isEmpty
-                            ? ""
-                            : "；\(verificationNotes.joined(separator: "、"))"
-                        return "\(effects)；\(preservedTracks.joined(separator: "、"))原始轨已保留（\(reason)）\(notes)"
-                    }
-                    if completedEffects.isEmpty {
-                        if !verificationNotes.isEmpty {
-                            return "预览已生成；\(verificationNotes.joined(separator: "、"))，原始轨已保留"
-                        }
-                        return "基础预览已完成；本次未请求智能效果，原始轨已保留"
-                    }
-                    let notes = verificationNotes.isEmpty
-                        ? ""
-                        : "；\(verificationNotes.joined(separator: "、"))"
-                    return "\(completedEffects.joined(separator: "、"))已完成，全部原始轨仍完整保留\(notes)"
-                }(),
-                symbol: "exclamationmark.magnifyingglass"
-            )
-            }
-            logDiagnostic(
-                "preview.completed",
-                metadata: [
-                    "durationMilliseconds": Self.performanceMilliseconds(
-                        since: processingStartedAt
-                    )
-                ]
-            )
-            return plan
-        } catch is CancellationError {
-            logDiagnostic("preview.cancelled", level: .warning)
-            quickAccess.updateIfShowing(
-                saved,
-                thumbnail: deliveryImage(for: saved),
-                confirmationTitle: "成片生成已取消",
-                deliveryState: .failed
-            )
-            return nil
-        } catch {
-            logDiagnosticFailure("preview.failed", error: error)
-            quickAccess.updateIfShowing(
-                saved,
-                thumbnail: deliveryImage(for: saved),
-                confirmationTitle: "原始录屏已保留 · 成片稍后重试",
-                deliveryState: .failed
-            )
-            toast.show(
-                title: "原始录屏已保留",
-                detail: "自动成片暂未完成，稍后可以重新处理",
-                symbol: "exclamationmark.arrow.triangle.2.circlepath"
-            )
-            return nil
-        }
+        )
     }
+
+    private func makeRecordingRenderPresentation() -> RecordingRenderPresentation {
+        RecordingRenderPresentation(
+            reloadLibrary: { [weak self] in
+                self?.lensLibrary.reloadIfVisible()
+            },
+            deliveryImage: { [weak self] lens in
+                self?.deliveryImage(for: lens)
+                    ?? NSWorkspace.shared.icon(forFile: lens.rawAssetURL.path)
+            },
+            updateQuickAccess: { [weak self] lens, image, title, state in
+                self?.quickAccess.updateIfShowing(
+                    lens,
+                    thumbnail: image,
+                    confirmationTitle: title,
+                    deliveryState: state
+                )
+            },
+            showToast: { [weak self] title, detail, symbol in
+                self?.toast.show(title: title, detail: detail, symbol: symbol)
+            },
+            recordDiagnostic: { [weak self] code, level, metadata in
+                self?.logDiagnostic(code, level: level, metadata: metadata)
+            }
+        )
+    }
+
+    private func makeRecordingContentTaskPresentation() -> RecordingContentTaskPresentation {
+        RecordingContentTaskPresentation(
+            reloadLibrary: { [weak self] in
+                self?.lensLibrary.reloadIfVisible()
+            },
+            showToast: { [weak self] title, detail, symbol in
+                self?.toast.show(title: title, detail: detail, symbol: symbol)
+            },
+            recordDiagnostic: { [weak self] code, level, metadata in
+                self?.logDiagnostic(code, level: level, metadata: metadata)
+            },
+            recordFailure: { [weak self] code, metadata in
+                self?.logDiagnostic(code, level: .error, metadata: metadata)
+            }
+        )
+    }
+
+    private func makeRecordingTaskMetricsReporter() -> RecordingTaskMetricsReporter {
+        let coordinator = recordingTaskCoordinator
+        return RecordingTaskMetricsReporter(
+            loadSnapshot: { packageURL, kind, version in
+                await coordinator.snapshot(
+                    packageURL: packageURL,
+                    kind: kind,
+                    version: version
+                )
+            },
+            recordDiagnostic: { [weak self] code, level, metadata in
+                self?.logDiagnostic(code, level: level, metadata: metadata)
+            }
+        )
+    }
+
+    private func makeRecordingContentTaskFinalizer() -> RecordingContentTaskFinalizer {
+        RecordingContentTaskFinalizer(
+            recordMetrics: { [weak self] packageURL, kind, version in
+                await self?.recordingTaskMetricsReporter.record(
+                    packageURL: packageURL,
+                    kind: kind,
+                    version: version
+                )
+            },
+            finishRegistry: { [weak self] packageURL, kind in
+                self?.recordingContentTaskRegistry.finish(
+                    packageURL: packageURL,
+                    kind: kind
+                )
+            },
+            setTranscribing: { [weak self] lensID, active in
+                self?.lensLibrary.setTranscribing(active, lensID: lensID)
+            },
+            setOrganizing: { [weak self] lensID, active in
+                self?.lensLibrary.setOrganizing(active, lensID: lensID)
+            },
+            startMigration: { [weak self] in
+                self?.startPendingLensStorageMigrationIfReady()
+            }
+        )
+    }
+
+    private func makeRecordingOrganizationTaskCoordinator()
+        -> RecordingOrganizationTaskCoordinator {
+        RecordingOrganizationTaskCoordinator(
+            registry: recordingContentTaskRegistry,
+            execution: recordingContentTaskExecution,
+            finalizer: recordingContentTaskFinalizer,
+            presentation: recordingContentTaskPresentation,
+            workerFactory: { [weak self] in
+                guard let self else { return nil }
+                return self.makeRecordingOrganizationWorker(
+                    store: self.store,
+                    diagnostics: self.diagnostics
+                )
+            },
+            attachInsights: { [weak self] insights, lens in
+                guard let self else { throw CancellationError() }
+                _ = try self.store.attachInsights(insights, to: lens)
+            },
+            setOrganizing: { [weak self] lensID, active in
+                self?.lensLibrary.setOrganizing(active, lensID: lensID)
+            }
+        )
+    }
+
+    private func makeRecordingTranscriptionTaskCoordinator()
+        -> RecordingTranscriptionTaskCoordinator {
+        RecordingTranscriptionTaskCoordinator(
+            registry: recordingContentTaskRegistry,
+            execution: recordingContentTaskExecution,
+            finalizer: recordingContentTaskFinalizer,
+            presentation: recordingContentTaskPresentation,
+            workerFactory: { [weak self] in
+                self?.makeRecordingTranscriptionWorker()
+            },
+            attachTranscript: { [weak self] document, saved in
+                guard let self else { throw CancellationError() }
+                return try self.store.attachTranscript(document, to: saved)
+            },
+            loadPlan: { [weak self] packageURL in
+                guard let self else { throw CancellationError() }
+                return try self.store.loadAutoEditPlan(from: packageURL)
+            },
+            writePlan: { [weak self] plan, packageURL in
+                guard let self else { throw CancellationError() }
+                return try self.store.writeAutoEditPlan(plan, to: packageURL)
+            },
+            startOrganization: { [weak self] lens, document in
+                self?.beginOrganization(lens: lens, transcript: document)
+            },
+            render: { [weak self] lens in
+                guard let self else { return nil }
+                return await self.processRecording(lens)
+            },
+            loadManifest: { [weak self] packageURL in
+                guard let self else { throw CancellationError() }
+                return try self.store.loadManifest(from: packageURL)
+            },
+            setTranscribing: { [weak self] lensID, active in
+                self?.lensLibrary.setTranscribing(active, lensID: lensID)
+            }
+        )
+    }
+
+    private func makeRecordingRenderExecution() -> RecordingRenderExecution {
+        RecordingRenderExecution(
+            store: store,
+            pipeline: recordingRenderPipeline,
+            isCurrent: { [weak self] packageURL, generation in
+                self?.recordingRenderTaskRegistry.isCurrent(
+                    packageURL: packageURL,
+                    generation: generation
+                ) ?? false
+            },
+            advancePhase: { [weak self] taskToken, phase in
+                await self?.recordingTaskCoordinator.advance(
+                    taskToken,
+                    to: phase,
+                    now: Date()
+                )
+            },
+            recordDiagnostic: { [weak self] code, level, metadata in
+                self?.logDiagnostic(code, level: level, metadata: metadata)
+            }
+        )
+    }
+
+    private func makeRecordingRenderTaskCoordinator()
+        -> RecordingRenderTaskCoordinator {
+        RecordingRenderTaskCoordinator(
+            taskCoordinator: recordingTaskCoordinator,
+            registry: recordingRenderTaskRegistry,
+            execution: recordingRenderExecution,
+            presentation: recordingRenderPresentation,
+            metrics: recordingTaskMetricsReporter,
+            startMigration: { [weak self] in
+                self?.startPendingLensStorageMigrationIfReady()
+            }
+        )
+    }
+
 }
 
 extension AppDelegate: RecordingSessionHost {}

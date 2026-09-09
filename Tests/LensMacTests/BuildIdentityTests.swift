@@ -8,6 +8,7 @@ final class BuildIdentityTests: XCTestCase {
             version: "1.2.3",
             buildNumber: "20260812010101",
             gitCommit: "1234567890abcdef",
+            sourceSnapshotSHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             builtAt: Date(timeIntervalSince1970: 1_786_500_000),
             channel: .beta,
             executableURL: URL(fileURLWithPath: "/Applications/Lens.app/Contents/MacOS/Lens")
@@ -17,6 +18,7 @@ final class BuildIdentityTests: XCTestCase {
         XCTAssertEqual(identity.shortCommit, "1234567890ab")
         XCTAssertTrue(identity.displayDetail.contains("Beta"))
         XCTAssertEqual(identity.diagnosticMetadata["channel"], "beta")
+        XCTAssertEqual(identity.diagnosticMetadata["sourceSnapshotSHA256"], "0123456789ab")
         XCTAssertNil(identity.diagnosticMetadata["executableURL"])
     }
 
@@ -36,6 +38,25 @@ final class BuildIdentityTests: XCTestCase {
 
         XCTAssertTrue(installed.isSameBuild(as: installed))
         XCTAssertFalse(installed.isSameBuild(as: workspace))
+    }
+
+    func testSameBuildRejectsDifferentSourceSnapshot() {
+        let current = BuildIdentity(
+            version: "0.1.0",
+            buildNumber: "42",
+            gitCommit: "abcdef123456",
+            sourceSnapshotSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            executableURL: URL(fileURLWithPath: "/Applications/Lens.app/Contents/MacOS/Lens")
+        )
+        let stale = BuildIdentity(
+            version: "0.1.0",
+            buildNumber: "42",
+            gitCommit: "abcdef123456",
+            sourceSnapshotSHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            executableURL: URL(fileURLWithPath: "/Applications/Lens.app/Contents/MacOS/Lens")
+        )
+
+        XCTAssertFalse(current.isSameBuild(as: stale))
     }
 
     func testConflictDetectorUsesOldestRunningInstanceDeterministically() {

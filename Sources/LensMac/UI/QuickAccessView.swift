@@ -6,6 +6,7 @@ enum QuickAccessDeliveryState: Equatable {
     case ready
     case processing
     case failed
+    case cancelled
     case needsReview
     case interrupted
 
@@ -22,11 +23,27 @@ enum QuickAccessDeliveryState: Equatable {
             || QuickAccessFileTransfer.previewNeedsReview(for: lens) {
             return .needsReview
         }
+        return derived(for: lens)
+    }
+
+    /// Derives the durable portion of delivery state from the project facts
+    /// on disk. Transient cancellation remains an explicit state supplied by
+    /// the task owner, while every other surface can rebuild this value after
+    /// relaunch without depending on in-memory panel state.
+    @MainActor
+    static func derived(for lens: SavedLens) -> Self {
+        guard lens.manifest.kind == .recording else { return .ready }
         switch lens.manifest.state {
         case .processing:
             return .processing
         case .interrupted:
             return .interrupted
+        case .failed:
+            return .failed
+        case .ready:
+            return QuickAccessFileTransfer.previewNeedsReview(for: lens)
+                ? .needsReview
+                : .ready
         default:
             return .ready
         }
@@ -138,6 +155,9 @@ struct QuickAccessView: View {
     private var isProcessingFailed: Bool {
         isRecording && deliveryState == .failed
     }
+    private var isProcessingCancelled: Bool {
+        isRecording && deliveryState == .cancelled
+    }
     private var isPreviewNeedsReview: Bool {
         isRecording && deliveryState == .needsReview
     }
@@ -215,7 +235,7 @@ struct QuickAccessView: View {
                     .accessibilityLabel("成片生成中")
                     .accessibilityValue(progressCaption)
             } else {
-                Image(systemName: isProcessingFailed || isPreviewNeedsReview || isInterrupted
+                Image(systemName: isProcessingFailed || isProcessingCancelled || isPreviewNeedsReview || isInterrupted
                       ? "exclamationmark.triangle.fill"
                       : "checkmark.circle.fill")
                     .font(.system(size: LensIcon.medium, weight: .semibold))
@@ -272,8 +292,12 @@ struct QuickAccessView: View {
                 // Primary: retry takes over the primary slot when the
                 // render actually failed — that is the one action
                 // the user needs most in that state.
-                if isProcessingFailed, let onRetry {
-                    primaryQuickButton("重试成片", symbol: "arrow.clockwise", action: onRetry)
+                if (isProcessingFailed || isProcessingCancelled), let onRetry {
+                    primaryQuickButton(
+                        isProcessingCancelled ? "继续生成" : "重试成片",
+                        symbol: "arrow.clockwise",
+                        action: onRetry
+                    )
                 } else {
                     primaryQuickButton(
                         isProcessing ? "查看原片" : "编辑",
@@ -417,6 +441,8 @@ struct QuickAccessView: View {
                 deliveryHint = "原始文件可拖出 · 建议打开编辑器复核"
             } else if isProcessingFailed {
                 deliveryHint = "原始文件可拖出 · 可重试成片"
+            } else if isProcessingCancelled {
+                deliveryHint = "原始文件可拖出 · 可继续生成成片"
             } else if isInterrupted {
                 deliveryHint = "原始文件可拖出 · 录屏曾中断，建议检查恢复状态"
             } else {
@@ -620,7 +646,49 @@ enum QuickAccessFileTransfer {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             let report = try decoder.decode(RecordingHealthReport.self, from: data)
-            return report.renderedEffectVerification?.isVerified == false
+            guard report.renderedEffectVerification?.isVerified == true,
+                  let renderedPlanDigest = report.renderedPlanDigest else {
+                return true
+            }
+            guard let planAsset = lens.manifest.assets.first(where: {
+                $0.role == .editPlan
+            }) else {
+                return true
+            }
+            let planURL = lens.packageURL.appendingPathComponent(planAsset.relativePath)
+            guard isRegularFileInsidePackage(planURL, packageURL: lens.packageURL),
+                  let planData = try? Data(contentsOf: planURL),
+                  let plan = try? decoder.decode(AutoEditPlan.self, from: planData) else {
+                return true
+            }
+            var transcript: TranscriptDocument?
+            if plan.captions?.isEnabled == true {
+                guard let transcriptAsset = lens.manifest.assets.first(where: {
+                    $0.role == .transcript
+                }) else {
+                    return true
+                }
+                let transcriptURL = lens.packageURL.appendingPathComponent(
+                    transcriptAsset.relativePath
+                )
+                guard isRegularFileInsidePackage(
+                    transcriptURL,
+                    packageURL: lens.packageURL
+                ), let transcriptData = try? Data(contentsOf: transcriptURL),
+                let decodedTranscript = try? decoder.decode(
+                    TranscriptDocument.self,
+                    from: transcriptData
+                ) else {
+                    return true
+                }
+                transcript = decodedTranscript
+            }
+            let expectedPlanDigest = try RenderedPlanIdentity.digest(
+                for: plan,
+                transcript: transcript,
+                sourceURL: lens.rawAssetURL
+            )
+            return renderedPlanDigest != expectedPlanDigest
         } catch {
             // A corrupt health report cannot authorize a polished preview. The
             // raw recording remains the only trustworthy delivery candidate.

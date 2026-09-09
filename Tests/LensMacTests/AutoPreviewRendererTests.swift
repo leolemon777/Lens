@@ -41,12 +41,16 @@ final class AutoPreviewRendererTests: XCTestCase {
         plan.presenterCamera?.isEnabled = false
 
         let collector = ProgressCollectorBox()
-        _ = try await AutoPreviewRenderer().render(
+        let renderer = AutoPreviewRenderer()
+        _ = try await renderer.render(
             inputURL: inputURL,
             outputURL: outputURL,
             plan: plan,
             progress: { collector.append($0) }
         )
+        XCTAssertEqual(renderer.lastRenderMetrics.encodePassCount, 1)
+        XCTAssertGreaterThan(renderer.lastRenderMetrics.elapsedMilliseconds, 0)
+        XCTAssertGreaterThan(renderer.lastRenderMetrics.peakPhysicalFootprintBytes, 0)
 
         let values = collector.recorded
         XCTAssertFalse(values.isEmpty)
@@ -78,13 +82,16 @@ final class AutoPreviewRendererTests: XCTestCase {
         plan.presenterCamera?.isEnabled = true
 
         let collector = ProgressCollectorBox()
-        _ = try await AutoPreviewRenderer().render(
+        let renderer = AutoPreviewRenderer()
+        _ = try await renderer.render(
             inputURL: screenURL,
             cameraURL: cameraURL,
             outputURL: outputURL,
             plan: plan,
             progress: { collector.append($0) }
         )
+        XCTAssertEqual(renderer.lastRenderMetrics.encodePassCount, 2)
+        XCTAssertGreaterThan(renderer.lastRenderMetrics.peakPhysicalFootprintBytes, 0)
 
         let values = collector.recorded
         XCTAssertFalse(values.isEmpty)

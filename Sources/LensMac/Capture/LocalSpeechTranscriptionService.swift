@@ -9,6 +9,8 @@ enum LocalSpeechTranscriptionError: LocalizedError, Equatable {
     case authorizationRestricted
     case recognizerUnavailable(String)
     case onDeviceRecognitionUnavailable(String)
+    case noSpeechDetected
+    case recognitionFailed
     case noFinalResult
 
     var errorDescription: String? {
@@ -23,6 +25,10 @@ enum LocalSpeechTranscriptionError: LocalizedError, Equatable {
             "当前无法使用 \(locale) 语音识别器。"
         case let .onDeviceRecognitionUnavailable(locale):
             "\(locale) 尚不支持本机离线识别；Lens 不会自动改用云端转写。"
+        case .noSpeechDetected:
+            "没有检测到有效人声；录屏与原始音轨保持不变。"
+        case .recognitionFailed:
+            "本机语音识别失败；录屏与原始音轨保持不变，可稍后重试。"
         case .noFinalResult:
             "本机语音识别没有返回最终结果。"
         }
@@ -47,11 +53,41 @@ final class LocalSpeechTranscriptionService {
         SFSpeechRecognizer.authorizationStatus()
     }
 
+    static var authorizationState: RecordingTranscriptionAuthorization {
+        switch authorizationStatus {
+        case .authorized:
+            return .authorized
+        case .denied:
+            return .denied
+        case .restricted:
+            return .restricted
+        case .notDetermined:
+            return .notDetermined
+        @unknown default:
+            return .unknown
+        }
+    }
+
     nonisolated static func requestAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
         await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization(
                 authorizationCallback(continuation)
             )
+        }
+    }
+
+    nonisolated static func requestAuthorizationState() async -> RecordingTranscriptionAuthorization {
+        switch await requestAuthorization() {
+        case .authorized:
+            return .authorized
+        case .denied:
+            return .denied
+        case .restricted:
+            return .restricted
+        case .notDetermined:
+            return .notDetermined
+        @unknown default:
+            return .unknown
         }
     }
 
@@ -104,6 +140,7 @@ final class LocalSpeechTranscriptionService {
         let duration = try await asset.load(.duration).seconds
         let chunks = TranscriptChunkPlanner.plan(durationSeconds: duration)
         guard !chunks.isEmpty else { throw LocalSpeechTranscriptionError.missingSource }
+        progress?(0, chunks.count)
         let generatedAt = Date()
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -203,7 +240,10 @@ final class LocalSpeechTranscriptionService {
                             generatedAt: generatedAt
                         ))
                     } else if let error {
-                        gate.resume(throwing: error)
+                        gate.resume(throwing: Self.classifyRecognitionError(
+                            error,
+                            localeIdentifier: localeIdentifier
+                        ))
                     }
                 }
             }
@@ -257,6 +297,31 @@ final class LocalSpeechTranscriptionService {
             throw LocalSpeechTranscriptionError.noFinalResult
         }
         return document
+    }
+
+    /// Speech.framework reports several useful failure states only through
+    /// NSError codes. Convert those into stable, privacy-safe product errors
+    /// before they reach the UI; the raw framework description may include
+    /// implementation details and is not actionable for a Lens user.
+    nonisolated static func classifyRecognitionError(
+        _ error: Error,
+        localeIdentifier: String
+    ) -> Error {
+        if error is CancellationError {
+            return error
+        }
+        switch (error as NSError).code {
+        case 102, 300:
+            return LocalSpeechTranscriptionError.recognizerUnavailable(localeIdentifier)
+        case 201, 1700:
+            return LocalSpeechTranscriptionError.authorizationDenied
+        case 1110:
+            return LocalSpeechTranscriptionError.noSpeechDetected
+        case 301:
+            return CancellationError()
+        default:
+            return LocalSpeechTranscriptionError.recognitionFailed
+        }
     }
 }
 

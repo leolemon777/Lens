@@ -46,6 +46,7 @@ final class RecordingSessionCoordinatorTests: XCTestCase {
         XCTAssertTrue(source.contains("endControlSession()"))
         XCTAssertTrue(source.contains("storageMonitor.stop()"))
         XCTAssertTrue(source.contains("stopForCriticalStorage"))
+        XCTAssertTrue(source.contains("automaticZoomScale: model.automaticCameraZoomScale"))
         XCTAssertFalse(source.contains("recordingControl.onCriticalStorage"))
     }
 

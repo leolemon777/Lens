@@ -73,6 +73,18 @@ struct RecordingSetupView: View {
         VStack(spacing: 0) {
             header
             Divider().opacity(0.4)
+            AutomaticCameraZoomPreferenceCard(
+                scale: $model.automaticCameraZoomScale,
+                onRestoreDefault: {
+                    model.restoreDefaultAutomaticCameraZoomScale()
+                },
+                layout: .compact
+            )
+            .padding(.horizontal, LensSpacing.panel)
+            .padding(.vertical, LensSpacing.m)
+            .opacity(model.recordingExperiencePreset == .source ? 0.46 : 1)
+            .disabled(model.recordingExperiencePreset == .source)
+            Divider().opacity(0.4)
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     sourceSection

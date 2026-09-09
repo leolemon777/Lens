@@ -22,7 +22,7 @@ plist_value() {
     /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist"
 }
 
-for key in CFBundleShortVersionString CFBundleVersion LensBuildChannel LensBuiltAt LensGitCommit; do
+for key in CFBundleShortVersionString CFBundleVersion LensBuildChannel LensBuiltAt LensGitCommit LensSourceSnapshotSHA256; do
     source_value="$(plist_value "$SOURCE_APP" "$key")"
     installed_value="$(plist_value "$INSTALLED_APP" "$key")"
     if [[ "$source_value" != "$installed_value" ]]; then

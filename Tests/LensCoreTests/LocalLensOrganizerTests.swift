@@ -317,6 +317,45 @@ final class LocalLensOrganizerTests: XCTestCase {
         )
     }
 
+    func testOrganizerSkipsClockAndPathFragmentsBeforeMeaningfulSentence() {
+        let manifest = LensManifest(
+            kind: .screenshot,
+            createdAt: Date(timeIntervalSince1970: 1_755_321_600),
+            title: "截图 2025年8月16日 05:01",
+            dimensions: LensDimensions(width: 420, height: 352),
+            assets: []
+        )
+        let ocr = OCRDocument(
+            engine: "test",
+            recognitionLanguages: ["en-US"],
+            blocks: [OCRTextBlock(
+                text: "14:32\n/Users/demo/Lens.swift\nFix playback timing.",
+                confidence: 0.9,
+                normalizedBounds: LensRect(x: 0, y: 0, width: 1, height: 1)
+            )]
+        )
+
+        let insights = LocalLensOrganizer.organize(manifest: manifest, ocr: ocr)
+
+        XCTAssertTrue(insights.suggestedTitle.contains("Fix playback timing"))
+        XCTAssertFalse(insights.suggestedTitle.contains("14:32"))
+        XCTAssertFalse(insights.suggestedTitle.contains("/Users/"))
+    }
+
+    func testOrganizerUsesStableSourceDateFallbackForWeakCapture() {
+        let manifest = LensManifest(
+            kind: .recording,
+            createdAt: Date(timeIntervalSince1970: 1_755_321_600),
+            title: "录屏 2025年8月16日 05:01",
+            dimensions: LensDimensions(width: 1_920, height: 1_080),
+            assets: []
+        )
+
+        let insights = LocalLensOrganizer.organize(manifest: manifest)
+
+        XCTAssertEqual(insights.suggestedTitle, "录屏 · 2025-08-16")
+    }
+
     private func segment(
         _ start: Double,
         _ end: Double,

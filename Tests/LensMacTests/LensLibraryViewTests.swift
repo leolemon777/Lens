@@ -7,6 +7,17 @@ import LensCore
 
 @MainActor
 final class LensLibraryViewTests: XCTestCase {
+    func testLibraryThumbnailDecoderDownsamplesLargeSourceBeforeCaching() throws {
+        let data = try screenshotPNGData(width: 4_096, height: 2_160)
+        let image = try XCTUnwrap(
+            LensThumbnailDecoder.image(from: data, maximumPixelSize: 640)
+        )
+
+        XCTAssertLessThanOrEqual(max(image.size.width, image.size.height), 640)
+        XCTAssertGreaterThan(image.size.width, 0)
+        XCTAssertGreaterThan(image.size.height, 0)
+    }
+
     func testLibraryViewLaysOutAndRendersWithMixedEntries() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("LensLibraryViewTests-\(UUID().uuidString)", isDirectory: true)
@@ -147,12 +158,13 @@ final class LensLibraryViewTests: XCTestCase {
             encoding: .utf8
         )
         // Primary action is unconditional; secondary actions live in a
-        // separate group gated by opacity (never removed from the tree)
-        // so Tab/VoiceOver can still reach them when the pointer never
-        // hovers the card.
+        // separate group that stays in the AX tree while collapsed, so
+        // Tab/VoiceOver can still reach them when the pointer never hovers.
         XCTAssertTrue(source.contains("var showsSecondaryActions: Bool"))
         XCTAssertTrue(source.contains("isHovering || focusedSecondaryAction != nil"))
-        XCTAssertTrue(source.contains(".opacity(showsSecondaryActions ? 1 : 0)"))
+        XCTAssertTrue(source.contains(".frame(height: showsSecondaryActions ? nil : 1"))
+        XCTAssertTrue(source.contains(".opacity(showsSecondaryActions ? 1 : 0.001)"))
+        XCTAssertTrue(source.contains(".accessibilityHidden(false)"))
         XCTAssertFalse(
             source.contains("if showsSecondaryActions {"),
             "Secondary actions must be opacity-hidden, not removed with `if`, " +
@@ -190,6 +202,20 @@ final class LensLibraryViewTests: XCTestCase {
         )
         XCTAssertTrue(viewSource.contains("cardButton(\"复制文件\", symbol: \"doc.on.doc\", action: onCopy)"))
         XCTAssertTrue(controllerSource.contains("FileURLPasteboard.copy(fileURL)"))
+    }
+
+    func testLibraryStateBadgeUsesTheSharedDerivedDeliveryState() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/LensLibraryView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("QuickAccessDeliveryState.derived(for: SavedLens("))
+        XCTAssertTrue(source.contains("case .needsReview: \"需复核\""))
+        XCTAssertTrue(source.contains("case .ready: \"可交付\""))
     }
 
     func testRecordingCardsOfferNativeShareAction() throws {

@@ -71,6 +71,11 @@ if [[ "$CONFIGURATION" == "release" ]]; then
 fi
 swift build "${SWIFT_BUILD_ARGUMENTS[@]}"
 BIN_DIR="$(swift build -c "$CONFIGURATION" --show-bin-path)"
+SOURCE_SNAPSHOT_SHA256="$("$SCRIPT_DIR/source-snapshot-digest.sh" "$PROJECT_DIR")"
+if [[ ! "$SOURCE_SNAPSHOT_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "Invalid source snapshot digest: $SOURCE_SNAPSHOT_SHA256" >&2
+    exit 65
+fi
 
 EXPECTED_APP_DIR="$PROJECT_DIR/Build/Lens.app"
 if [[ "$APP_DIR" != "$EXPECTED_APP_DIR" ]]; then
@@ -131,6 +136,7 @@ PLIST_PATH="$CONTENTS_DIR/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :LensBuildChannel string $BUILD_CHANNEL" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :LensBuiltAt string $BUILT_AT" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :LensGitCommit string $GIT_COMMIT" "$PLIST_PATH"
+/usr/libexec/PlistBuddy -c "Add :LensSourceSnapshotSHA256 string $SOURCE_SNAPSHOT_SHA256" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 15.2" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$PLIST_PATH"
 /usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "$PLIST_PATH"
@@ -162,5 +168,5 @@ else
 fi
 echo "Signing identity: $SIGNING_IDENTITY"
 echo "Timestamp mode: $CODESIGN_TIMESTAMP_MODE"
-echo "Build identity: $APP_VERSION ($BUILD_VERSION) · $BUILD_CHANNEL · ${GIT_COMMIT:0:12} · $BUILT_AT"
+echo "Build identity: $APP_VERSION ($BUILD_VERSION) · $BUILD_CHANNEL · ${GIT_COMMIT:0:12} · source ${SOURCE_SNAPSHOT_SHA256:0:12} · $BUILT_AT"
 echo "$APP_DIR"

@@ -5,22 +5,58 @@ import SwiftUI
 struct PermissionCenterView: View {
     @ObservedObject var model: PermissionCenterModel
     @ObservedObject var appModel: AppModel
+    @ObservedObject var updateModel: LensUpdateCheckModel
     let onShortcutsChanged: () -> Void
     var onShortcutCaptureActiveChange: (Bool) -> Void = { _ in }
     let onClose: () -> Void
+    let onManageStorage: () -> Void
+    let onCancelStorageMigration: () -> Void
+
+    init(
+        model: PermissionCenterModel,
+        appModel: AppModel,
+        updateModel: LensUpdateCheckModel = LensUpdateCheckModel(),
+        onShortcutsChanged: @escaping () -> Void,
+        onShortcutCaptureActiveChange: @escaping (Bool) -> Void = { _ in },
+        onClose: @escaping () -> Void,
+        onManageStorage: @escaping () -> Void = {},
+        onCancelStorageMigration: @escaping () -> Void = {}
+    ) {
+        self.model = model
+        self.appModel = appModel
+        self.updateModel = updateModel
+        self.onShortcutsChanged = onShortcutsChanged
+        self.onShortcutCaptureActiveChange = onShortcutCaptureActiveChange
+        self.onClose = onClose
+        self.onManageStorage = onManageStorage
+        self.onCancelStorageMigration = onCancelStorageMigration
+    }
     private let buildIdentity = BuildIdentity.current
+
+    private var storageRootDirectory: URL {
+        appModel.lensStorageRootDirectory.standardizedFileURL
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider().opacity(0.45)
+            AutomaticCameraZoomPreferenceCard(
+                scale: $appModel.automaticCameraZoomScale,
+                onRestoreDefault: {
+                    appModel.restoreDefaultAutomaticCameraZoomScale()
+                }
+            )
+            .padding(.top, LensSpacing.section)
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     shortcutsSection
                     recordingPreferencesSection
+                    storageSection
                     conversationInboxSection
                     permissionsSection
                     buildIdentitySection
+                    updatesSection
                     diagnosticsSection
                     privacyNote
                 }
@@ -221,6 +257,85 @@ struct PermissionCenterView: View {
         .accessibilityLabel("终端截屏文件夹，截图会覆盖保存为 latest.png 并复制路径")
     }
 
+    private var storageSection: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            sectionTitle("素材库存储", symbol: "externaldrive.fill")
+            VStack(alignment: .leading, spacing: 9) {
+                Text("录屏原片、成片、索引和可重建缓存都位于这个素材库根目录。迁移会先复制并校验，原目录会保留；录制或处理任务进行时会自动排队。")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(storageRootDirectory.path)
+                    .font(.system(size: LensType.micro, weight: .regular, design: .monospaced))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                    .accessibilityLabel("当前素材库根目录")
+                    .accessibilityValue(storageRootDirectory.path)
+                if let progress = appModel.storageMigrationProgress {
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .foregroundStyle(LensGlassPalette.accent)
+                                .accessibilityHidden(true)
+                            Text(storageMigrationPhaseTitle(progress.phase))
+                                .font(.system(size: 11, weight: .semibold))
+                            Spacer()
+                            Text("\(progress.completedChildren)/\(progress.totalChildren)")
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        ProgressView(value: progress.fraction)
+                            .progressViewStyle(.linear)
+                            .accessibilityLabel("素材库迁移进度")
+                            .accessibilityValue("\(Int(progress.fraction * 100))%")
+                        Button("取消迁移", action: onCancelStorageMigration)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .accessibilityLabel("取消素材库迁移")
+                            .accessibilityHint("保留原目录和已复制的暂存内容")
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("素材库迁移，\(storageMigrationPhaseTitle(progress.phase))")
+                }
+                HStack(spacing: 8) {
+                    Button("管理存储…", action: onManageStorage)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel("管理 Lens 素材库存储")
+                        .accessibilityHint("查看占用、清理白名单缓存或迁移到新的目录")
+                    Button("在 Finder 中打开") {
+                        try? FileManager.default.createDirectory(
+                            at: storageRootDirectory,
+                            withIntermediateDirectories: true
+                        )
+                        NSWorkspace.shared.open(storageRootDirectory)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("在 Finder 中打开素材库根目录")
+                }
+            }
+            .padding(LensSpacing.m)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func storageMigrationPhaseTitle(_ phase: LensStorageMigrationPhase) -> String {
+        switch phase {
+        case .copying:
+            "正在复制素材"
+        case .verifying:
+            "正在校验素材"
+        case .publishing:
+            "正在切换存储目录"
+        case .completed:
+            "素材迁移已完成"
+        }
+    }
+
     private func chooseConversationInboxDirectory() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -307,6 +422,86 @@ struct PermissionCenterView: View {
             .primary.opacity(0.04),
             in: RoundedRectangle(cornerRadius: LensGlassMetrics.cardCornerRadius, style: .continuous)
         )
+    }
+
+    private var updatesSection: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            sectionTitle("更新", symbol: "arrow.down.circle")
+            VStack(alignment: .leading, spacing: 9) {
+                Text("当前版本只有你点击检查更新时才会联网；不会在录制、渲染或未保存编辑期间强制重启。")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("未配置可信更新源时，检查会明确提示，且不会改动当前安装。")
+                    .font(.system(size: LensType.micro, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Toggle("自动检查更新（尚未开放）", isOn: .constant(false))
+                    .disabled(true)
+                    .accessibilityHint("当前版本仅支持手动检查更新")
+                HStack(spacing: 8) {
+                    Button(updateModel.isChecking ? "检查中…" : "检查更新") {
+                        Task { @MainActor in
+                            await updateModel.checkForUpdates()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(updateModel.isChecking)
+                    .accessibilityLabel("手动检查更新")
+                    if let downloadURL = updateModel.availableDownloadURL {
+                        Button("打开下载页") {
+                            NSWorkspace.shared.open(downloadURL)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .accessibilityLabel("打开更新下载页")
+                    }
+                }
+                if let statusMessage = updateModel.statusMessage {
+                    Label(
+                        statusMessage,
+                        systemImage: updateStatusSymbol
+                    )
+                    .font(.system(size: LensType.micro, weight: .semibold))
+                    .foregroundStyle(updateStatusColor)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let installationBlockMessage = updateModel.installationBlockMessage {
+                    Label(
+                        installationBlockMessage,
+                        systemImage: "pause.circle"
+                    )
+                    .font(.system(size: LensType.micro, weight: .semibold))
+                    .foregroundStyle(LensGlassPalette.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("更新安装限制：\(installationBlockMessage)")
+                }
+            }
+            .padding(LensSpacing.m)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .lensGlassSurface(role: .card, cornerRadius: LensGlassMetrics.cardCornerRadius)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("更新设置")
+    }
+
+    private var updateStatusSymbol: String {
+        switch updateModel.status {
+        case .idle: "info.circle"
+        case .checking: "arrow.triangle.2.circlepath"
+        case .available: "arrow.down.circle.fill"
+        case .upToDate: "checkmark.circle.fill"
+        case .failed: "xmark.circle.fill"
+        }
+    }
+
+    private var updateStatusColor: Color {
+        switch updateModel.status {
+        case .idle, .checking: .secondary
+        case .available, .upToDate: LensGlassPalette.success
+        case .failed: LensGlassPalette.recording
+        }
     }
 
     private var buildIdentitySection: some View {

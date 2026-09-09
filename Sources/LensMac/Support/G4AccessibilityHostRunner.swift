@@ -137,20 +137,25 @@ package enum G4AccessibilityHostRunner {
         screenshotWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
 
-        do {
-            try Data("ready".utf8).write(
-                to: configuration.readyMarkerURL,
-                options: .atomic
-            )
-            return true
-        } catch {
-            windows.forEach { $0.orderOut(nil) }
-            windows.removeAll()
-            playback.stop()
-            self.playback = nil
-            self.recordingModel = nil
-            return false
+        // The runtime AX audit must not start until the initial library query
+        // has completed off the main actor; otherwise it can inspect the
+        // temporary unfiltered card list and report a false failure.
+        Task { @MainActor in
+            await libraryModel.waitForFiltering()
+            do {
+                try Data("ready".utf8).write(
+                    to: configuration.readyMarkerURL,
+                    options: .atomic
+                )
+            } catch {
+                windows.forEach { $0.orderOut(nil) }
+                windows.removeAll()
+                playback.stop()
+                self.playback = nil
+                self.recordingModel = nil
+            }
         }
+        return true
     }
 
     private static func makeWindow<Content: View>(
@@ -165,6 +170,12 @@ package enum G4AccessibilityHostRunner {
             defer: false
         )
         window.title = title
+        // The host is intentionally a normal AX application. Explicitly
+        // expose each AppKit shell as a window so the runtime audit does not
+        // receive an application proxy for the window attribute.
+        window.setAccessibilityElement(true)
+        window.setAccessibilityRole(.window)
+        window.setAccessibilityLabel(title)
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: rootView)
         return window

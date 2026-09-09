@@ -16,6 +16,18 @@ final class QuickAccessViewTests: XCTestCase {
         XCTAssertTrue(source.contains("onRetry"))
     }
 
+    func testCancelledStateKeepsTheRawFileAndOffersContinueAction() throws {
+        let source = try String(
+            contentsOf: QuickAccessView.sourceURL,
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(source.contains("case cancelled"))
+        XCTAssertTrue(source.contains("isProcessingCancelled"))
+        XCTAssertTrue(source.contains("isProcessingCancelled ? \"继续生成\""))
+        XCTAssertTrue(source.contains("原始文件可拖出 · 可继续生成成片"))
+    }
+
     func testQuickAccessOffersNativeShareForARealDeliveryFile() throws {
         let source = try String(
             contentsOf: QuickAccessView.sourceURL,
@@ -25,6 +37,21 @@ final class QuickAccessViewTests: XCTestCase {
         XCTAssertTrue(source.contains("square.and.arrow.up"))
         XCTAssertTrue(source.contains("dragFileURL != nil"))
         XCTAssertTrue(source.contains("不会自动上传"))
+    }
+
+    func testRecordingShareDoesNotOfferAnUnverifiedPreviewAsTheCurrentMovie() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Sources/LensMac/UI/LensFileSharing.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("lens.manifest.state == .ready"))
+        XCTAssertTrue(source.contains("!QuickAccessFileTransfer.previewNeedsReview(for: lens)"))
+        XCTAssertTrue(source.contains("分享原始录屏"))
+        XCTAssertTrue(source.contains("分享 Lens 项目"))
     }
 
     func testQuickAccessPanelBecomesKeyForKeyboardShortcuts() throws {
@@ -208,11 +235,20 @@ final class QuickAccessViewTests: XCTestCase {
         let rawURL = packageURL.appendingPathComponent("raw/screen.mp4")
         let renderedURL = packageURL.appendingPathComponent("previews/share.mp4")
         let healthURL = packageURL.appendingPathComponent("diagnostics/recording-health.json")
+        let editPlanURL = packageURL.appendingPathComponent("edits/edit-plan.json")
         try FileManager.default.createDirectory(at: rawURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: renderedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: healthURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: editPlanURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("raw".utf8).write(to: rawURL)
         try Data("share".utf8).write(to: renderedURL)
+        let plan = AutoEditPlan()
+        try JSONEncoder().encode(plan).write(to: editPlanURL)
+        let renderedPlanDigest = try RenderedPlanIdentity.digest(
+            for: plan,
+            transcript: nil,
+            sourceURL: rawURL
+        )
         let verification = RenderedEffectVerificationReport(
             previewPlayable: true,
             previewDurationSeconds: 12,
@@ -236,6 +272,7 @@ final class QuickAccessViewTests: XCTestCase {
             cursorKeyframeCount: 0,
             clickPulseCount: 0,
             renderedEffectVerification: verification,
+            renderedPlanDigest: renderedPlanDigest,
             warnings: []
         )
         let encoder = JSONEncoder()
@@ -254,6 +291,7 @@ final class QuickAccessViewTests: XCTestCase {
                 assets: [
                     LensAsset(role: .screenVideo, relativePath: "raw/screen.mp4"),
                     LensAsset(role: .renderedVideo, relativePath: "previews/share.mp4"),
+                    LensAsset(role: .editPlan, relativePath: "edits/edit-plan.json"),
                     LensAsset(role: .recordingHealth, relativePath: "diagnostics/recording-health.json")
                 ]
             )
@@ -264,6 +302,20 @@ final class QuickAccessViewTests: XCTestCase {
             QuickAccessFileTransfer.suggestedFileName(for: lens, fileURL: renderedURL)
                 .hasSuffix(".mp4")
         )
+
+        // A positive effect report without the plan identity must not
+        // authorize an old/stale preview as the current deliverable.
+        var reportJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: healthURL),
+                options: []
+            ) as? [String: Any]
+        )
+        reportJSON.removeValue(forKey: "renderedPlanDigest")
+        try JSONSerialization.data(withJSONObject: reportJSON, options: [.sortedKeys])
+            .write(to: healthURL)
+        XCTAssertTrue(QuickAccessFileTransfer.previewNeedsReview(for: lens))
+        XCTAssertEqual(QuickAccessFileTransfer.bestFileURL(for: lens), rawURL)
     }
 
     func testProcessingRecordingSharesDurableRawFileInsteadOfStalePreview() throws {

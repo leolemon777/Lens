@@ -408,22 +408,98 @@ struct ActionCenterView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 12) {
-            Label("\(model.quickScreenshotShortcut.displayName)  截图", systemImage: "command")
-            Spacer()
-            Button {
-                onAction(.openSettings)
-            } label: {
-                Image(systemName: "gearshape")
+        VStack(spacing: LensSpacing.m) {
+            cameraZoomEntry
+            HStack(spacing: 12) {
+                Label("\(model.quickScreenshotShortcut.displayName)  截图", systemImage: "command")
+                Spacer()
+                Button {
+                    onAction(.openSettings)
+                } label: {
+                    Label("设置", systemImage: "gearshape")
+                }
+                .buttonStyle(.plain)
+                .help("设置")
+                .accessibilityLabel("打开设置与权限")
+                Text("Esc 关闭 · Command-Q 退出")
             }
-            .buttonStyle(.plain)
-            .help("设置")
-            .accessibilityLabel("打开设置与权限")
-            Text("Esc 关闭 · Command-Q 退出")
+            .font(.system(size: LensType.caption, weight: .medium))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, LensSpacing.xs)
         }
-        .font(.system(size: LensType.caption, weight: .medium))
-        .foregroundStyle(.tertiary)
-        .padding(.horizontal, LensSpacing.xs)
-        .padding(.top, 1)
+        .padding(.top, LensSpacing.s)
+    }
+
+    private var cameraZoomEntry: some View {
+        Button {
+            onAction(.openSettings)
+        } label: {
+            HStack(spacing: LensSpacing.m) {
+                Image(systemName: "camera.metering.center.weighted")
+                    .font(.system(size: LensIcon.large, weight: .semibold))
+                    .foregroundStyle(LensGlassPalette.accent)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        LensGlassPalette.accent.opacity(0.16),
+                        in: RoundedRectangle(
+                            cornerRadius: LensGlassMetrics.badgeCornerRadius,
+                            style: .continuous
+                        )
+                    )
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: LensSpacing.s) {
+                        Text("自动运镜推近")
+                            .font(.system(size: LensType.body, weight: .semibold))
+                        Text("调节这项")
+                            .font(.system(size: LensType.micro, weight: .bold))
+                            .foregroundStyle(LensGlassPalette.ink)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(LensGlassPalette.accent, in: Capsule())
+                    }
+                    Text(
+                        String(
+                            format: "当前 %.2f× · 点这里打开设置调节",
+                            model.automaticCameraZoomScale
+                        )
+                    )
+                    .font(.system(size: LensType.micro, weight: .medium))
+                    .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: LensSpacing.s)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: LensIcon.small, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, LensSpacing.card)
+            .padding(.vertical, LensSpacing.m)
+            .background(
+                LinearGradient(
+                    colors: [
+                        LensGlassPalette.accent.opacity(0.16),
+                        LensGlassPalette.accentDeep.opacity(0.07)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ),
+                in: RoundedRectangle(
+                    cornerRadius: LensGlassMetrics.cardCornerRadius,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: LensGlassMetrics.cardCornerRadius,
+                    style: .continuous
+                )
+                .strokeBorder(LensGlassPalette.accent.opacity(0.55), lineWidth: 1.4)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("自动运镜推近")
+        .accessibilityValue(String(format: "%.2f倍", model.automaticCameraZoomScale))
+        .accessibilityHint("打开设置调节点击后镜头放大多少")
     }
 }

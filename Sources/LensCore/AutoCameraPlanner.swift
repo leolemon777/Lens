@@ -28,7 +28,7 @@ public struct AutoCameraPlanner: Sendable {
         public var scrollSettleDelay: Double
 
         public init(
-            focusScale: Double = 1.60,
+            focusScale: Double = 1.28,
             focusLeadIn: Double = 0.30,
             zoomDuration: Double = 0.45,
             followWindow: Double = 3.40,

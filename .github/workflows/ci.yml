@@ -42,10 +42,20 @@ jobs:
           swift --version
 
       - name: 公开源码审计
-        run: bash Scripts/audit-public-source.sh
+        run: |
+          set -o pipefail
+          bash Scripts/audit-public-source.sh 2>&1 | tee audit-public-source.log
 
       - name: 源码快照摘要自测
         run: bash Scripts/test-source-snapshot-digest.sh
+
+      - name: 保存审计日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-source-audit-${{ github.run_id }}
+          path: audit-public-source.log
+          if-no-files-found: warn
 
   # 全量单元测试。 LensCoreTests 与 LensMacTests 都是纯逻辑测试，
   # 不触碰 ScreenCaptureKit / AVCaptureDevice / NSScreen，因此无需 TCC 授权即可在
@@ -96,9 +106,15 @@ jobs:
 
       - name: 覆盖率摘要
         run: |
+          test_bundle="$(find .build -type f -path '*/LensPackageTests.xctest/Contents/MacOS/LensPackageTests' -print -quit)"
+          profdata="$(find .build -type f -name 'default.profdata' -print -quit)"
+          if [[ -z "$test_bundle" || -z "$profdata" ]]; then
+            echo "未能动态定位 XCTest bundle 或覆盖率 profile。" >&2
+            exit 65
+          fi
           xcrun llvm-cov report \
-            .build/debug/LensPackageTests.xctest/Contents/MacOS/LensPackageTests \
-            -instr-profile default.profdata \
+            "$test_bundle" \
+            -instr-profile "$profdata" \
             Sources | tee coverage.log
           if ! grep -q '^TOTAL' coverage.log; then
             echo "未能生成 Sources 覆盖率 TOTAL 行。" >&2
@@ -125,6 +141,16 @@ jobs:
             echo "SwiftLint 未安装，跳过。"
           fi
 
+      - name: 保存单测与覆盖率日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-coverage-${{ github.run_id }}
+          path: |
+            swift-test.log
+            coverage.log
+          if-no-files-found: warn
+
   # Release 闸门：build-app.sh release 内部已带 -Xswiftc -warnings-as-errors，
   # 因此这里不再单独跑一次 swift build -c release。
   # 运行器上没有 Developer ID 证书，build-app.sh 会自动降级为 ad-hoc 签名（--sign -），
@@ -147,7 +173,9 @@ jobs:
         env:
           LENS_BUILD_CHANNEL: development
           LENS_GIT_COMMIT: ${{ github.sha }}
-        run: bash Scripts/build-app.sh release
+        run: |
+          set -o pipefail
+          bash Scripts/build-app.sh release 2>&1 | tee release-build.log
 
       - name: 校验签名与 bundle 结构
         run: codesign --verify --deep --strict --verbose=2 Build/Lens.app
@@ -158,3 +186,11 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist"
           /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$plist"
           /usr/libexec/PlistBuddy -c "Print :LensGitCommit" "$plist"
+
+      - name: 保存 Release 构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-build-${{ github.run_id }}
+          path: release-build.log
+          if-no-files-found: warn

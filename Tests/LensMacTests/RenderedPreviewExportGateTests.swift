@@ -116,6 +116,54 @@ final class RenderedPreviewExportGateTests: XCTestCase {
         )
     }
 
+    func testRenderedPlanDigestChangesWhenSourceAssetChanges() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rendered-plan-source-(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sourceURL = directory.appendingPathComponent("screen.mp4")
+        try Data("first-source".utf8).write(to: sourceURL)
+        let first = try RenderedPlanIdentity.digest(
+            for: AutoEditPlan(),
+            transcript: nil,
+            sourceURL: sourceURL
+        )
+        try Data("second-source".utf8).write(to: sourceURL, options: .atomic)
+        let second = try RenderedPlanIdentity.digest(
+            for: AutoEditPlan(),
+            transcript: nil,
+            sourceURL: sourceURL
+        )
+        XCTAssertNotEqual(first, second)
+    }
+
+    func testAsyncRenderedPlanDigestMatchesSynchronousIdentity() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("rendered-plan-async-(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sourceURL = directory.appendingPathComponent("screen.mp4")
+        try Data(repeating: 7, count: 32_768).write(to: sourceURL)
+
+        let synchronous = try RenderedPlanIdentity.digest(
+            for: AutoEditPlan(),
+            transcript: nil,
+            sourceURL: sourceURL
+        )
+        let asynchronous = try await RenderedPlanIdentity.digestAsync(
+            for: AutoEditPlan(),
+            transcript: nil,
+            sourceURL: sourceURL
+        )
+        XCTAssertEqual(asynchronous, synchronous)
+    }
+
     private func baseReport() -> RecordingHealthReport {
         RecordingHealthReport(
             requestedFramesPerSecond: 60,

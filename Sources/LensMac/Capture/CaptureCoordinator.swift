@@ -34,6 +34,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     private let onPerformanceMeasured: (String, [String: String]) -> Void
     private let onCaptureFailed: (String) -> Void
     private let onMagnifierHexCopied: (String) -> Void
+    private let storageWritesAllowed: () -> Bool
     private let captureService = ScreenCaptureService()
     private let ocrService = VisionOCRService()
     private let scrollingCapture = ScrollingCaptureSessionController()
@@ -56,6 +57,17 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     /// be readable from a nonisolated `deinit`.
     private nonisolated(unsafe) var applicationActivationObserver: NSObjectProtocol?
 
+    /// A storage migration must wait until an in-flight overlay or scrolling
+    /// capture has finished publishing its package. The migration queue cannot
+    /// infer this from processing task registries because a capture may not
+    /// have created its package yet.
+    var hasActiveStorageWrite: Bool {
+        isPreparingCapture
+            || isFinishingCapture
+            || !overlayWindows.isEmpty
+            || scrollingCapture.isActive
+    }
+
     private static let regionSnapRectCachePolicy = RegionSnapRectCachePolicy.standard
 
     init(
@@ -73,7 +85,8 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         onConversationInboxSaved: @escaping (ConversationInboxSnapshot, Bool) -> Void,
         onPerformanceMeasured: @escaping (String, [String: String]) -> Void,
         onCaptureFailed: @escaping (String) -> Void,
-        onMagnifierHexCopied: @escaping (String) -> Void
+        onMagnifierHexCopied: @escaping (String) -> Void,
+        storageWritesAllowed: @escaping () -> Bool = { true }
     ) {
         self.store = store
         self.model = model
@@ -90,6 +103,7 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
         self.onPerformanceMeasured = onPerformanceMeasured
         self.onCaptureFailed = onCaptureFailed
         self.onMagnifierHexCopied = onMagnifierHexCopied
+        self.storageWritesAllowed = storageWritesAllowed
 
         // Window enumeration can occasionally take several hundred milliseconds.
         // Warm it at utility priority so the first overlay can still snap instantly.
@@ -130,6 +144,10 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
 
     private func beginRegionCapture(purpose: CapturePurpose) {
         let requestStartedAt = ProcessInfo.processInfo.systemUptime
+        guard storageWritesAllowed() else {
+            onCaptureFailed("Lens 正在迁移素材库，请等待迁移完成后再开始新的捕获。")
+            return
+        }
         guard canBeginCapture(), ensurePermission() else { return }
         pendingPurpose = purpose
         let action: CaptureOverlayAction = switch purpose {
@@ -164,6 +182,10 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     }
 
     private func beginWindowSelection(purpose: CapturePurpose) {
+        guard storageWritesAllowed() else {
+            onCaptureFailed("Lens 正在迁移素材库，请等待迁移完成后再开始新的捕获。")
+            return
+        }
         guard canBeginCapture(), ensurePermission() else { return }
         pendingPurpose = purpose
         isPreparingCapture = true
@@ -206,6 +228,10 @@ final class CaptureCoordinator: CaptureOverlayViewDelegate {
     }
 
     func beginDisplayCapture() {
+        guard storageWritesAllowed() else {
+            onCaptureFailed("Lens 正在迁移素材库，请等待迁移完成后再开始新的捕获。")
+            return
+        }
         guard canBeginCapture(), ensurePermission() else { return }
         pendingPurpose = .screenshot
         guard let screen = screenUnderPointer(), let displayID = screen.displayID else {

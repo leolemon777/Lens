@@ -648,6 +648,7 @@ final class LensProjectStoreTests: XCTestCase {
 
         var legacyPlan = AutoEditPlan()
         legacyPlan.schemaVersion = "1.0"
+        legacyPlan.camera.zoomScale = 1.60
         legacyPlan.camera.generationStrength = .restrained
         legacyPlan.camera.keyframes = [
             AutoEditPlan.CameraKeyframe(

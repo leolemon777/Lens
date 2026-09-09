@@ -1,0 +1,606 @@
+{
+  "schemaVersion": 1,
+  "description": "脱敏本地整理标题固定评测集；人工参考字段用于回归，不代表真实用户研究。",
+  "cases": [
+    {
+      "id": "business-01",
+      "category": "business",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Production line improvement review. Reduce downtime this quarter.",
+      "expectedTitleContains": "Production line improvement",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "business-02",
+      "category": "business",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Production line improvement review. Reduce downtime this quarter.",
+      "expectedTitleContains": "Production line improvement",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "business-03",
+      "category": "business",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Production line improvement review. Reduce downtime this quarter.",
+      "expectedTitleContains": "Production line improvement",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "business-04",
+      "category": "business",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Production line improvement review. Reduce downtime this quarter.",
+      "expectedTitleContains": "Production line improvement",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "business-05",
+      "category": "business",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Production line improvement review. Reduce downtime this quarter.",
+      "expectedTitleContains": "Production line improvement",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "business-06",
+      "category": "business",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Production line improvement review. Reduce downtime this quarter.",
+      "expectedTitleContains": "Production line improvement",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "business-07",
+      "category": "business",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Production line improvement review. Reduce downtime this quarter.",
+      "expectedTitleContains": "Production line improvement",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "business-08",
+      "category": "business",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Production line improvement review. Reduce downtime this quarter.",
+      "expectedTitleContains": "Production line improvement",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "business-09",
+      "category": "business",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Production line improvement review. Reduce downtime this quarter.",
+      "expectedTitleContains": "Production line improvement",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "business-10",
+      "category": "business",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Production line improvement review. Reduce downtime this quarter.",
+      "expectedTitleContains": "Production line improvement",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "article-01",
+      "category": "article",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "How local indexing keeps a media library responsive. A practical guide.",
+      "expectedTitleContains": "How local indexing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "article-02",
+      "category": "article",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "How local indexing keeps a media library responsive. A practical guide.",
+      "expectedTitleContains": "How local indexing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "article-03",
+      "category": "article",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "How local indexing keeps a media library responsive. A practical guide.",
+      "expectedTitleContains": "How local indexing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "article-04",
+      "category": "article",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "How local indexing keeps a media library responsive. A practical guide.",
+      "expectedTitleContains": "How local indexing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "article-05",
+      "category": "article",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "How local indexing keeps a media library responsive. A practical guide.",
+      "expectedTitleContains": "How local indexing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "article-06",
+      "category": "article",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "How local indexing keeps a media library responsive. A practical guide.",
+      "expectedTitleContains": "How local indexing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "article-07",
+      "category": "article",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "How local indexing keeps a media library responsive. A practical guide.",
+      "expectedTitleContains": "How local indexing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "article-08",
+      "category": "article",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "How local indexing keeps a media library responsive. A practical guide.",
+      "expectedTitleContains": "How local indexing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "article-09",
+      "category": "article",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "How local indexing keeps a media library responsive. A practical guide.",
+      "expectedTitleContains": "How local indexing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "article-10",
+      "category": "article",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "How local indexing keeps a media library responsive. A practical guide.",
+      "expectedTitleContains": "How local indexing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "code-01",
+      "category": "code",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Fix playback timing in the render pipeline. Add a regression test.",
+      "expectedTitleContains": "Fix playback timing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "code-02",
+      "category": "code",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Fix playback timing in the render pipeline. Add a regression test.",
+      "expectedTitleContains": "Fix playback timing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "code-03",
+      "category": "code",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Fix playback timing in the render pipeline. Add a regression test.",
+      "expectedTitleContains": "Fix playback timing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "code-04",
+      "category": "code",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Fix playback timing in the render pipeline. Add a regression test.",
+      "expectedTitleContains": "Fix playback timing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "code-05",
+      "category": "code",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Fix playback timing in the render pipeline. Add a regression test.",
+      "expectedTitleContains": "Fix playback timing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "code-06",
+      "category": "code",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Fix playback timing in the render pipeline. Add a regression test.",
+      "expectedTitleContains": "Fix playback timing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "code-07",
+      "category": "code",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Fix playback timing in the render pipeline. Add a regression test.",
+      "expectedTitleContains": "Fix playback timing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "code-08",
+      "category": "code",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Fix playback timing in the render pipeline. Add a regression test.",
+      "expectedTitleContains": "Fix playback timing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "code-09",
+      "category": "code",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Fix playback timing in the render pipeline. Add a regression test.",
+      "expectedTitleContains": "Fix playback timing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "code-10",
+      "category": "code",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Fix playback timing in the render pipeline. Add a regression test.",
+      "expectedTitleContains": "Fix playback timing",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "table-01",
+      "category": "table",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Inventory variance 4.2 percent. Reconcile the receiving report.",
+      "expectedTitleContains": "Inventory variance",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "table-02",
+      "category": "table",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Inventory variance 4.2 percent. Reconcile the receiving report.",
+      "expectedTitleContains": "Inventory variance",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "table-03",
+      "category": "table",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Inventory variance 4.2 percent. Reconcile the receiving report.",
+      "expectedTitleContains": "Inventory variance",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "table-04",
+      "category": "table",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Inventory variance 4.2 percent. Reconcile the receiving report.",
+      "expectedTitleContains": "Inventory variance",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "table-05",
+      "category": "table",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Inventory variance 4.2 percent. Reconcile the receiving report.",
+      "expectedTitleContains": "Inventory variance",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "table-06",
+      "category": "table",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Inventory variance 4.2 percent. Reconcile the receiving report.",
+      "expectedTitleContains": "Inventory variance",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "table-07",
+      "category": "table",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Inventory variance 4.2 percent. Reconcile the receiving report.",
+      "expectedTitleContains": "Inventory variance",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "table-08",
+      "category": "table",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Inventory variance 4.2 percent. Reconcile the receiving report.",
+      "expectedTitleContains": "Inventory variance",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "table-09",
+      "category": "table",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "Inventory variance 4.2 percent. Reconcile the receiving report.",
+      "expectedTitleContains": "Inventory variance",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "table-10",
+      "category": "table",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "Inventory variance 4.2 percent. Reconcile the receiving report.",
+      "expectedTitleContains": "Inventory variance",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "multilingual-01",
+      "category": "multilingual",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "净水工厂改善项目，降低返工时间。记录现场结果。",
+      "expectedTitleContains": "净水工厂改善",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "multilingual-02",
+      "category": "multilingual",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "净水工厂改善项目，降低返工时间。记录现场结果。",
+      "expectedTitleContains": "净水工厂改善",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "multilingual-03",
+      "category": "multilingual",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "净水工厂改善项目，降低返工时间。记录现场结果。",
+      "expectedTitleContains": "净水工厂改善",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "multilingual-04",
+      "category": "multilingual",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "净水工厂改善项目，降低返工时间。记录现场结果。",
+      "expectedTitleContains": "净水工厂改善",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "multilingual-05",
+      "category": "multilingual",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "净水工厂改善项目，降低返工时间。记录现场结果。",
+      "expectedTitleContains": "净水工厂改善",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "multilingual-06",
+      "category": "multilingual",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "净水工厂改善项目，降低返工时间。记录现场结果。",
+      "expectedTitleContains": "净水工厂改善",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "multilingual-07",
+      "category": "multilingual",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "净水工厂改善项目，降低返工时间。记录现场结果。",
+      "expectedTitleContains": "净水工厂改善",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "multilingual-08",
+      "category": "multilingual",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "净水工厂改善项目，降低返工时间。记录现场结果。",
+      "expectedTitleContains": "净水工厂改善",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "multilingual-09",
+      "category": "multilingual",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "净水工厂改善项目，降低返工时间。记录现场结果。",
+      "expectedTitleContains": "净水工厂改善",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "multilingual-10",
+      "category": "multilingual",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "净水工厂改善项目，降低返工时间。记录现场结果。",
+      "expectedTitleContains": "净水工厂改善",
+      "expectsSourceDateFallback": false
+    },
+    {
+      "id": "weak-01",
+      "category": "weak-content",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "14:32\n/Users/demo/Lens.swift\nFile\nEdit",
+      "expectedTitleContains": "截图 · 2025-08-16",
+      "expectsSourceDateFallback": true
+    },
+    {
+      "id": "weak-02",
+      "category": "weak-content",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "14:32\n/Users/demo/Lens.swift\nFile\nEdit",
+      "expectedTitleContains": "录屏 · 2025-08-16",
+      "expectsSourceDateFallback": true
+    },
+    {
+      "id": "weak-03",
+      "category": "weak-content",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "14:32\n/Users/demo/Lens.swift\nFile\nEdit",
+      "expectedTitleContains": "截图 · 2025-08-16",
+      "expectsSourceDateFallback": true
+    },
+    {
+      "id": "weak-04",
+      "category": "weak-content",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "14:32\n/Users/demo/Lens.swift\nFile\nEdit",
+      "expectedTitleContains": "录屏 · 2025-08-16",
+      "expectsSourceDateFallback": true
+    },
+    {
+      "id": "weak-05",
+      "category": "weak-content",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "14:32\n/Users/demo/Lens.swift\nFile\nEdit",
+      "expectedTitleContains": "截图 · 2025-08-16",
+      "expectsSourceDateFallback": true
+    },
+    {
+      "id": "weak-06",
+      "category": "weak-content",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "14:32\n/Users/demo/Lens.swift\nFile\nEdit",
+      "expectedTitleContains": "录屏 · 2025-08-16",
+      "expectsSourceDateFallback": true
+    },
+    {
+      "id": "weak-07",
+      "category": "weak-content",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "14:32\n/Users/demo/Lens.swift\nFile\nEdit",
+      "expectedTitleContains": "截图 · 2025-08-16",
+      "expectsSourceDateFallback": true
+    },
+    {
+      "id": "weak-08",
+      "category": "weak-content",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "14:32\n/Users/demo/Lens.swift\nFile\nEdit",
+      "expectedTitleContains": "录屏 · 2025-08-16",
+      "expectsSourceDateFallback": true
+    },
+    {
+      "id": "weak-09",
+      "category": "weak-content",
+      "kind": "screenshot",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "截图 2025年8月16日 05:01",
+      "ocrText": "14:32\n/Users/demo/Lens.swift\nFile\nEdit",
+      "expectedTitleContains": "截图 · 2025-08-16",
+      "expectsSourceDateFallback": true
+    },
+    {
+      "id": "weak-10",
+      "category": "weak-content",
+      "kind": "recording",
+      "createdAt": "2025-08-16T00:00:00Z",
+      "manifestTitle": "录屏 2025年8月16日 05:01",
+      "ocrText": "14:32\n/Users/demo/Lens.swift\nFile\nEdit",
+      "expectedTitleContains": "录屏 · 2025-08-16",
+      "expectsSourceDateFallback": true
+    }
+  ]
+}

@@ -1,5 +1,62 @@
 import Foundation
 
+public struct LensLibrarySearchFields: Codable, Equatable, Sendable {
+    public let title: String
+    public let ocr: String
+    public let transcript: String
+    public let tags: String
+    public let summary: String
+
+    public init(
+        title: String,
+        ocr: String,
+        transcript: String,
+        tags: String,
+        summary: String
+    ) {
+        self.title = Self.normalize(title)
+        self.ocr = Self.normalize(ocr)
+        self.transcript = Self.normalize(transcript)
+        self.tags = Self.normalize(tags)
+        self.summary = Self.normalize(summary)
+    }
+
+    public init(
+        manifest: LensManifest,
+        ocrText: String?,
+        transcriptText: String?,
+        insights: LensInsightsDocument?
+    ) {
+        self.init(
+            title: manifest.title,
+            ocr: ocrText ?? "",
+            transcript: transcriptText ?? "",
+            tags: [
+                insights?.tags.joined(separator: " ") ?? "",
+                insights?.resolvedTags.joined(separator: " ") ?? ""
+            ].joined(separator: " "),
+            summary: [
+                insights?.suggestedTitle ?? "",
+                insights?.resolvedSummary ?? "",
+                insights?.resolvedTitle ?? "",
+                insights?.keyPoints.joined(separator: " ") ?? "",
+                insights?.chapters.map(\.title).joined(separator: " ") ?? ""
+            ].joined(separator: " ")
+        )
+    }
+
+    public var combined: String {
+        [title, ocr, transcript, tags, summary].joined(separator: "\n")
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value.folding(
+            options: [.caseInsensitive, .diacriticInsensitive],
+            locale: .current
+        ).lowercased()
+    }
+}
+
 public struct LensLibraryEntry: Identifiable, Equatable, Sendable {
     public var id: UUID { manifest.id }
 
@@ -10,6 +67,7 @@ public struct LensLibraryEntry: Identifiable, Equatable, Sendable {
     public let ocrText: String?
     public let transcriptText: String?
     public let insights: LensInsightsDocument?
+    public let searchFields: LensLibrarySearchFields
 
     public init(
         packageURL: URL,
@@ -18,7 +76,8 @@ public struct LensLibraryEntry: Identifiable, Equatable, Sendable {
         displayAssetURL: URL,
         ocrText: String?,
         transcriptText: String? = nil,
-        insights: LensInsightsDocument? = nil
+        insights: LensInsightsDocument? = nil,
+        searchFields: LensLibrarySearchFields? = nil
     ) {
         self.packageURL = packageURL
         self.manifest = manifest
@@ -27,29 +86,16 @@ public struct LensLibraryEntry: Identifiable, Equatable, Sendable {
         self.ocrText = ocrText
         self.transcriptText = transcriptText
         self.insights = insights
+        self.searchFields = searchFields ?? LensLibrarySearchFields(
+            manifest: manifest,
+            ocrText: ocrText,
+            transcriptText: transcriptText,
+            insights: insights
+        )
     }
 
     public var searchableText: String {
-        var values: [String] = [
-            manifest.title,
-            ocrText ?? "",
-            transcriptText ?? ""
-        ]
-        if let insights {
-            values.append(contentsOf: [
-                insights.suggestedTitle,
-                insights.summary,
-                insights.tags.joined(separator: " "),
-                insights.resolvedTitle,
-                insights.resolvedSummary,
-                insights.resolvedTags.joined(separator: " "),
-                insights.keyPoints.joined(separator: " "),
-                insights.chapters.map(\.title).joined(separator: " ")
-            ])
-        }
-        return values
-            .joined(separator: "\n")
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        searchFields.combined
     }
 }
 
@@ -158,16 +204,12 @@ public enum LensLibrarySearch {
     ) -> Int {
         guard !queryGroups.isEmpty else { return 0 }
 
-        let title = normalize(entry.manifest.title)
-        let ocr = normalize(entry.ocrText ?? "")
-        let transcript = normalize(entry.transcriptText ?? "")
-        let insights = entry.insights
-        let tags = normalize(insights?.resolvedTags.joined(separator: " ") ?? "")
-        let summary = normalize([
-            insights?.resolvedSummary ?? "",
-            insights?.keyPoints.joined(separator: " ") ?? "",
-            insights?.chapters.map(\.title).joined(separator: " ") ?? ""
-        ].joined(separator: " "))
+        let fields = entry.searchFields
+        let title = fields.title
+        let ocr = fields.ocr
+        let transcript = fields.transcript
+        let tags = fields.tags
+        let summary = fields.summary
 
         var result = 0
         if !query.isEmpty {

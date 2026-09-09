@@ -81,6 +81,9 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertTrue(source.contains("快捷键还不能用"))
         XCTAssertTrue(source.contains("Command-Q 退出"))
         XCTAssertTrue(source.contains("打开最近记录"))
+        XCTAssertTrue(source.contains("自动运镜推近"))
+        XCTAssertTrue(source.contains("点这里打开设置调节"))
+        XCTAssertTrue(source.contains("cameraZoomEntry"))
         XCTAssertTrue(source.contains(".accessibilityValue(action.subtitle)"))
         XCTAssertTrue(source.contains(".accessibilityHint(action.accessibilityHint)"))
         XCTAssertFalse(source.contains("内测版 A"))
@@ -144,6 +147,15 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertTrue(source.contains(".accessibilityHint(startButtonHint)"))
         XCTAssertTrue(source.contains("先在上方选择一个窗口"))
         XCTAssertTrue(source.contains("按下后以当前来源和音轨设置开始录制"))
+        XCTAssertTrue(source.contains("AutomaticCameraZoomPreferenceCard"))
+        XCTAssertTrue(source.contains("automaticCameraZoomScale"))
+        let cardIndex = try XCTUnwrap(source.range(of: "AutomaticCameraZoomPreferenceCard")?.lowerBound)
+        let scrollIndex = try XCTUnwrap(source.range(of: "ScrollView")?.lowerBound)
+        XCTAssertLessThan(
+            cardIndex,
+            scrollIndex,
+            "录屏设置打开后运镜调节必须立刻可见，不能排在来源和成片模式后面"
+        )
     }
 
     func testCaptureOverlayExplainsScreenshotAndRecordingIntentsSeparately() {
@@ -170,6 +182,7 @@ final class ActionCenterViewTests: XCTestCase {
         XCTAssertEqual(quitItem.keyEquivalent, "q")
         XCTAssertEqual(quitItem.keyEquivalentModifierMask, [.command])
         XCTAssertTrue(quitItem.target === target)
+        XCTAssertTrue(applicationMenu.items.contains { $0.title == "设置…" })
 
         let editMenu = try XCTUnwrap(
             mainMenu.items.first { $0.title == "编辑" }?.submenu

@@ -2,6 +2,7 @@ import AppKit
 @preconcurrency import AVFoundation
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import Darwin
 import LensCore
 
 enum AutoPreviewRendererError: LocalizedError {
@@ -13,6 +14,58 @@ enum AutoPreviewRendererError: LocalizedError {
         case .exportSessionUnavailable: "无法创建自动成片导出任务。"
         case .cursorImageUnavailable: "无法读取系统光标图像。"
         }
+    }
+}
+
+struct AutoPreviewRenderMetrics: Equatable, Sendable {
+    let encodePassCount: Int
+    let elapsedMilliseconds: Double
+    let peakPhysicalFootprintBytes: UInt64
+}
+
+private final class AutoPreviewResourceSampler: @unchecked Sendable {
+    private let lock = NSLock()
+    private var peakPhysicalFootprintBytes: UInt64 = 0
+    private var samplingTask: Task<Void, Never>?
+
+    func start() {
+        sample()
+        samplingTask = Task.detached(priority: .utility) { [weak self] in
+            while !Task.isCancelled {
+                self?.sample()
+                do {
+                    try await Task.sleep(for: .milliseconds(100))
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
+    func stop() -> UInt64 {
+        samplingTask?.cancel()
+        samplingTask = nil
+        sample()
+        lock.lock()
+        defer { lock.unlock() }
+        return peakPhysicalFootprintBytes
+    }
+
+    private func sample() {
+        guard let footprint = Self.currentPhysicalFootprintBytes() else { return }
+        lock.lock()
+        peakPhysicalFootprintBytes = max(peakPhysicalFootprintBytes, footprint)
+        lock.unlock()
+    }
+
+    private static func currentPhysicalFootprintBytes() -> UInt64? {
+        var information = rusage_info_v4()
+        let status = withUnsafeMutablePointer(to: &information) { pointer in
+            pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
+                proc_pid_rusage(getpid(), RUSAGE_INFO_V4, $0)
+            }
+        }
+        return status == 0 ? information.ri_phys_footprint : nil
     }
 }
 
@@ -46,8 +99,14 @@ private struct CursorRenderAssets: @unchecked Sendable {
 @MainActor
 final class AutoPreviewRenderer {
     private(set) var lastPresenterCameraError: Error?
+    private(set) var lastRenderMetrics = AutoPreviewRenderMetrics(
+        encodePassCount: 0,
+        elapsedMilliseconds: 0,
+        peakPhysicalFootprintBytes: 0
+    )
     private var cachedCursorAssets: CursorRenderAssets?
     private var cachedClickRingImage: CIImage?
+    private var renderEncodePassCount = 0
 
     /// Source-pixel cursor size shared by final rendering and the live editor.
     /// Retina captures are commonly 2560–3840 px wide; the previous 1.2% rule
@@ -68,6 +127,20 @@ final class AutoPreviewRenderer {
         progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> URL {
         lastPresenterCameraError = nil
+        renderEncodePassCount = 0
+        let renderStartedAt = ProcessInfo.processInfo.systemUptime
+        let resourceSampler = AutoPreviewResourceSampler()
+        resourceSampler.start()
+        defer {
+            lastRenderMetrics = AutoPreviewRenderMetrics(
+                encodePassCount: renderEncodePassCount,
+                elapsedMilliseconds: max(
+                    ProcessInfo.processInfo.systemUptime - renderStartedAt,
+                    0
+                ) * 1_000,
+                peakPhysicalFootprintBytes: resourceSampler.stop()
+            )
+        }
         let availableCameraURL = cameraURL.flatMap {
             FileManager.default.fileExists(atPath: $0.path) ? $0 : nil
         }
@@ -113,6 +186,7 @@ final class AutoPreviewRenderer {
             nil
         }
         if let transitionedInputURL, let timeline = plan.timeline {
+            renderEncodePassCount += 1
             _ = try await VideoTimelineCompositionBuilder().export(
                 inputURL: inputURL,
                 timeline: timeline,
@@ -159,6 +233,7 @@ final class AutoPreviewRenderer {
             progress: progress.map { Self.scaledProgress($0, offset: 0, scale: 0.5) }
         )
         do {
+            renderEncodePassCount += 1
             return try await PresenterCameraRenderer().render(
                 screenURL: temporaryURL,
                 cameraURL: cameraURL,
@@ -250,6 +325,7 @@ final class AutoPreviewRenderer {
         mixedAudioURL: URL? = nil,
         progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> URL {
+        renderEncodePassCount += 1
         let sourceAsset: AVAsset
         if appliesTimeline, let timeline = plan.timeline {
             sourceAsset = try await VideoTimelineCompositionBuilder().build(

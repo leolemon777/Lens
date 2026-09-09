@@ -321,6 +321,32 @@ final class ScreenshotAnnotationEditorModelTests: XCTestCase {
         XCTAssertTrue(model.pendingRedactionSuggestions.isEmpty)
     }
 
+    func testOpaqueRedactionUsesBlackFilledRectangleAndRemainsUndoable() throws {
+        let suggestion = ScreenshotAnnotation(
+            id: UUID(),
+            kind: .pixelate,
+            bounds: LensRect(x: 0.12, y: 0.24, width: 0.28, height: 0.05)
+        )
+        let model = ScreenshotAnnotationEditorModel(
+            sourceDimensions: LensDimensions(width: 1_000, height: 600),
+            suggestedRedactions: [suggestion]
+        )
+
+        model.applySuggestedRedaction(suggestion.id, application: .opaque)
+
+        let annotation = try XCTUnwrap(model.annotations.first)
+        XCTAssertEqual(annotation.id, suggestion.id)
+        XCTAssertEqual(annotation.kind, .rectangle)
+        XCTAssertEqual(annotation.style.color, .black)
+        XCTAssertEqual(annotation.style.fillColor, .black)
+        XCTAssertEqual(annotation.style.fillColor?.alpha, 1)
+        XCTAssertEqual(annotation.style.lineWidth, 0)
+
+        model.undo()
+        XCTAssertTrue(model.annotations.isEmpty)
+        XCTAssertTrue(model.pendingRedactionSuggestions.isEmpty)
+    }
+
     private func makeModel() -> ScreenshotAnnotationEditorModel {
         ScreenshotAnnotationEditorModel(
             sourceDimensions: LensDimensions(width: 1_000, height: 600)

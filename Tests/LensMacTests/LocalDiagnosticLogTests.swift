@@ -88,4 +88,20 @@ final class LocalDiagnosticLogTests: XCTestCase {
         XCTAssertFalse(summary.contains("/Users/"))
         XCTAssertFalse(summary.contains("secret transcript"))
     }
+
+    func testFailureLogUsesOnlySanitizedErrorMetadata() {
+        let error = NSError(
+            domain: "Lens.Test / private path",
+            code: 7,
+            userInfo: [NSLocalizedDescriptionKey: "/Users/example/secret transcript"]
+        )
+
+        XCTAssertEqual(
+            LensFailureLog.safeErrorMetadata(error),
+            ["errorDomain": "Lens.Test___private_path", "errorCode": "7"]
+        )
+        XCTAssertFalse(
+            LensFailureLog.safeErrorMetadata(error).values.contains("secret transcript")
+        )
+    }
 }

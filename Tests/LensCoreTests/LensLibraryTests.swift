@@ -191,6 +191,68 @@ final class LensLibraryTests: XCTestCase {
         XCTAssertFalse(LensLibrarySearch.usesIntentExpansion(for: "roadmap"))
     }
 
+    func testFixedScaleSearchBenchmarkKeepsQueryWorkBounded() {
+        var measurements: [String: Double] = [:]
+        for count in [100, 1_000, 5_000] {
+            let entries = (0..<count).map { index in
+                let id = UUID()
+                let package = URL(fileURLWithPath: "/tmp/LensBenchmark/\(id).lens")
+                let manifest = LensManifest(
+                    id: id,
+                    kind: index.isMultiple(of: 2) ? .screenshot : .recording,
+                    title: index.isMultiple(of: 17)
+                        ? "Roadmap (index)"
+                        : "资料 (index)",
+                    dimensions: LensDimensions(width: 1_280, height: 720),
+                    assets: [LensAsset(
+                        role: index.isMultiple(of: 2) ? .screenshot : .screenVideo,
+                        relativePath: index.isMultiple(of: 2)
+                            ? "raw/screenshot.png"
+                            : "raw/screen.mp4"
+                    )]
+                )
+                return LensLibraryEntry(
+                    packageURL: package,
+                    manifest: manifest,
+                    primaryAssetURL: package.appendingPathComponent("raw/screen.mp4"),
+                    displayAssetURL: package.appendingPathComponent("raw/screen.mp4"),
+                    ocrText: index.isMultiple(of: 11)
+                        ? "roadmap checklist (index)"
+                        : nil
+                )
+            }
+
+            _ = LensLibrarySearch.filter(entries, query: "roadmap", filter: .all)
+            var durations: [Double] = []
+            for _ in 0..<20 {
+                let start = DispatchTime.now().uptimeNanoseconds
+                let result = LensLibrarySearch.filter(
+                    entries,
+                    query: "roadmap",
+                    filter: .all
+                )
+                let end = DispatchTime.now().uptimeNanoseconds
+                XCTAssertFalse(result.isEmpty)
+                durations.append(Double(end - start) / 1_000_000)
+            }
+            durations.sort()
+            let p95 = durations[min(durations.count - 1, Int(Double(durations.count) * 0.95))]
+            measurements[String(count)] = p95
+            if count == 1_000 {
+                XCTAssertLessThanOrEqual(
+                    p95,
+                    150,
+                    "1000 条素材的本地查询 P95 应保持在计划门槛内"
+                )
+            }
+        }
+        let encoded = measurements
+            .sorted { Int($0.key)! < Int($1.key)! }
+            .map { "\($0.key):\(String(format: "%.3f", $0.value))ms" }
+            .joined(separator: ", ")
+        print("L17 fixed-scale search p95 — \(encoded)")
+    }
+
     func testPersistentIndexInvalidatesWhenOCRChangesOutsideTheManifest() throws {
         let root = temporaryRoot()
         defer { try? FileManager.default.removeItem(at: root) }

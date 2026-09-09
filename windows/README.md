@@ -87,4 +87,10 @@ cd windows && cargo test
 
 ## 状态
 
-当前仅有目录规划与契约文档，尚无可编译代码。`lens-format` 的实现等待 Rust 工具链就位后开始——在能实际编译和跑测试之前不写投机代码。
+里程碑 0 的 `lens-format` 已建立：它读取并经过校验写入 `schema-registry.json` 所描述的文档，拒绝未来 schema、路径越界和符号链接，使用同目录暂存提交，并提供黄金文件与读写回归测试。当前这台 macOS 开发机没有 Rust/Cargo 工具链，因此 `cargo test` 尚未执行；拿到 Rust 工具链后，先运行：
+
+```bash
+cd windows && cargo test
+```
+
+Windows 捕获、渲染、编辑器和更新器仍需在 Windows 实机完成，不能用 macOS 编译结果代替。

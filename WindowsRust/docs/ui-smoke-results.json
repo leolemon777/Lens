@@ -1,0 +1,70 @@
+{
+  "scope": "Browser tests using a mocked Tauri bridge. NOT Windows capture tests.",
+  "results": [
+    {
+      "name": "Browser-only preview displays warning and refuses recording",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "Native-bridge source list is bound to the selector",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "Region mode prevents recording until a crop is selected",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "Start forwards real option shape and prevents duplicate commands",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "Pause and resume reflect backend states rather than local timers",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "Close protection event is visibly presented",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "Stop returns to idle after the mocked processing response",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "Screenshot button invokes native command, not browser getDisplayMedia",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "Capture errors are surfaced and do not show fake success",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "Library titles are escaped as text and literal search filters results",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "No unhandled browser exceptions in the normal interaction flow",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "Missing FFmpeg disables audio and pause but permits silent single-segment recording",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    },
+    {
+      "name": "Region overlay converts CSS drag bounds to physical pixels",
+      "status": "passed",
+      "scope": "mocked frontend / browser only"
+    }
+  ]
+}

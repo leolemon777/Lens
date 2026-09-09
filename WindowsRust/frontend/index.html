@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lens Windows</title><link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.mjs"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#capture" aria-label="Lens 首页"><span class="brand-icon"><i></i></span><span>Lens<span class="brand-platform">WINDOWS</span></span></a>
+      <nav aria-label="主导航">
+        <button class="nav-item selected" data-page="capture"><span class="nav-symbol">◉</span>捕获工作台</button>
+        <button class="nav-item" data-page="library"><span class="nav-symbol">▦</span>素材库<span id="library-count" class="count">0</span></button>
+        <button class="nav-item" data-page="help"><span class="nav-symbol">⌘</span>使用与诊断</button>
+      </nav>
+      <div class="sidebar-bottom"><span class="local-dot"></span>媒体保存在本机<div class="version" id="version">Rust · Windows 原生捕获</div></div>
+    </aside>
+    <main>
+      <div id="preview-banner" class="notice" hidden>仅界面预览 · 未连接 Windows 录制引擎，不能在浏览器中录屏</div>
+      <header class="page-header"><div><p class="eyebrow">YOUR MOMENT, IN FOCUS</p><h1 id="page-title">把此刻，记录下来。</h1></div><button id="open-library" class="button subtle">打开保存目录 <span>↗</span></button></header>
+      <section id="page-capture" class="page active">
+        <div class="capture-grid">
+          <div class="left-column">
+            <article class="card source-card">
+              <div class="card-heading"><h2>捕获来源</h2><button class="text-button" id="refresh-sources" aria-label="刷新捕获来源">↻ 刷新</button></div>
+              <div class="segmented" role="group" aria-label="来源类型"><button data-mode="display" class="selected">显示器</button><button data-mode="window">窗口</button><button data-mode="region">区域</button></div>
+              <label for="source" class="sr-only">选择捕获来源</label><select id="source"><option value="">正在读取可用来源…</option></select>
+              <div class="source-stage" id="source-stage">
+                <div class="stage-grid"></div><div class="display-outline"><div class="mini-titlebar"><i></i><i></i><i></i></div><div class="lens-mark"><span></span><i></i></div><div class="mini-line"></div><div class="mini-line short"></div></div>
+                <div class="stage-caption"><span class="selection-dot"></span><span id="source-caption">选择一个显示器或窗口</span></div>
+                <div class="stage-note">来源示意 · 录制画面不会经过前端</div>
+              </div>
+              <div class="source-footer"><span id="source-details">—</span><div id="crop-actions" hidden><button class="text-button" id="pick-region">重新框选</button></div><span class="tag">SDR</span></div>
+            </article>
+            <article class="card audio-card">
+              <div class="card-heading"><h2>声音与画面</h2><span class="small-muted">各轨独立保存</span></div>
+              <div class="option-row"><div class="option-icon">♫</div><div class="option-copy"><strong>系统声音</strong><p>记录电脑正在播放的声音</p></div><div class="meter" aria-label="系统声音电平"><i id="system-meter"></i></div><label class="switch"><input id="system-audio" type="checkbox" aria-label="系统声音"><span></span></label></div>
+              <div class="option-row"><div class="option-icon mic-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 11v2a6 6 0 0 0 12 0v-2M12 19v3M8 22h8"/></svg></div><div class="option-copy"><strong>麦克风</strong><p>保留独立的讲解音轨</p></div><div class="meter" aria-label="麦克风电平"><i id="mic-meter"></i></div><label class="switch"><input id="microphone" type="checkbox" aria-label="麦克风"><span></span></label></div>
+              <div class="option-row"><div class="option-icon">↖</div><div class="option-copy"><strong>显示鼠标</strong><p>将系统光标录入画面</p></div><label class="switch"><input id="cursor" type="checkbox" checked aria-label="显示鼠标"><span></span></label></div>
+              <p class="media-warning" id="media-warning" hidden>声音混合与分段合并需要 FFmpeg。运行源码包中的 Prepare-Media.cmd，随后重新构建。</p>
+            </article>
+          </div>
+          <div class="right-column">
+            <article class="card record-card">
+              <div class="card-heading"><h2>录制设置</h2><span class="tag">本地</span></div>
+              <label class="field-label" for="record-title">项目名称</label><input id="record-title" maxlength="120" placeholder="未命名录制" autocomplete="off">
+              <div class="frame-setting"><div><span class="field-label">帧率</span><p>编码输出目标</p></div><div class="segmented compact" role="group" aria-label="帧率"><button data-fps="30" class="selected">30</button><button data-fps="60">60</button></div></div>
+              <div class="record-clock"><div class="state-badge" id="state-badge"><i></i><span id="phase-label">准备就绪</span></div><div id="elapsed" class="elapsed" aria-label="录制时长">00:00</div><p>暂停时间不计入成片</p></div>
+              <button id="record" class="button record-button"><span class="record-disc"></span>开始录制</button>
+              <div class="record-actions" id="record-actions" hidden><button id="pause" class="button outline">暂停</button><button id="stop" class="button stop-button">■ 停止保存</button></div>
+              <button id="screenshot" class="button screenshot-button"><span>⌗</span> 保存一张截图</button>
+              <p class="shortcut-hint">Ctrl + Shift + F9 暂停 / 继续<br>Ctrl + Shift + F10 停止</p>
+            </article>
+            <article class="storage-card"><div><span class="storage-icon">▤</span><strong>开放的 .lens 项目</strong></div><p>原始素材、独立音轨与成片分开保存。</p><div class="storage-info"><span>磁盘可用</span><strong id="free-space">—</strong></div></article>
+          </div>
+        </div>
+        <footer class="status-line" role="status"><span id="status-dot"></span><span id="status-message">选择来源，开始记录</span></footer>
+      </section>
+      <section id="page-library" class="page" hidden>
+        <div class="library-toolbar"><label class="search-box"><span>⌕</span><input id="search" type="search" placeholder="搜索项目名称" aria-label="搜索项目名称"></label><button id="refresh-library" class="button subtle">↻ 刷新素材库</button></div>
+        <div id="project-grid" class="project-grid"></div>
+        <div id="empty-library" class="empty-state"><div class="empty-icon">▦</div><h2>你的第一条记录，从这里开始。</h2><p>截图与录屏会保存在本机，出现在这个素材库里。</p><button class="button outline" data-go-capture>去录制</button></div>
+      </section>
+      <section id="page-help" class="page" hidden>
+        <article class="card help-card"><h2>Windows 首版 · 使用说明</h2><p>先选择显示器、窗口或区域，确认声音开关，然后开始录制。停止后等待“已保存”，再关闭应用。</p><div class="help-grid"><div><h3>保存位置</h3><code id="save-path">等待 Windows 引擎连接</code><p>成片：previews/preview.mp4<br>原始分段：raw/segments/<br>项目清单：manifest.json</p></div><div><h3>当前范围</h3><p>屏幕 / 窗口 / 区域录制、PNG 截图、系统声与麦克风、分段暂停、基础素材库。</p><p>摄像头、运镜、时间线编辑、字幕与 OCR 尚未迁移。</p></div><div><h3>后处理组件</h3><p id="media-status">正在检查…</p><p>无组件时仍可无声录制单段视频、截图。声音和分段合成需要 FFmpeg。</p></div><div><h3>遇到异常</h3><p>先保留整个 .lens 文件夹。异常项目可重新合成已完成分段，正在写入的损坏 MP4 不保证恢复。</p><p>请先用短视频确认画面方向、声音和同步，再录制重要内容。</p></div></div></article>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="alert" hidden></div>
+  <dialog id="viewer"><div class="viewer-heading"><h2 id="viewer-title">预览</h2><button id="close-viewer" aria-label="关闭预览">×</button></div><div id="viewer-media"></div></dialog>
+</body>
+</html>

@@ -1,0 +1,148 @@
+TAP version 13
+# Subtest: clock formats zero
+ok 1 - clock formats zero
+  ---
+  duration_ms: 0.992259
+  type: 'test'
+  ...
+# Subtest: clock formats hours without losing minutes
+ok 2 - clock formats hours without losing minutes
+  ---
+  duration_ms: 0.245568
+  type: 'test'
+  ...
+# Subtest: clock rejects nonfinite values
+ok 3 - clock rejects nonfinite values
+  ---
+  duration_ms: 0.105963
+  type: 'test'
+  ...
+# Subtest: clock clamps negative values
+ok 4 - clock clamps negative values
+  ---
+  duration_ms: 0.118464
+  type: 'test'
+  ...
+# Subtest: crop maps 200 percent DPI to physical pixels
+ok 5 - crop maps 200 percent DPI to physical pixels
+  ---
+  duration_ms: 1.293675
+  type: 'test'
+  ...
+# Subtest: crop accepts dragging from bottom-right
+ok 6 - crop accepts dragging from bottom-right
+  ---
+  duration_ms: 0.211253
+  type: 'test'
+  ...
+# Subtest: crop rounds inward at fractional DPI
+ok 7 - crop rounds inward at fractional DPI
+  ---
+  duration_ms: 0.112467
+  type: 'test'
+  ...
+# Subtest: crop clamps to capture bounds
+ok 8 - crop clamps to capture bounds
+  ---
+  duration_ms: 0.092782
+  type: 'test'
+  ...
+# Subtest: crop rejects an empty selection
+ok 9 - crop rejects an empty selection
+  ---
+  duration_ms: 0.439686
+  type: 'test'
+  ...
+# Subtest: crop rejects invalid viewport
+ok 10 - crop rejects invalid viewport
+  ---
+  duration_ms: 0.368658
+  type: 'test'
+  ...
+# Subtest: crop rejects NaN
+ok 11 - crop rejects NaN
+  ---
+  duration_ms: 0.16097
+  type: 'test'
+  ...
+# Subtest: idle allows start with a source
+ok 12 - idle allows start with a source
+  ---
+  duration_ms: 0.114587
+  type: 'test'
+  ...
+# Subtest: record disabled without a source
+ok 13 - record disabled without a source
+  ---
+  duration_ms: 0.063277
+  type: 'test'
+  ...
+# Subtest: busy prevents repeated starts
+ok 14 - busy prevents repeated starts
+  ---
+  duration_ms: 0.050579
+  type: 'test'
+  ...
+# Subtest: recording cannot change source
+ok 15 - recording cannot change source
+  ---
+  duration_ms: 0.111578
+  type: 'test'
+  ...
+# Subtest: pause needs the media component
+ok 16 - pause needs the media component
+  ---
+  duration_ms: 0.057111
+  type: 'test'
+  ...
+# Subtest: paused allows stop and resume
+ok 17 - paused allows stop and resume
+  ---
+  duration_ms: 0.059021
+  type: 'test'
+  ...
+# Subtest: processing cannot be stopped twice
+ok 18 - processing cannot be stopped twice
+  ---
+  duration_ms: 0.97835
+  type: 'test'
+  ...
+# Subtest: title search is literal and case-insensitive
+ok 19 - title search is literal and case-insensitive
+  ---
+  duration_ms: 0.146948
+  type: 'test'
+  ...
+# Subtest: selected crop is reflected in source caption
+ok 20 - selected crop is reflected in source caption
+  ---
+  duration_ms: 0.078205
+  type: 'test'
+  ...
+# Subtest: all native phases have a display label
+ok 21 - all native phases have a display label
+  ---
+  duration_ms: 0.115958
+  type: 'test'
+  ...
+# Subtest: statically named frontend commands are registered in Rust
+ok 22 - statically named frontend commands are registered in Rust
+  ---
+  duration_ms: 0.837267
+  type: 'test'
+  ...
+# Subtest: browser preview never implements a fake record function
+ok 23 - browser preview never implements a fake record function
+  ---
+  duration_ms: 0.220252
+  type: 'test'
+  ...
+1..23
+# tests 23
+# suites 0
+# pass 23
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 120.520548

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "region",
+  "description": "Local region selector",
+  "windows": ["region"],
+  "permissions": ["core:default"]
+}

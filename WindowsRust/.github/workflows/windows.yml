@@ -1,0 +1,43 @@
+name: Windows Rust build
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Frontend unit tests
+        run: node --test tests/frontend.test.mjs
+      - name: Prepare verified LGPL-labelled media tools
+        shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./scripts/prepare-media.ps1 -CI
+      - name: Test and build native Windows binary
+        shell: powershell
+        run: ./scripts/build-windows.ps1 -CI
+      - name: Upload portable build and build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lens-Windows-v0.1.0-x64
+          path: dist/Lens-Windows-v0.1.0-x64.zip
+          if-no-files-found: error
+      - name: Preserve build logs even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-build-log
+          path: build.log
+          if-no-files-found: ignore

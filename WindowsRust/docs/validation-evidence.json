@@ -1,0 +1,39 @@
+{
+  "recordedAtUtc": "2026-09-09T03:33:00.008162+00:00",
+  "scope": "Source and mocked frontend validation only. No Rust compilation or native Windows recording.",
+  "host": "Linux",
+  "node": "v22.16.0",
+  "tools": {
+    "cargo": null,
+    "rustc": null,
+    "rustfmt": null,
+    "powershell": null,
+    "pwsh": null
+  },
+  "frontendNodeTests": {
+    "passed": 23,
+    "failed": 0,
+    "evidence": "docs/node-tests.tap"
+  },
+  "browserMockChecks": {
+    "passed": 13,
+    "failed": 0,
+    "evidence": "docs/ui-smoke-results.json"
+  },
+  "syntheticManifestSchema": "passed; locally defined subset, not a Mac app roundtrip",
+  "jsonTomlParse": "passed",
+  "rustTests": {
+    "written": 25,
+    "executed": false
+  },
+  "windowsNativeBuild": "NOT RUN",
+  "windowsRecording": "NOT RUN",
+  "powershellScripts": "NOT RUN",
+  "githubWrite": {
+    "operation": "create_branch codex/windows-rust-mvp",
+    "httpStatus": 403,
+    "message": "Resource not accessible by integration",
+    "repositoryChanged": false
+  },
+  "binaryDelivered": false
+}

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": "0.1",
+  "segments": [
+    {"index":0,"timelineStartSeconds":0.0,"durationSeconds":5.0,"screenRelativePath":"raw/segments/0000/screen.mp4"},
+    {"index":1,"timelineStartSeconds":5.0,"durationSeconds":5.0,"screenRelativePath":"raw/segments/0001/screen.mp4"}
+  ]
+}

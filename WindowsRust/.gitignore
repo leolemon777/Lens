@@ -1,0 +1,14 @@
+/target/
+/dist/
+/tools/ffmpeg/
+/tools/ffmpeg.new/
+/build.log
+/src-tauri/gen/
+/tests/artifacts/
+__pycache__/
+
+# supplemented per upload checklist
+node_modules/
+.vscode/
+.idea/
+*.log

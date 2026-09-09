@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Main local recording window; no shell, network, or general filesystem plugin",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

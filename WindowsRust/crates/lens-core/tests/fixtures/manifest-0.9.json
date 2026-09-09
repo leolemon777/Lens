@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "0.9",
+  "id": "DC0699F5-D892-4BE6-A040-D40E428D1316",
+  "kind": "recording",
+  "createdAt": "2026-09-08T12:00:00Z",
+  "title": "Windows contract test — synthetic fixture",
+  "state": "ready",
+  "durationSeconds": 10.0,
+  "dimensions": { "width": 1920, "height": 1080 },
+  "assets": [
+    { "role": "screenVideo", "relativePath": "raw/screen.mp4" },
+    { "role": "recordingSegments", "relativePath": "events/segments.json" }
+  ],
+  "captureSource": {"mode":"display","globalBounds":{"x":0,"y":0,"width":1920,"height":1080}}
+}

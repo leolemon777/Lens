@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lens Windows synthetic manifest contract subset (not the upstream authoritative schema)",
+  "type": "object",
+  "required": ["schemaVersion","id","kind","createdAt","title","state","assets"],
+  "properties": {
+    "schemaVersion": {"const":"0.9"},
+    "id": {"type":"string","format":"uuid"},
+    "kind": {"enum":["screenshot","recording"]},
+    "createdAt": {"type":"string","format":"date-time"},
+    "title": {"type":"string"},
+    "state": {"enum":["capturing","processing","ready","interrupted","failed"]},
+    "durationSeconds": {"type":"number","minimum":0},
+    "dimensions": {"type":"object","required":["width","height"],"properties":{"width":{"type":"integer","minimum":1},"height":{"type":"integer","minimum":1}}},
+    "assets": {"type":"array","items":{"type":"object","required":["role","relativePath"],"properties":{"role":{"type":"string"},"relativePath":{"type":"string","minLength":1}}}}
+  },
+  "additionalProperties": true
+}

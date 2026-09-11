@@ -1,0 +1,16 @@
+[package]
+name = "lens-project"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+lens-core = { path = "../lens-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+windows = { version = "0.62", features = ["Win32_System_Com"] }
+
+[dev-dependencies]
+lens-platform-windows = { path = "../lens-platform-windows" }

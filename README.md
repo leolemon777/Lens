@@ -8,6 +8,28 @@ Lens 是一款本地优先、计划开源、AI 原生的截图与录屏工作台
 
 本项目以 [MIT 许可证](LICENSE) 发布，可自由使用、修改、分发与商用，只需保留版权与许可声明。外部代码 PR 已开放，请先阅读 [贡献指南](CONTRIBUTING.md)。
 
+## 仓库结构
+
+双端同仓，不要互相覆盖。macOS 继续用 Swift Package 约定路径，Windows 只用 Tauri/Rust。
+
+```text
+Package.swift / Sources/ / Tests/ / Assets/ / Config/
+  macOS 产品：LensCore + LensMac，以及 entitlements / G0 场景
+Scripts/*.sh, Scripts/*.swift
+  macOS 构建、G1–G4、发布与源码审计
+Desktop/
+  Windows 产品 UI（React + Vite）与 Tauri 2 宿主
+CoreRust/
+  Windows 业务与平台 crate：lens-core、lens-project、
+  lens-platform-windows、lens-worker
+Scripts/windows/
+  Windows 构建、运行、测试、打包
+docs/                 产品与平台文档
+research/             调研备忘
+```
+
+旧的 `Windows/` WinForms / C# / C++ 工程已删除，不再构建或启动。
+
 ## 已经跑通
 
 - 默认 `Fn + Control`：直接进入快速区域截图；可在设置中录入任意安全组合，内置 `Control + Option + 1` 无 Fn 备用；
@@ -53,7 +75,7 @@ Lens 是一款本地优先、计划开源、AI 原生的截图与录屏工作台
 - 多窗口截图的多屏/不同缩放真机回归、长截图的真实浏览器/普通 App 兼容回归，以及贴图工具条与拖动锁定的真机手感验收；
 - 真人清晰语音的设备端转写/字幕全链路、物理 `Fn` 热键、VoiceOver/辅助功能焦点顺序，以及长时录制与设备/系统流异常中断验证；
 - 可选生成式模型、语义聚类与批量整理；
-- Developer ID 签名/公证、未安装开发证书 Mac 的分发验证、自动更新和 Windows 适配；本地安装 DMG 已可生成并校验。
+- Developer ID 签名/公证、未安装开发证书 Mac 的分发验证和自动更新仍未完成；Windows 端当前工程是 `Desktop/` + `CoreRust/`（Tauri 2），状态见 [Windows 当前状态](docs/windows/执行记录.md)。
 
 ## 开发
 
@@ -79,8 +101,19 @@ G1 真实截图压力门槛使用 `bash Scripts/run-g1-screenshot-stress.sh`；�
 
 首次真实截图或录屏时，需要在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”中授权 Lens。自动化工具无法代替用户授予该系统隐私权限；物理 `Fn` 组合键也需要手动验收。
 
+Windows 开发机：
+
+```powershell
+pwsh Scripts/windows/run-lens.ps1
+```
+
+产物在 `Desktop/src-tauri/target/release/lens-desktop-probe.exe`。默认库目录为 `E:\Lens`。不要再寻找或启动任何 `Lens.Windows.exe`。
+
 ## 项目资料
 
+- [Windows 完整使用与研发 SPEC PLAN（W2 内测进行中，非完整 1.0）](docs/Lens-Windows-SPEC-PLAN.md)
+- [Windows 逐步实施 CODE PLAN（文件、接口、命令与验收）](docs/Lens-Windows-CODE-PLAN.md)
+- [Windows 内测安装与使用指南](docs/windows/安装与使用指南.md)
 - [顶级品质产品 SPEC PLAN](docs/Lens-1.0-顶级品质产品-SPEC-PLAN.md)
 - [产品与研发总计划](docs/Lens-1.0-产品与研发总计划.md)
 - [竞品能力吸收矩阵](docs/Lens-竞品能力吸收矩阵.md)

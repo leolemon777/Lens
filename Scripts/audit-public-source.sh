@@ -8,6 +8,8 @@ APP_ICON_PATH="Assets/AppIcon.png"
 APP_ICON_SHA256="1e1778d20fb8647de1454825527aa760974522730d1a3d55328ed24bda54445d"
 APP_ICON_SOURCE_PATH="Assets/Lens-AppIcon-Source.png"
 APP_ICON_SOURCE_SHA256="46ba184af5f7df023f935e49f73228984041fc4ec8e39fdbe419a431d387e2d1"
+WINDOWS_ICON_PATH="Desktop/src-tauri/icons/icon.ico"
+WINDOWS_ICON_SHA256="1f20c8d62ab159a7f37557d50e07d4a591f79d1ff63dd4786cd85c8b0f6b0403"
 FAILURES=0
 
 cd "$PROJECT_DIR"
@@ -24,6 +26,7 @@ required_files=(
     "CONTRIBUTING.md"
     "$APP_ICON_PATH"
     "$APP_ICON_SOURCE_PATH"
+    "$WINDOWS_ICON_PATH"
     "docs/第三方依赖与素材清单.md"
     "docs/品牌资产说明.md"
     "docs/发布检查清单.md"
@@ -82,13 +85,13 @@ fi
 shopt -s nocasematch
 while IFS= read -r -d '' path; do
     case "$path" in
-        Build/*|.build/*|DerivedData/*|*.xcuserstate|xcuserdata/*)
+        Build/*|.build/*|DerivedData/*|*.xcuserstate|xcuserdata/*|CoreRust/Build/*|CoreRust/target/*|Desktop/src-tauri/target/*|Desktop/src-tauri/resources/*|Desktop/node_modules/*|Desktop/dist/*)
             fail "tracked build or user artifact: $path"
             ;;
         *.lens|*.mp4|*.mov|*.mkv|*.avi|*.caf|*.m4a|*.mp3|*.wav|*.heic|*.ips|*.crash)
             fail "tracked private media, project, or crash artifact: $path"
             ;;
-        *.dmg|*.pkg|*.zip|*.tar|*.gz|*.7z|*.app|*.framework|*.xcframework)
+        *.exe|*.dll|*.msi|*.dmg|*.pkg|*.zip|*.tar|*.gz|*.7z|*.app|*.framework|*.xcframework)
             fail "tracked binary or release artifact: $path"
             ;;
         *.p12|*.pfx|*.pem|*.key|*.cer|*.der|*.mobileprovision|*.provisionprofile|.env|.env.*)
@@ -103,6 +106,13 @@ while IFS= read -r -d '' path; do
 
     mime_type="$(file -b --mime-type "$path")"
     case "$mime_type" in
+        image/vnd.microsoft.icon|image/x-icon)
+            if [[ "$path" != "$WINDOWS_ICON_PATH" ]]; then
+                fail "tracked icon is not an explicitly audited brand asset: $path"
+            elif [[ "$(shasum -a 256 "$path" | awk '{print $1}')" != "$WINDOWS_ICON_SHA256" ]]; then
+                fail "Windows icon changed without an explicit asset review: $path"
+            fi
+            ;;
         text/*|application/json|application/xml|application/x-empty|application/x-shellscript|inode/x-empty)
             ;;
         image/png)

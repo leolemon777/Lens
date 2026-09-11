@@ -34,6 +34,10 @@ bash Scripts/build-release-artifacts.sh
 - `Sources/LensCore/`：平台无关的开放项目格式、编辑/运镜规划、索引、转写与整理数据结构。
 - `Sources/LensMac/`：macOS 捕获、权限、媒体渲染与 AppKit/SwiftUI 界面。
 - `Tests/`：纯逻辑、AppKit 事件、像素、真实媒体导出和 UI 快照验证。
+- `Config/`：macOS entitlements 与 G0 场景清单。
+- `Desktop/`：Windows 产品（Tauri 2 + React）。
+- `CoreRust/`：Windows 业务与平台 crate。
+- `Scripts/`：macOS shell/Swift 脚本；Windows 脚本在 `Scripts/windows/`。
 - `docs/`：产品总计划、格式边界、测试记录与发布门槛。
 
 ## 工作方式

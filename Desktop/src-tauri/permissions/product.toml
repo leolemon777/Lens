@@ -1,0 +1,18 @@
+[[permission]]
+identifier = "allow-lens-product"
+description = "Lens product operations for the bundled loopback frontend."
+commands.allow = [
+  "get_app_state", "set_library_root", "open_region_overlay", "capture_display",
+  "complete_region_selection", "cancel_region_selection", "start_display_recording",
+  "start_window_recording", "stop_recording", "pause_recording", "list_windows",
+  "list_snap_edges", "capture_window", "scrolling_tick", "cancel_scrolling",
+  "finish_scrolling", "recognize_ocr", "delete_item", "cancel_media_task",
+  "media_task_status", "export_video", "export_screenshot", "reveal_in_explorer",
+  "pin_last", "save_timeline", "render_edit", "preview_src", "save_annotation",
+  "save_screenshot_plan", "load_screenshot_plan", "load_captions",
+  "load_transcription_status", "save_captions", "load_timeline", "inspect_package",
+  "capture_windows_composite", "discard_recording", "set_recording_fps", "split_at",
+  "open_library", "open_quick_access", "open_record_bar_cmd", "list_audio_devices",
+  "list_camera_devices", "set_recording_audio_config", "set_recording_camera_config",
+  "load_auto_edit_plan", "save_auto_edit_plan"
+]

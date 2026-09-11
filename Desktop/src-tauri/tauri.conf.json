@@ -1,0 +1,54 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Lens",
+  "version": "0.1.0",
+  "identifier": "dev.lens.windows",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Lens",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 880,
+        "minHeight": 600,
+        "center": true,
+        "visible": false,
+        "focus": false
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**", "E:/**", "C:/**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "resources": {
+      "resources/dist/index.html": "dist/index.html",
+      "resources/dist/assets/*": "dist/assets/",
+      "resources/lens-worker.exe": "lens-worker.exe",
+      "resources/ffmpeg.exe": "ffmpeg.exe",
+      "resources/ffprobe.exe": "ffprobe.exe",
+      "resources/THIRD_PARTY_LICENSES.md": "THIRD_PARTY_LICENSES.md"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "compression": "zlib"
+      }
+    }
+  }
+}

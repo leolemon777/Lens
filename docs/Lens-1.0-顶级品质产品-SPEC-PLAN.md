@@ -6,6 +6,8 @@
 - 适用范围：Lens macOS 1.0、Public Beta 与 1.x 前置架构
 - 本次修订：建立最终成片反事实验证、原始轨完整性证据与 G2 真机耐久入口
 
+> 2026-09-09 补充：Windows 的安装使用、平台实现、项目兼容、分阶段开发与发布验收见 [Lens Windows SPEC PLAN](Lens-Windows-SPEC-PLAN.md)。Windows 已建立独立执行规格，尚未实现；本文件继续约束 macOS 1.0，不将 Windows 工作加入其发布阻断链。
+
 ## 0. 文档契约
 
 ### 0.1 目的

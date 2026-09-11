@@ -9,6 +9,18 @@ DerivedData/
 *.mp4
 *.mov
 
-# 图标设计稿：仅 Assets/AppIcon.png 是经过审计的品牌资产，
-# audit-public-source.sh 会拒绝任何其他被跟踪的图片。
+# 品牌资产白名单见 Scripts/audit-public-source.sh。
 /Assets/IconCandidates/
+
+/CoreRust/target/
+/Desktop/src-tauri/target/
+/Desktop/node_modules/
+/Desktop/dist/
+
+# Generated Windows packaging resources, schemas, and local evidence.
+/CoreRust/Build/
+/Desktop/src-tauri/resources/
+/Desktop/src-tauri/gen/
+# Only the Windows icon is consumed by this Tauri application.
+/Desktop/src-tauri/icons/*
+!/Desktop/src-tauri/icons/icon.ico
